@@ -1,0 +1,113 @@
+<!-- title: Policies - Kertas Office -->
+<!-- description: Privacy, security, code signing, licence and name-use policies for Kertas Office. -->
+<!-- path: /policies -->
+<!-- nav: policies -->
+
+<div class="wrap">
+  <div class="policy-layout">
+    <aside class="policy-side">
+      <div class="small" style="font-size:13px; font-weight:600; letter-spacing:.08em; text-transform:uppercase">Policies</div>
+      <nav aria-label="Policies" data-policy-nav>
+        <a href="#privacy" class="active">Privacy policy</a>
+        <a href="#security">Security policy</a>
+        <a href="#code-signing">Code signing policy</a>
+        <a href="#licence">Licence (AGPL-3.0)</a>
+        <a href="#name-use">Name and logo use</a>
+      </nav>
+      <div class="side-box">
+        <div style="display:flex; align-items:center; gap:10px; font-weight:600">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6d28d9" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg>
+          Found a vulnerability?
+        </div>
+        <p>Report it privately through <a href="https://github.com/kertas-office/kertas-office/security/advisories/new">GitHub security advisories</a>, not as a public issue.</p>
+      </div>
+    </aside>
+
+    <div class="policy-body">
+      <section class="policy" id="privacy">
+        <h1 class="ph" style="font-weight:800; font-size:48px; line-height:1.08; letter-spacing:-0.03em">Privacy policy</h1>
+        <div class="summary-box">
+          <b>In short</b>
+          <ul>
+            <li>Your documents never leave your computer.</li>
+            <li>The app has no account and no usage tracking.</li>
+            <li>The website counts visits without cookies.</li>
+          </ul>
+        </div>
+        <h3>The Kertas Office app</h3>
+        <p>Kertas opens, edits, converts and signs files entirely on your computer. It does not upload your documents, collect usage statistics or require an account. Usage reporting in the third-party editing components it includes is switched off.</p>
+        <p>The only connection the app makes on its own is to check GitHub Releases for a newer version. GitHub sees your IP address, as with any download, under <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">GitHub's privacy statement</a>. You can turn automatic updates off in Help › About Kertas Office.</p>
+        <p>Links you choose to open from the app, such as this website or the issue tracker, open in your web browser.</p>
+        <h3>This website</h3>
+        <p>The site is hosted on Cloudflare and uses Cloudflare Web Analytics, which counts page views without cookies or personal identifiers. Installer files are served by GitHub. The roadmap and changelog are fetched from GitHub's public data; no information about you is sent with those requests.</p>
+        <h3>Download counts</h3>
+        <p>GitHub counts how many times each installer file is downloaded. These are totals per file, with no information about who downloaded them.</p>
+        <h3>Support and contact</h3>
+        <p>If you contribute through Buy Me a Coffee or another service, that service handles the payment, and the project only sees what the service shares, never your payment details. If you email <a href="mailto:hello@kertasoffice.com">hello@kertasoffice.com</a>, your message is used only to reply to you.</p>
+        <h3>Changes</h3>
+        <p>Changes to this policy are made in the public repository, so every edit and its date can be seen in the file's history on GitHub.</p>
+      </section>
+
+      <section class="policy" id="security">
+        <h2 class="ph">Security policy</h2>
+        <p>Please do not report security problems in public issues or discussions.</p>
+        <h3>How to report</h3>
+        <ul>
+          <li>Use <a href="https://github.com/kertas-office/kertas-office/security/advisories/new">GitHub's private vulnerability reporting</a> for the repository. Only maintainers can see the report.</li>
+          <li>Or email <a href="mailto:hello@kertasoffice.com?subject=Security%20report">hello@kertasoffice.com</a> with "Security report" in the subject.</li>
+          <li>Include the Kertas version, your system, the steps to reproduce and, if you can, a sample file.</li>
+        </ul>
+        <h3>What happens next</h3>
+        <p>Maintainers confirm the problem, work on a fix and release it as an update, which installed copies pick up automatically. Reporters are credited in the release notes unless they prefer not to be.</p>
+        <h3>Supported versions</h3>
+        <p>Security fixes go into the latest release. Because updates install themselves, keeping automatic updates on is the simplest way to stay protected.</p>
+        <h3>Scope</h3>
+        <p>Of most interest: files that can run code or read other files when opened in Kertas, problems that weaken saved encryption or digital signatures, and anything that makes the app send data it should not.</p>
+      </section>
+
+      <section class="policy" id="code-signing">
+        <h2 class="ph">Code signing policy</h2>
+        <p class="if-unsigned"><b>Windows status:</b> Windows code signing through SignPath Foundation is being set up. Until it is in place, Windows installers are unsigned, and Windows may show a SmartScreen warning the first time. The Windows part of this page describes how that signing will work.</p>
+        <p class="if-signed">Free code signing for Windows is provided by <a href="https://about.signpath.io">SignPath.io</a>, with a certificate by <a href="https://signpath.org">SignPath Foundation</a>.</p>
+        <h3>macOS</h3>
+        <p>macOS builds are signed with an Apple Developer ID certificate held by the organization that maintains the project's Apple developer account, and notarized by Apple, which checks each build for malicious software before macOS will open it without a warning.</p>
+        <h3>How releases are built</h3>
+        <ul>
+          <li>Every installer is built by GitHub Actions directly from the public source code in the <a href="https://github.com/kertas-office/kertas-office">kertas-office/kertas-office</a> repository.</li>
+          <li>Builds run only for tagged versions, and every build first runs the full test suite.</li>
+          <li>Only files built this way are signed and published. Nobody signs files built on a personal computer.</li>
+        </ul>
+        <h3>Team roles</h3>
+        <ul>
+          <li><b>Committers and reviewers:</b> members of the <a href="https://github.com/orgs/kertas-office/people">kertas-office GitHub organization</a> with write access.</li>
+          <li><b>Approvers:</b> owners of the kertas-office organization, who approve each signing request.</li>
+        </ul>
+        <p>Every team member uses multi-factor authentication for GitHub and for SignPath.</p>
+        <h3>Privacy</h3>
+        <p>The signed app does not transfer information to any networked system unless you ask it to, with one exception: the automatic update check described in the <a href="#privacy">privacy policy</a>, which you can turn off.</p>
+      </section>
+
+      <section class="policy" id="licence">
+        <h2 class="ph">Licence</h2>
+        <p>Kertas Office is free software, licensed under the <a href="https://github.com/kertas-office/kertas-office/blob/main/LICENSE">GNU Affero General Public License, version 3 or later</a> (AGPL-3.0-or-later).</p>
+        <ul>
+          <li><b>Using Kertas</b> at home, at work, at school or in government is free, with no conditions.</li>
+          <li><b>Changing Kertas</b> is allowed. If you share a changed version, or run it for others over a network, you must share your changes under the same licence.</li>
+          <li><b>Your documents</b> are yours. The licence covers the app, never what you make with it.</li>
+        </ul>
+        <p>Kertas is built on open-source projects, including SuperDoc, Univer, ExcelJS, SheetJS, pdf.js and pdf-lib. Their licences are listed in the repository.</p>
+      </section>
+
+      <section class="policy" id="name-use">
+        <h2 class="ph">Name and logo use</h2>
+        <p>The code is free to reuse under the licence. The Kertas Office name and logo identify the official app, so people know where a download came from.</p>
+        <ul>
+          <li>You can use the name and logo to talk about Kertas, link to it, review it or teach it.</li>
+          <li>If you publish a modified version, please give it a different name and logo, and say it is based on Kertas Office.</li>
+          <li>Please do not suggest that your product, service or download is the official Kertas Office.</li>
+        </ul>
+        <p>Not sure? Ask at <a href="mailto:hello@kertasoffice.com">hello@kertasoffice.com</a>.</p>
+      </section>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,76 @@
+<!-- title: Compatibility - Kertas Office -->
+<!-- description: What works well, what is partial and what is not built yet when Kertas Office opens and saves Word, Excel and PDF files. -->
+<!-- path: /compatibility -->
+<!-- nav: compatibility -->
+
+<section class="page-head wrap-narrow">
+  <div class="meta">Checked against <span data-release-version>v1.0</span> · Updated with every release</div>
+  <h1>Compatibility</h1>
+  <p class="lead">What survives a round trip between Kertas and Microsoft Office, what is partial, and what is not built yet. Saved files are checked by reopening them in independent tools before each release.</p>
+  <div class="legend">
+    <span><span class="st good">Works well</span>Opens, edits and saves without loss</span>
+    <span><span class="st part">Partial</span>Kept, with a stated limit</span>
+    <span><span class="st none">Not yet</span>On the roadmap or out of scope</span>
+  </div>
+</section>
+
+<section class="section-sm wrap-narrow">
+  <div class="compat-head"><span class="app-icon" style="background:var(--writer)">W</span><h2>Writer and .docx</h2></div>
+  <div class="compat">
+    <div><span>Text, styles, lists, tables, images</span><span><span class="st good">Works well</span></span><span></span></div>
+    <div><span>Headers, footers, sections, page numbers</span><span><span class="st good">Works well</span></span><span></span></div>
+    <div><span>Track changes and comments</span><span><span class="st good">Works well</span></span><span>Including replies and resolved comments.</span></div>
+    <div><span>Equations</span><span><span class="st good">Works well</span></span><span>Saved as native Word equations, editable in Word.</span></div>
+    <div><span>Citations, bibliography, table of contents</span><span><span class="st good">Works well</span></span><span>APA, MLA, Chicago, Harvard and IEEE.</span></div>
+    <div><span>Shapes with text wrap</span><span><span class="st good">Works well</span></span><span></span></div>
+    <div><span>Floating text boxes</span><span><span class="st part">Partial</span></span><span>Kept when saved; their position inside Kertas can differ slightly from Word.</span></div>
+    <div><span>Older formats (.doc, .rtf, .odt)</span><span><span class="st part">Partial</span></span><span>Open for editing and save as .docx. Full .doc formatting needs LibreOffice installed.</span></div>
+    <div><span>Presentations (.pptx)</span><span><span class="st none">Not yet</span></span><span>Out of scope. Kertas focuses on documents, spreadsheets and PDFs.</span></div>
+  </div>
+</section>
+
+<section class="section-sm wrap-narrow" style="padding-top:56px">
+  <div class="compat-head"><span class="app-icon" style="background:var(--sheets)">S</span><h2>Sheets and .xlsx</h2></div>
+  <div class="compat">
+    <div><span>Formulas, number formats, multiple sheets</span><span><span class="st good">Works well</span></span><span></span></div>
+    <div><span>Fonts, fills, borders, merges, frozen panes</span><span><span class="st good">Works well</span></span><span></span></div>
+    <div><span>Charts</span><span><span class="st good">Works well</span></span><span>Column, bar, line, area, pie, doughnut and scatter, saved as real Excel charts.</span></div>
+    <div><span>Conditional formatting and sparklines</span><span><span class="st good">Works well</span></span><span>Also kept when exporting to PDF.</span></div>
+    <div><span>Data validation, filters, slicers</span><span><span class="st good">Works well</span></span><span></span></div>
+    <div><span>PivotTables made in Kertas</span><span><span class="st good">Works well</span></span><span>Saved as genuine Excel pivots that refresh.</span></div>
+    <div><span>PivotTables from Excel</span><span><span class="st part">Partial</span></span><span>Kept with their values. Kertas can edit pivots with up to two row fields and two values.</span></div>
+    <div><span>CSV</span><span><span class="st good">Works well</span></span><span>Keeps leading zeros, long numbers, the original encoding and separator.</span></div>
+    <div><span>Older formats (.xls, .ods)</span><span><span class="st part">Partial</span></span><span>Open for editing and save as .xlsx.</span></div>
+    <div><span>Macros (VBA)</span><span><span class="st none">Not yet</span></span><span>Macros do not run in Kertas.</span></div>
+  </div>
+</section>
+
+<section class="section-sm wrap-narrow" style="padding-top:56px">
+  <div class="compat-head"><span class="app-icon" style="background:var(--pdf)">P</span><h2>PDF</h2></div>
+  <div class="compat">
+    <div><span>Viewing, search, annotations</span><span><span class="st good">Works well</span></span><span></span></div>
+    <div><span>Merge, split, reorder, rotate, delete pages</span><span><span class="st good">Works well</span></span><span>Bookmarks are kept.</span></div>
+    <div><span>Filling and creating forms</span><span><span class="st good">Works well</span></span><span></span></div>
+    <div><span>Certificate signatures</span><span><span class="st good">Works well</span></span><span>Reported valid by independent checkers; any later change breaks the signature.</span></div>
+    <div><span>Redaction</span><span><span class="st good">Works well</span></span><span>Removes the content underneath, not just covers it.</span></div>
+    <div><span>Editing existing text</span><span><span class="st part">Partial</span></span><span>Uses the original font where it is available; otherwise a close substitute.</span></div>
+    <div><span>OCR and conversion to Word and Excel</span><span><span class="st good">Works well</span></span><span>Accuracy depends on scan quality.</span></div>
+    <div><span>Password-protected PDFs</span><span><span class="st part">Partial</span></span><span>Open, protect and save with encryption. Permission limits set by the author (such as no printing) are removed when saved.</span></div>
+  </div>
+</section>
+
+<section class="section-sm wrap-narrow" id="known-issues" data-known-section hidden style="padding-top:56px">
+  <h2 class="h2-sm">Known issues <span class="live" data-live>Live from GitHub</span></h2>
+  <p class="lead" style="margin-top:10px; font-size:16px">Problems we know about and are working on. Each one links to its discussion.</p>
+  <div class="known" data-known-list></div>
+</section>
+
+<section class="section-sm wrap-narrow">
+  <div class="note-box purple" style="margin-top:0">
+    <div>
+      <div class="t">Found a file that does not open correctly?</div>
+      <p>Send us a sample with private details removed. Real-world files are how compatibility improves.</p>
+    </div>
+    <a class="btn btn-primary" href="https://github.com/kertas-office/kertas-office/issues/new/choose" style="height:48px">Report a file</a>
+  </div>
+</section>

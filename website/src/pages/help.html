@@ -1,0 +1,244 @@
+<!-- title: Help - Kertas Office -->
+<!-- description: How to install Kertas Office and get things done in Writer, Sheets and PDF. -->
+<!-- path: /help -->
+<!-- nav: help -->
+
+<section class="wrap" style="padding-top:32px">
+  <div class="help-hero">
+    <h1>How can we help?</h1>
+    <div class="search" role="search">
+      <label for="help-search" class="sr-only">Search help</label>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="help-search" type="search" placeholder="Search, for example: sign a PDF" autocomplete="off">
+    </div>
+    <div class="small" style="margin-top:16px">Popular: <a href="#install-windows">Install on Windows</a> · <a href="#pdf-edit-text">Edit PDF text</a> · <a href="#writer-mail-merge">Mail merge</a></div>
+  </div>
+</section>
+
+<section class="section-sm wrap" style="padding-top:56px" data-help-topics>
+  <div class="topics">
+    <div class="topic">
+      <span class="app-icon ti-start"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#6d28d9" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+      <h2>Getting started</h2>
+      <ul>
+        <li><a href="#install-windows">Install on Windows</a></li>
+        <li><a href="#install-mac">Install on macOS</a></li>
+        <li><a href="#install-linux">Install on Linux</a></li>
+        <li><a href="#open-save">Open, save and convert files</a></li>
+        <li><a href="#updates">How updates work</a></li>
+      </ul>
+    </div>
+    <div class="topic">
+      <span class="app-icon" style="background:var(--writer)">W</span>
+      <h2>Writer</h2>
+      <ul>
+        <li><a href="#writer-track">Track changes and comments</a></li>
+        <li><a href="#writer-equations">Write equations in LaTeX</a></li>
+        <li><a href="#writer-citations">Add citations and a bibliography</a></li>
+        <li><a href="#writer-mail-merge">Run a mail merge</a></li>
+      </ul>
+    </div>
+    <div class="topic">
+      <span class="app-icon" style="background:var(--sheets)">S</span>
+      <h2>Sheets</h2>
+      <ul>
+        <li><a href="#sheets-formulas">Formulas and functions</a></li>
+        <li><a href="#sheets-pivot">Create and refresh a PivotTable</a></li>
+        <li><a href="#sheets-conditional">Conditional formatting</a></li>
+        <li><a href="#export-pdf">Export to PDF</a></li>
+      </ul>
+    </div>
+    <div class="topic">
+      <span class="app-icon" style="background:var(--pdf)">P</span>
+      <h2>PDF</h2>
+      <ul>
+        <li><a href="#pdf-edit-text">Edit text in a PDF</a></li>
+        <li><a href="#pdf-sign">Sign a PDF</a></li>
+        <li><a href="#pdf-ocr">Make a scanned PDF searchable</a></li>
+        <li><a href="#pdf-pages">Merge, reorder and rotate pages</a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="article-list" data-articles>
+    <article class="article" id="install-windows">
+      <div class="k">Getting started</div>
+      <h3>Install on Windows</h3>
+      <ol>
+        <li>Download <span class="mono">Kertas-Office-Setup.exe</span> from the <a href="/download">download page</a>. One installer works on Intel, AMD and ARM computers.</li>
+        <li>Open the file and follow the steps. Kertas installs for your user only, so no administrator password is needed.</li>
+      </ol>
+      <p class="if-unsigned"><b>If Windows says it protected your PC:</b> code signing for Kertas is still being set up, so Windows SmartScreen does not recognise the installer yet. Click <span class="ui">More info</span>, then <span class="ui">Run anyway</span>. Every installer is built by GitHub from the public source, and you can <a href="/download#files">check its checksum</a> first.</p>
+      <p class="if-signed">Windows shows the publisher as SignPath Foundation, which signs open-source releases after checking they were built from the public code.</p>
+      <p>To make Kertas open your Word, Excel and PDF files when you double-click them, click <span class="ui">Set as default</span> on the Home screen.</p>
+    </article>
+
+    <article class="article" id="install-mac">
+      <div class="k">Getting started</div>
+      <h3>Install on macOS</h3>
+      <ol>
+        <li>Download the version for your Mac from the <a href="/download#files">download page</a>: <span class="mono">Kertas-Office-mac-arm64.dmg</span> for Apple silicon (M1 and later), or <span class="mono">Kertas-Office-mac-x64.dmg</span> for Intel. Not sure? Apple menu › About This Mac shows Chip (Apple) or Processor (Intel).</li>
+        <li>Open the .dmg and drag Kertas Office into Applications.</li>
+        <li>Open it from Applications. macOS asks once whether to open an app downloaded from the internet; click Open. Kertas is signed and notarized by Apple, so no other warning appears.</li>
+      </ol>
+      <p>To make Kertas open your Word, Excel and PDF files, select a file in Finder, choose File › Get Info, pick Kertas Office under Open with, then click Change All.</p>
+    </article>
+
+    <article class="article" id="install-linux">
+      <div class="k">Getting started</div>
+      <h3>Install on Linux</h3>
+      <p><b>AppImage</b> works on most distributions without installing anything:</p>
+      <ol>
+        <li>Download <span class="mono">Kertas-Office-linux-x86_64.AppImage</span>.</li>
+        <li>Make it executable: right-click it, open Properties, then Permissions, or run <span class="mono">chmod +x Kertas-Office-linux-x86_64.AppImage</span>.</li>
+        <li>Double-click it to start Kertas.</li>
+      </ol>
+      <p><b>Ubuntu, Debian and derivatives</b>: download <span class="mono">kertas-office-amd64.deb</span> and open it with your software centre, or run <span class="mono">sudo apt install ./kertas-office-amd64.deb</span>. Kertas then appears under Office in your applications menu.</p>
+    </article>
+
+    <article class="article" id="open-save">
+      <div class="k">Getting started</div>
+      <h3>Open, save and convert files</h3>
+      <p>Drag files onto the window, use <span class="ui">Open</span> on the Home screen, or press <kbd>Ctrl</kbd> + <kbd>O</kbd>. Each file opens in its own tab.</p>
+      <ul>
+        <li><b>Writer</b> saves .docx, and opens .doc, .rtf and .odt (saved as .docx).</li>
+        <li><b>Sheets</b> saves .xlsx and .csv, and opens .xls, .xlsm, .xlsb and .ods (saved as .xlsx).</li>
+        <li><b>PDF</b> saves .pdf and can convert a PDF to Word or Excel from the <span class="ui">Convert</span> tab.</li>
+      </ul>
+      <p>Opening older .doc and .xls files with full formatting works best when LibreOffice is installed too. If Kertas closes unexpectedly, your unsaved work is offered back under <span class="ui">Recovered documents</span> on the Home screen.</p>
+    </article>
+
+    <article class="article" id="updates">
+      <div class="k">Getting started</div>
+      <h3>How updates work</h3>
+      <p>Kertas checks GitHub for a new version shortly after it starts and every few hours, downloads it in the background and installs it the next time you close the app. You can also click <span class="ui">Restart</span> when it says an update is ready.</p>
+      <p>To check by hand, or to turn automatic updates off, open <span class="ui">Help</span> › <span class="ui">About Kertas Office</span>. The update check is the only connection Kertas makes; it never sends your files or how you use the app.</p>
+    </article>
+
+    <article class="article" id="writer-track">
+      <div class="k">Writer</div>
+      <h3>Track changes and comments</h3>
+      <ol>
+        <li>Open the <span class="ui">Review</span> tab and click <span class="ui">Track changes</span>. Your edits are now recorded as suggestions.</li>
+        <li>To comment, select some text and click <span class="ui">New comment</span>. Comments can be replied to and resolved.</li>
+        <li>Accept or reject each change from the Review tab or the side panel.</li>
+      </ol>
+      <p>Changes and comments are saved in the .docx, so colleagues using Word see them too.</p>
+    </article>
+
+    <article class="article" id="writer-equations">
+      <div class="k">Writer</div>
+      <h3>Write equations in LaTeX</h3>
+      <p>Click <span class="ui">Insert</span> › <span class="ui">Equation</span>, or type <kbd>/</kbd> and choose Equation. Type LaTeX such as <span class="mono">\frac{a}{b} + \sqrt{x}</span> and watch the live preview. Equations are saved as native Word equations, so they stay editable in Word.</p>
+    </article>
+
+    <article class="article" id="writer-citations">
+      <div class="k">Writer</div>
+      <h3>Add citations and a bibliography</h3>
+      <ol>
+        <li>On the <span class="ui">References</span> tab, pick a citation style: APA, MLA, Chicago, Harvard or IEEE.</li>
+        <li>Click where the citation goes and add a source, or reuse one you added before.</li>
+        <li>Insert a bibliography where you want the list. It updates as you add citations, and changing the style restyles them all.</li>
+      </ol>
+    </article>
+
+    <article class="article" id="writer-mail-merge">
+      <div class="k">Writer</div>
+      <h3>Run a mail merge</h3>
+      <ol>
+        <li>Write your letter, then open the <span class="ui">Mailings</span> tab and choose an Excel or CSV list.</li>
+        <li>Insert fields, such as a name or address, from the list's column headings.</li>
+        <li>Preview a few records, then merge to one document or one file per row.</li>
+      </ol>
+    </article>
+
+    <article class="article" id="sheets-formulas">
+      <div class="k">Sheets</div>
+      <h3>Formulas and functions</h3>
+      <p>Type <kbd>=</kbd> in a cell to start a formula, for example <span class="mono">=SUM(B2:B10)</span>. Hundreds of Excel functions are supported. Use <span class="ui">AutoSum</span> on the Home tab for quick totals, or the <span class="ui">Formulas</span> tab to browse functions by category. Formulas keep calculating in the background, so large workbooks stay responsive.</p>
+    </article>
+
+    <article class="article" id="sheets-pivot">
+      <div class="k">Sheets</div>
+      <h3>Create and refresh a PivotTable</h3>
+      <ol>
+        <li>Select your data, including the header row.</li>
+        <li>Click <span class="ui">Insert</span> › <span class="ui">PivotTable</span>, then choose the fields to group by and the values to sum, count or average.</li>
+        <li>When the data changes, click <span class="ui">Data</span> › <span class="ui">Refresh</span>.</li>
+      </ol>
+      <p>PivotTables are saved as real Excel PivotTables, so they keep working in Excel.</p>
+    </article>
+
+    <article class="article" id="sheets-conditional">
+      <div class="k">Sheets</div>
+      <h3>Conditional formatting</h3>
+      <p>Select cells, then open <span class="ui">Conditional</span> on the Home tab. Choose highlight rules, top and bottom values, data bars, colour scales or icon sets. Rules update as the numbers change and are kept when you export to PDF.</p>
+    </article>
+
+    <article class="article" id="export-pdf">
+      <div class="k">Writer and Sheets</div>
+      <h3>Export to PDF</h3>
+      <p>Choose <span class="ui">File</span> › <span class="ui">Export as PDF</span>, or press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>E</kbd>. For a spreadsheet, page setup on the <span class="ui">Page Layout</span> tab controls orientation, margins and what fits on a page.</p>
+    </article>
+
+    <article class="article" id="pdf-edit-text">
+      <div class="k">PDF</div>
+      <h3>Edit text in a PDF</h3>
+      <ol>
+        <li>Open the <span class="ui">Edit</span> tab and click <span class="ui">Edit text</span>.</li>
+        <li>Click a line of the PDF's own text and type over it.</li>
+        <li>Save. Kertas redraws the line in the original font where it is available, otherwise in a close match.</li>
+      </ol>
+      <p>Scanned pages are pictures, so run <a href="#pdf-ocr">text recognition</a> first.</p>
+    </article>
+
+    <article class="article" id="pdf-sign">
+      <div class="k">PDF</div>
+      <h3>Sign a PDF</h3>
+      <p><b>With a drawn signature:</b> on the <span class="ui">Fill &amp; Sign</span> tab, click <span class="ui">New signature</span> to draw or type one, then <span class="ui">Sign</span> and click where it goes.</p>
+      <p><b>With a digital certificate:</b> on the <span class="ui">Protect</span> tab, click <span class="ui">Digitally sign</span>, choose your .p12 or .pfx file and enter its password. Kertas saves a signed copy. Any later change to the file shows the signature as broken, which is how readers know it was not altered.</p>
+    </article>
+
+    <article class="article" id="pdf-ocr">
+      <div class="k">PDF</div>
+      <h3>Make a scanned PDF searchable</h3>
+      <ol>
+        <li>Open the <span class="ui">Convert</span> tab and click <span class="ui">Recognise text</span>.</li>
+        <li>Kertas reads the text on your own computer. Afterwards you can search, select and copy it.</li>
+        <li>Save to keep the recognised text, hidden under the page image, or convert the result to Word or Excel.</li>
+      </ol>
+    </article>
+
+    <article class="article" id="pdf-pages">
+      <div class="k">PDF</div>
+      <h3>Merge, reorder and rotate pages</h3>
+      <p>Click <span class="ui">Merge</span> on the Home tab to add pages from other PDFs. On the <span class="ui">Organize</span> tab you can rotate, delete, extract and split pages, and you can drag the page thumbnails on the left to reorder them. Bookmarks are kept.</p>
+    </article>
+
+    <p class="search-empty" data-search-empty hidden>Nothing matched. Try other words, or <a href="https://github.com/kertas-office/kertas-office/discussions">ask in Discussions</a>.</p>
+  </div>
+</section>
+
+<section class="section-sm wrap">
+  <div class="grid-2">
+    <div class="card-soft" style="padding:32px">
+      <h3 style="font-size:21px">Troubleshooting</h3>
+      <ul style="margin:14px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:10px; font-size:15px">
+        <li><a href="#install-windows">Windows asks whether to run the installer</a></li>
+        <li><a href="/download#files">Check that your download is genuine</a></li>
+        <li><a href="/compatibility">A file looks different from Microsoft Office</a></li>
+        <li><a href="#open-save">Get back unsaved work after a crash</a></li>
+      </ul>
+    </div>
+    <div class="card-purple" style="padding:32px">
+      <h3 style="font-size:21px">Still stuck?</h3>
+      <p style="font-size:15px">Ask the community on GitHub Discussions, or open an issue if something is broken. Security problems should be <a href="/policies#security">reported privately</a>.</p>
+      <div class="btn-row" style="margin-top:20px">
+        <a class="btn btn-primary" href="https://github.com/kertas-office/kertas-office/discussions">Ask a question</a>
+        <a class="btn btn-outline" href="https://github.com/kertas-office/kertas-office/issues/new/choose">Report a problem</a>
+      </div>
+    </div>
+  </div>
+</section>

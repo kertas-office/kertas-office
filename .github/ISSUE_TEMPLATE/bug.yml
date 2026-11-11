@@ -1,0 +1,27 @@
+name: Report a problem
+description: Something doesn't work, or a file opens or saves wrongly
+labels: [bug]
+body:
+  - type: dropdown
+    id: app
+    attributes:
+      label: Which part of Kertas?
+      options: [Writer, Sheets, PDF, Home or general]
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations: { required: true }
+  - type: textarea
+    id: file
+    attributes:
+      label: Sample file
+      description: If a file opens or saves wrongly, attach a copy with nothing private in it. It helps more than anything else.
+  - type: input
+    id: version
+    attributes:
+      label: Kertas version and system
+      placeholder: e.g. 1.0.0 on Windows 11 (Help > About Kertas Office)
+    validations: { required: true }

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: data:" />
+  <title>Kertas Office</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <script src="./theme-boot.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="titlebar" id="titlebar">
+      <div class="brand"><img class="logo" src="./logo.svg" alt="Kertas Office" width="26" height="26" draggable="false" /></div>
+      <div class="tabs" id="tabs">
+        <button class="tab tab-home active" data-tab="home" title="Home"><span data-ic="home"></span><span class="title">Home</span></button>
+      </div>
+      <button class="update-pill" id="btn-update" hidden><span data-ic="refresh"></span><span class="label"></span></button>
+      <button class="icon-btn coffee-btn" id="btn-coffee" title="Support Kertas: buy me a coffee"><span data-ic="coffee"></span></button>
+      <button class="icon-btn" id="btn-palette" title="Commands (Ctrl+K)"><span data-ic="command"></span></button>
+      <button class="icon-btn" id="btn-theme" title="Toggle dark mode"><span data-ic="moon"></span></button>
+    </header>
+    <main id="views">
+      <section class="view view-home active" id="view-home"></section>
+    </main>
+    <footer class="statusbar" id="statusbar"><span class="dot"></span><span id="status-text">Ready</span><span class="right" id="status-right">All files stay on this device</span></footer>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

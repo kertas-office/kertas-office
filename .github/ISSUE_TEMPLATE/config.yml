@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and help
+    url: https://github.com/kertas-office/kertas-office/discussions
+    about: Ask how to do something, or share how you use Kertas
+  - name: Report a security problem
+    url: https://github.com/kertas-office/kertas-office/security/advisories/new
+    about: Please report security problems privately, not as a public issue

@@ -1,0 +1,30 @@
+// Exposes a small, explicit file API to the renderer. No Node access leaks through.
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
+
+contextBridge.exposeInMainWorld('kertasNative', {
+  openDialog: (opts) => ipcRenderer.invoke('kertas:open-dialog', opts),
+  readPath: (p) => ipcRenderer.invoke('kertas:read-path', p),
+  convertLegacy: (file) => ipcRenderer.invoke('kertas:convert-legacy', file),
+  hasLibreOffice: () => ipcRenderer.invoke('kertas:has-libreoffice'),
+  saveDialog: (opts) => ipcRenderer.invoke('kertas:save-dialog', opts),
+  writeFile: (p, data) => ipcRenderer.invoke('kertas:write-file', { path: p, data }),
+  recent: () => ipcRenderer.invoke('kertas:recent'),
+  makeDefaultApp: () => ipcRenderer.invoke('kertas:default-app'),
+  pinRecent: (p, pinned) => ipcRenderer.invoke('kertas:pin-recent', { path: p, pinned }),
+  confirm: (opts) => ipcRenderer.invoke('kertas:confirm', opts),
+  showInFolder: (p) => ipcRenderer.invoke('kertas:show-in-folder', p),
+  onOpenPath: (cb) => ipcRenderer.on('kertas:open-path', (_e, p) => cb(p)),
+  onMenu: (cb) => ipcRenderer.on('kertas:menu', (_e, action) => cb(action)),
+  onRequestClose: (cb) => ipcRenderer.on('kertas:request-close', () => cb()),
+  confirmClose: () => ipcRenderer.send('kertas:confirm-close'),
+  platform: process.platform,
+  edit: (action) => ipcRenderer.invoke('kertas:edit', action),
+  recovery: (op, args) => ipcRenderer.invoke('kertas:recovery', op, args),
+  saveMany: (files) => ipcRenderer.invoke('kertas:save-many', files),
+  previewPdf: (data, name) => ipcRenderer.invoke('kertas:preview-pdf', { data, name }),
+  printToPdf: (options) => ipcRenderer.invoke('kertas:print-to-pdf', options),
+  setTheme: (dark) => ipcRenderer.send('kertas:theme', dark),
+  update: (op, arg) => ipcRenderer.invoke('kertas:update', op, arg),
+  onUpdate: (cb) => ipcRenderer.on('kertas:update-state', (_e, st) => cb(st)),
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
+});

@@ -1,0 +1,10 @@
+name: Suggest a feature
+description: Something you'd like Kertas to do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to do?
+      description: Describe the task you're trying to get done, not only the button you'd like.
+    validations: { required: true }
