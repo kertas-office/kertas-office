@@ -1,6 +1,7 @@
 # Releasing, signing and updates
 
-Kertas Office ships through GitHub Releases. Pushing a version tag builds every
+Kertas Office ships through GitHub Releases. Work lands on `develop`; merging
+`develop` into `main` builds every
 installer in GitHub Actions (`.github/workflows/release.yml`), signs it when the
 certificates are configured, and uploads it to a **draft** release. Publishing the
 draft rolls the update out: installed copies check every 6 hours (and 8 seconds
@@ -9,16 +10,17 @@ title bar. Unsaved work is offered for saving before the restart.
 
 ## Cutting a release
 
-1. Bump `version` in `package.json` (for example `0.5.1`) and commit.
-2. `git tag v0.5.1 && git push && git push --tags`
-3. Wait for the workflow, check the draft release, then press **Publish release**.
+1. On `develop`, bump `version` in `package.json` (for example `1.0.1`) and merge that change.
+2. Open a pull request from `develop` to `main` and merge it. This starts the Release workflow.
+3. Approve the `release` environment when asked, wait for the builds, check the draft
+   release `v1.0.1`, add notes and press **Publish release**. Publishing creates the tag.
 
 Without any secrets the workflow still produces working installers; they are just
 unsigned (Windows SmartScreen and macOS Gatekeeper will warn).
 
 ## Code signing
 
-Signing secrets live in the `release` environment (Settings > Environments), which only version-tag runs can use.
+Signing secrets live in the `release` environment (Settings > Environments), which only runs on `main` can use.
 
 ### Windows (pick one)
 

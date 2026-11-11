@@ -1,11 +1,11 @@
-# Runs the tests and a production build on every pull request and every push to main.
-# The "main" ruleset requires the "test" check to pass before a pull request can be merged.
+# Runs the tests and a production build on every pull request and every push to
+# develop or main. The rulesets require the "test" check to pass before a merge.
 name: CI
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, develop]
 
 permissions:
   contents: read
