@@ -4,3 +4,4 @@ release/
 *.kertas-tmp
 scratch/
 website/dist/
+Claude outputs/
