@@ -6,13 +6,15 @@ No account, no subscription, no ads. Everything runs on your computer and your f
 
 [kertasoffice.com](https://kertasoffice.com) · [Download](https://kertasoffice.com/download) · [Compatibility](https://kertasoffice.com/compatibility) · [Help](https://kertasoffice.com/help)
 
-![Kertas Office Writer](docs/screenshots/writer.png)
+![Kertas Office home screen](docs/screenshots/home.png)
 
 ## Three apps in one window
 
 Every file opens in its own tab, so a report, the spreadsheet behind it and a signed PDF sit side by side.
 
 ### Writer: documents
+
+![Writer](docs/screenshots/writer.png)
 
 Opens and saves Word documents (.docx), and opens .doc, .rtf and .odt.
 
