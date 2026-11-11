@@ -1,12 +1,13 @@
-# Builds installers for Windows, macOS and Linux when a version tag is pushed
-# (git tag v0.5.0 && git push --tags), signs them when the secrets exist, and
-# uploads them to a draft GitHub Release. Publishing that draft rolls the update
-# out: installed copies of Kertas Office pick it up within a few hours.
+# Builds installers for Windows, macOS and Linux whenever main changes (that is, when
+# a develop -> main pull request is merged), signs them, and uploads them to a draft
+# GitHub Release named after the version in package.json. Publishing that draft rolls
+# the update out: installed copies of Kertas Office pick it up within a few hours.
+# If that version is already published, nothing is uploaded, so bump the version first.
 name: Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
