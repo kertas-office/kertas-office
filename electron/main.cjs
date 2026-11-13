@@ -106,6 +106,16 @@ async function loadFile(filePath) {
   return { path: filePath, name: path.basename(filePath), data: new Uint8Array(data) };
 }
 
+// A file the person picked in an Open dialog shown by this process. The dialog itself limits
+// the types (pictures, certificates, documents), so any of them may be read; only documents
+// are granted for saving and listed in Recent.
+async function loadPicked(filePath) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('This file cannot be opened');
+  const data = await fs.readFile(filePath);
+  if (RECENT_TYPES.test(filePath)) { grant(filePath); await addRecent(filePath); }
+  return { path: filePath, name: path.basename(filePath), data: new Uint8Array(data) };
+}
+
 function sendOpen(filePath) {
   if (!mainWindow || !rendererReady) { pendingOpen.push(filePath); return; }
   mainWindow.webContents.send('kertas:open-path', filePath);
@@ -260,7 +270,7 @@ ipcMain.handle('kertas:open-dialog', async (_e, { kind = 'all', multi = true } =
     filters: OPEN_FILTERS[kind] || FILTERS[kind] || OPEN_FILTERS.all,
   });
   if (res.canceled) return [];
-  return Promise.all(res.filePaths.map(loadFile));
+  return Promise.all(res.filePaths.map(loadPicked));
 });
 
 ipcMain.handle('kertas:read-path', async (_e, filePath) => loadFile(filePath));
