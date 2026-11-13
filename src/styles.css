@@ -978,7 +978,7 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 .rb-swatch .rb-swatch-main svg { margin-top: -4px; }
 .rb-swatch-more { width: 13px; border: 0; background: transparent; color: var(--ink-2); display: grid; place-items: center; padding: 0; border-radius: 0 var(--r) var(--r) 0; cursor: pointer; }
 .rb-swatch-more:hover, .rb-swatch-more.open { background: var(--press); }
-.menu.palette { gap: 4px; padding: 8px; }
+.menu.palette { gap: 4px; padding: 8px; width: max-content; }
 .menu.palette .sym { height: 26px; padding: 3px; }
 .menu.palette .sym:hover { transform: scale(1.12); background: transparent; }
 .pal-chip { display: block; width: 100%; height: 100%; border-radius: 5px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
@@ -1042,14 +1042,14 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
   animation: slash-in .12s ease-out;
 }
 .writer-body .context-menu-items { max-height: min(420px, 60vh); }
-.writer-body .context-menu-item { padding: 4px 6px; border-radius: 9px; color: var(--ink); transition: background-color .1s; }
+.writer-body .context-menu-item { padding: 3px 6px; border-radius: 9px; color: var(--ink); transition: background-color .1s; }
 .writer-body .context-menu-item:hover { background: var(--hover, rgba(100, 116, 139, .1)); }
 .writer-body .context-menu-item.sd-is-selected { background: var(--accent-soft, rgba(99, 102, 241, .12)); color: var(--ink); fill: currentColor; }
 .writer-body .context-menu-item-icon {
-  flex: none; display: grid; place-items: center; width: 28px; height: 28px; margin-right: 10px;
+  flex: none; display: grid; place-items: center; width: 26px; height: 26px; margin-right: 10px;
   border-radius: 8px; border: 1px solid var(--line); background: var(--surface, rgba(255, 255, 255, .7)); color: var(--accent);
 }
-.writer-body .context-menu .context-menu-item-icon svg { width: 15px; height: 15px; fill: currentColor; }
+.writer-body .context-menu .context-menu-item-icon svg { width: 14px; height: 14px; fill: currentColor; }
 .writer-body .context-menu-divider { background: var(--line); margin: 5px 6px; }
 .writer-body .context-menu-search-header { border-radius: 8px; border-bottom: 0; margin-bottom: 4px; background: var(--hover, rgba(100, 116, 139, .08)); color: var(--muted); }
 .writer-body .context-menu-search-header-value { color: var(--ink); }
@@ -1120,3 +1120,23 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
    for it, so neither does Kertas. Text on the page also uses the system's normal smoothing
    instead of the thinner grayscale style the app chrome uses on macOS. */
 .writer-body .superdoc-page { font-variant-ligatures: none; -webkit-font-smoothing: auto; }
+
+/* Writer: formatting bar shown with the right-click menu (like Word's mini toolbar) */
+.fbar {
+  position: fixed; z-index: 1300; display: flex; align-items: center; gap: 2px; padding: 5px;
+  background: var(--surface-solid); color: var(--ink); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, .22), 0 2px 6px rgba(15, 23, 42, .08); animation: slash-in .12s ease-out;
+  user-select: none;
+}
+.fbar-btn, .fbar-pick {
+  position: relative; display: grid; place-items: center; height: 30px; min-width: 30px; padding: 0 6px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; font: inherit; font-size: 12.5px;
+}
+.fbar-pick { display: flex; align-items: center; gap: 4px; justify-content: space-between; border: 1px solid var(--line); }
+.fbar-pick span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fbar-font { width: 118px; }
+.fbar-size { width: 52px; }
+.fbar-btn:hover, .fbar-pick:hover { background: var(--hover); }
+.fbar-btn.on { background: var(--accent-soft); color: var(--accent); }
+.fbar-sw i { position: absolute; left: 7px; right: 7px; bottom: 4px; height: 3px; border-radius: 2px; }
+.fbar-sep { width: 1px; height: 20px; background: var(--line); margin: 0 3px; }

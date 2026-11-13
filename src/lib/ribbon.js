@@ -64,7 +64,7 @@ const PALETTES = {
   highlight: ['#FFFF00', '#00FF00', '#00FFFF', '#FF00FF', '#0000FF', '#FF0000', '#000080', '#008080', '#008000', '#800080', '#800000', '#808000', '#808080', '#C0C0C0', '#000000'],
 };
 /** Colour palette menu for a swatch button */
-function openPalette(anchor, it, onPick) {
+export function openPalette(anchor, it, onPick) {
   const colours = PALETTES[it.palette || 'text'] || PALETTES.text;
   const grid = [...colours, 'none', 'more'];
   const html = grid.map((c) => (c === 'none' ? `<span class="pal-none">${icon('close', 14)}</span>` : c === 'more' ? `<span class="pal-more">${icon('palette', 15)}</span>` : `<span class="pal-chip" style="background:${c}"></span>`));

@@ -19,6 +19,7 @@ import { tableContext, moveRow, moveColumn, tableNodeId, sortRows } from './writ
 import { paragraphStyles, createStyleFromCursor } from './writer-styles.js';
 import { TABLE_DESIGNS, ensureTableStyle, designPreview } from './writer-table-styles.js';
 import { enablePictureDrag } from './writer-picture-drag.js';
+import { createFormatTools } from './writer-format.js';
 import { fieldsToCitations, citationsToFields } from '../lib/docx-citations.js';
 import { repairDocx } from '../lib/docx-repair.js';
 import { prepareDocx } from '../lib/docx-prepare.js';
@@ -367,6 +368,12 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     'update table of contents': 'refresh', 'restart numbering': 'list-ol', 'continue numbering': 'list-ol',
     'decrease indent': 'indent-less', 'increase indent': 'indent-more',
   };
+  function closeContextMenu() {
+    const cur = editor();
+    const plugin = cur?.state?.plugins?.find((p) => String(p.key).startsWith('contextMenu$'));
+    if (!plugin || !plugin.getState(cur.state)?.open) return;
+    try { cur.view.dispatch(cur.state.tr.setMeta(plugin, { type: 'close' })); } catch { /* menu already gone */ }
+  }
   function restyleMenuIcons() {
     for (const it of el.querySelectorAll('.context-menu .context-menu-item')) {
       const span = it.querySelector('.context-menu-item-icon');
@@ -375,6 +382,26 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       if (!name) continue;
       span.innerHTML = icon(name, 15).replace('<svg', '<svg data-k="1"');
     }
+  }
+  // Right-click on text: the Font and Paragraph dialogs, as in Word
+  function textMenuItems() {
+    const onText = (ctx) => ctx.trigger === 'click' && !(ctx.node?.type?.name === 'image' || ctx.currentNodeType === 'image');
+    return [{ id: 'kertas-text', items: [
+      { id: 'k-font', label: 'Font...', icon: icon('font', 16), showWhen: onText, action: () => afterMenu(() => ft.fontDialog()) },
+      { id: 'k-paragraph', label: 'Paragraph...', icon: icon('paragraph', 16), showWhen: onText, action: () => afterMenu(() => paragraphSettings()) },
+    ] }];
+  }
+  let lastMenuAt = { x: 200, y: 200 };
+  // The right-click menu puts the cursor back where it was clicked once an item runs, which would
+  // lose the selected text or cells; this keeps the selection for the dialog the item opens
+  function afterMenu(fn) {
+    const ed = editor();
+    const sel = ed?.state?.selection;
+    const doc = ed?.state?.doc;
+    setTimeout(() => {
+      try { if (sel && ed.state.doc === doc && !ed.state.selection.eq(sel)) ed.view.dispatch(ed.state.tr.setSelection(sel)); } catch { /* the document changed */ }
+      fn();
+    }, 30);
   }
   // Right-click in a table: the everyday table actions, as in Word, without going to the Table tab
   function tableMenuItems() {
@@ -392,6 +419,12 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         item('merge', 'Merge cells', 'merge', run('Merge cells', 'mergeCells'), { showWhen: (ctx) => inTable(ctx) && !!ctx.isCellSelection }),
         item('split', 'Split cell', 'split', run('Split cell', 'splitCell')),
       ] },
+      { id: 'kertas-table-format', items: [
+        item('design', 'Table design...', 'table-style', () => afterMenu(() => ft.designAt(lastMenuAt.x, lastMenuAt.y))),
+        item('borders', 'Borders and shading...', 'border', () => afterMenu(() => ft.bordersDialog())),
+        item('row-height', 'Row height...', 'rows', () => afterMenu(() => ft.rowHeightDialog())),
+        item('margins', 'Cell margins...', 'margins', () => afterMenu(() => ft.cellMarginsDialog())),
+      ] },
       { id: 'kertas-table-delete', items: [
         item('del-row', 'Delete row', 'trash', run('Delete row', 'deleteRow')),
         item('del-col', 'Delete column', 'trash', run('Delete column', 'deleteColumn')),
@@ -399,6 +432,16 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       ] },
     ];
   }
+  // Table borders, row height, cell margins, the Font dialog and the right-click formatting bar
+  const lastColors = { hl: '#FFFF00', fc: '#C00000' };
+  const ft = createFormatTools({
+    editor: () => superdoc?.activeEditor, api: () => api(), act: (...a) => act(...a), toast: (...a) => toast(...a),
+    fmt: (...a) => fmt(...a), setFontSize: (v) => setFontSize(v), growFont: (d) => growFont(d),
+    fonts: () => kFonts.options.map((o) => o.label), designMenu: (a) => designMenu(a), runProp: (k) => selectionRunProp(k),
+    textSelection: () => textSelection(), toSelectionTarget: (x) => toSelectionTarget(x), rulerUnit: () => rulerUnit(),
+    snapshot: () => tbc()?.getSnapshot?.()?.commands || {}, lastColor: (k) => lastColors[k], setLastColor: (k, c) => { lastColors[k] = c; },
+    closeContextMenu: () => closeContextMenu(), onChange: () => setTimeout(() => { updateTableTab(); syncHome(); }, 0),
+  });
   const ribbon = createRibbon(el.querySelector('[data-ribbon]'), {
     app: 'writer',
     fileMenu,
@@ -653,15 +696,14 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         { label: 'Size', items: [
           small('t-dist-rows', 'rows', 'Distribute rows', () => tapi('Distribute rows', (id) => api().tables.distributeRows({ nodeId: id }))),
           small('t-dist-cols', 'columns', 'Distribute columns', () => tapi('Distribute columns', (id) => api().tables.distributeColumns({ nodeId: id }))),
+          small('t-row-h', 'rows', 'Row height...', () => ft.rowHeightDialog(), 'Height of the selected rows: automatic, at least or exactly'),
+          small('t-margins', 'margins', 'Cell margins...', () => ft.cellMarginsDialog(), 'Space between the cell edges and the text'),
           small('t-header', 'heading', 'Repeat header row', () => tapi('Header row', (id) => api().tables.setRowOptions({ nodeId: id, rowIndex: 0, repeatHeader: true }), 'The first row repeats at the top of each page'), 'Repeat the first row on every page'),
         ], rows: true },
         { label: 'Design', items: [
-          menu('t-borders', 'border', 'Borders', [
-            { label: 'All borders', icon: 'grid', action: () => tapi('Borders', (id) => api().tables.applyBorderPreset({ nodeId: id, preset: 'all' }), 'All borders') },
-            { label: 'Outside only', icon: 'rect', action: () => tapi('Borders', (id) => api().tables.applyBorderPreset({ nodeId: id, preset: 'box' }), 'Outside border only') },
-            { label: 'Grid', icon: 'table', action: () => tapi('Borders', (id) => api().tables.applyBorderPreset({ nodeId: id, preset: 'grid' }), 'Grid borders') },
-            { label: 'No borders', icon: 'eye-off', action: () => tapi('Borders', (id) => api().tables.applyBorderPreset({ nodeId: id, preset: 'none' }), 'Borders removed') },
-          ]),
+          menu('t-borders', 'border', 'Borders', () => ft.bordersMenu(), 'Borders for the selected cells, or the whole table'),
+          menu('t-line', 'minus', 'Line', () => ft.lineMenu(), 'Line style and width for borders'),
+          { id: 't-pen', kind: 'color', icon: 'brush', label: 'Line colour', value: '#000000', title: 'Colour for borders', action: (v) => ft.setPenColor(v) },
           { id: 't-shade', kind: 'color', icon: 'paint', label: 'Shading', value: '#deeaf6', title: 'Cell shading', action: (v) => tcmd('Cell shading', 'setCellBackground', v) },
         ] },
         { label: 'Data', items: [
@@ -762,7 +804,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         toolbar: `#${id}-toolbar`,
         modules: {
           toolbar: { selector: `#${id}-toolbar`, excludeItems: ['documentMode', 'zoom', 'search', 'ruler', 'measurementUnit'], fonts: kFonts.options },
-          contextMenu: { includeDefaultItems: true, noSlash: true, customItems: [...pictureMenuItems(), ...tableMenuItems()] }, // "/" opens Kertas's own menu
+          contextMenu: { includeDefaultItems: true, noSlash: true, customItems: [...textMenuItems(), ...tableMenuItems(), ...pictureMenuItems()] }, // "/" opens Kertas's own menu
         },
         fonts: { families: kFonts.families },
         proofing: {
@@ -1452,13 +1494,22 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     // The right-click menu closes when the page scrolls, as in Word, instead of floating over other text
     body.addEventListener('scroll', (e) => {
       if (e.target?.closest?.('.context-menu')) return; // scrolling the menu's own list
-      const cur = editor();
-      const plugin = cur?.state?.plugins?.find((p) => String(p.key).startsWith('contextMenu$'));
-      if (!plugin || !plugin.getState(cur.state)?.open) return;
-      try { cur.view.dispatch(cur.state.tr.setMeta(plugin, { type: 'close' })); } catch { /* menu already gone */ }
+      closeContextMenu();
     }, { capture: true, passive: true });
     // SuperDoc's own right-click items get Kertas's line icons, to match the slash menu
-    body.addEventListener('contextmenu', () => { setTimeout(restyleMenuIcons, 0); setTimeout(restyleMenuIcons, 80); }, true);
+    // and a formatting bar above the menu, like Word's mini toolbar (not for pictures)
+    body.addEventListener('contextmenu', (e) => {
+      lastMenuAt = { x: e.clientX, y: e.clientY };
+      setTimeout(restyleMenuIcons, 0);
+      setTimeout(() => {
+        restyleMenuIcons();
+        const menuEl = el.querySelector('.context-menu');
+        const onPicture = editor()?.state?.selection?.node?.type?.name === 'image';
+        if (menuEl && !onPicture) ft.showBar(menuEl); else ft.hideBar();
+        // picking a menu item also puts the bar away
+        menuEl?.addEventListener('click', () => ft.hideBar(), { once: true });
+      }, 80);
+    }, true);
     // Ctrl+click (Cmd+click on Mac) follows a link, as in Word
     body.addEventListener('pointerdown', (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.button !== 0) return;

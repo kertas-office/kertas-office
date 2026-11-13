@@ -5,6 +5,25 @@ const path = require('path');
 const root = path.join(__dirname, '..', 'node_modules');
 const patches = [
   {
+    // superdoc 1.47.2: right-clicking inside selected table cells moved the cursor and dropped the
+    // cell selection, because "inside the selection" only looked at the first and last positions.
+    // Word keeps the selected cells, so the menu's actions apply to them.
+    dir: 'superdoc/dist/chunks',
+    find: /isClickInsideSelection = hit\.pos >= from\$1 && hit\.pos <= to;/,
+    replace: 'isClickInsideSelection = hit.pos >= from$$1 && hit.pos <= to; if (!isClickInsideSelection && typeof editorState.selection.forEachCell === "function") editorState.selection.forEachCell((n, p) => { if (hit.pos >= p && hit.pos <= p + n.nodeSize) isClickInsideSelection = true; }); // kertas: right-click in selected cells',
+    marker: 'kertas: right-click in selected cells',
+  },
+  {
+    // superdoc 1.47.2: once a table had any border set directly (one edge, say), the borders from
+    // its table style were dropped, so setting the top border erased all the others. Word keeps the
+    // style's borders and overrides only the edges that were set. The converter already merges the
+    // two; this uses that merged set whenever the table has direct borders.
+    dir: 'superdoc/dist/chunks',
+    find: /const getBorderSource = \(\) => \{(\s*)if \(node\.attrs\?\.borders && /,
+    replace: 'const getBorderSource = () => {$1if (node.attrs?.tableProperties?.borders && hydratedTableStyle?.borders && typeof hydratedTableStyle.borders === "object") return { borders: hydratedTableStyle.borders, unit: "eighthPoints" }; // kertas: style and direct table borders$1if (node.attrs?.borders && ',
+    marker: 'kertas: style and direct table borders',
+  },
+  {
     // superdoc 1.47.2: "single" line spacing was always 1.15 times the font size. Word uses
     // each font's own line height instead: 1.22 for Calibri, 1.17 for Cambria, 1.15 for Arial
     // and Times New Roman. Calibri text (most Word files) came out about 6% tighter than in
