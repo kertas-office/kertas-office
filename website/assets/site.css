@@ -265,11 +265,13 @@ p { margin: 0; }
 .files .dim { color: var(--muted); }
 .files .row.soon { background: var(--bg-softer); }
 .files .row.soon > span:first-child { color: var(--muted); }
-.req-card { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+/* The three cards share one set of rows, so each row lines up across Windows, macOS and Linux */
+.req-grid { grid-auto-rows: auto; row-gap: 0; }
+.req-card { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; display: grid; grid-row: span 5; grid-template-rows: subgrid; margin-bottom: 24px; }
 .req-card .h { padding: 18px 24px; background: #f7f8fa; font-weight: 700; font-size: 17px; }
-.req-card .r { display: flex; justify-content: space-between; gap: 16px; padding: 14px 24px; border-top: 1px solid var(--line-soft); font-size: 15px; flex-wrap: wrap; }
-.req-card .r span:first-child { color: var(--muted); }
-.req-card .r span:last-child { font-weight: 500; text-align: right; }
+.req-card .r { display: flex; flex-direction: column; gap: 4px; padding: 14px 24px; border-top: 1px solid var(--line-soft); font-size: 15px; }
+.req-card .r span:first-child { color: var(--muted); font-size: 13px; }
+.req-card .r span:last-child { font-weight: 500; }
 .box { border-radius: 20px; border: 1px solid var(--line); padding: 36px; }
 .box.purple { border: 0; background: var(--brand-tint); }
 .box h3 { font-weight: 700; font-size: 24px; }
