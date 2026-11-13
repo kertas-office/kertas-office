@@ -19,6 +19,8 @@ import { tableContext, moveRow, moveColumn, tableNodeId, sortRows } from './writ
 import { paragraphStyles, createStyleFromCursor } from './writer-styles.js';
 import { TABLE_DESIGNS, ensureTableStyle, designPreview } from './writer-table-styles.js';
 import { enablePictureDrag } from './writer-picture-drag.js';
+import { createFormatTools } from './writer-format.js';
+import { createForms } from './writer-forms.js';
 import { fieldsToCitations, citationsToFields } from '../lib/docx-citations.js';
 import { repairDocx } from '../lib/docx-repair.js';
 import { prepareDocx } from '../lib/docx-prepare.js';
@@ -295,6 +297,10 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     { id: 'quote', group: 'Text', label: 'Quote', keys: ['blockquote', 'citation text'], icon: 'quote', hint: 'Quoted passage', run: () => applyStyle('Quote', 'Quote') },
     { id: 'bullets', group: 'Lists', label: 'Bulleted list', keys: ['ul', 'bullet', 'unordered', '-'], icon: 'list', hint: 'A simple list', run: () => makeList('bullet') },
     { id: 'numbers', group: 'Lists', label: 'Numbered list', keys: ['ol', 'ordered', '1.', 'steps'], icon: 'line-numbers', hint: '1, 2, 3', run: () => makeList('ordered') },
+    { id: 'f-text', group: 'Forms', label: 'Text field', keys: ['form', 'field', 'input', 'fill in'], icon: 'field-text', hint: 'A box to type in', run: () => forms.insertField('text') },
+    { id: 'f-check', group: 'Forms', label: 'Tick box field', keys: ['form', 'checkbox field'], icon: 'field-check', hint: 'Click to tick or clear', run: () => forms.insertField('checkbox') },
+    { id: 'f-drop', group: 'Forms', label: 'Dropdown list', keys: ['form', 'select', 'choices', 'combo'], icon: 'field-drop', hint: 'Pick one of your choices', run: () => forms.insertField('dropDownList') },
+    { id: 'f-date', group: 'Forms', label: 'Date picker', keys: ['form', 'calendar', 'date field'], icon: 'calendar', hint: 'Pick a date from a calendar', run: () => forms.insertField('date') },
     { id: 'tick', group: 'Lists', label: 'Tick box', keys: ['checkbox', 'todo', 'checklist', 'task'], icon: 'check-square', hint: 'A ☐ to tick later', run: () => insertTextAtCaret('☐ ') },
     { id: 'table', group: 'Insert', label: 'Table', keys: ['grid', 'rows', 'columns'], icon: 'table', hint: 'Rows and columns', run: () => insertTable() },
     { id: 'picture', group: 'Insert', label: 'Picture', keys: ['image', 'photo', 'img'], icon: 'image', hint: 'From your computer', run: () => insertPicture() },
@@ -355,7 +361,64 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       ['behind', 'Behind text', 'back', (id) => setWrap('None', true, id)],
       ['front', 'In front of text', 'front', (id) => setWrap('None', false, id)],
     ];
-    return [{ id: 'kertas-picture', items: opts.map(([key, label, ic, fn]) => ({ id: `k-wrap-${key}`, label, icon: icon(ic, 16), showWhen: onPicture, action: (ed, ctx) => choose(ed, ctx, fn) })) }];
+    const more = [
+      ['change', 'Change picture...', 'image', (id) => picChange(id)],
+      ['crop', 'Crop...', 'crop', (id) => picCrop(id)],
+      ['rotate', 'Rotate right 90°', 'rotate-r', (id) => picRotate(90, id)],
+      ['flip', 'Flip horizontal', 'flip', (id) => picFlip('h', id)],
+      ['caption', 'Caption...', 'caption', (id) => picCaption(id)],
+      ['link', 'Link...', 'link', (id) => picLink(id)],
+    ];
+    return [
+      { id: 'kertas-picture', items: opts.map(([key, label, ic, fn]) => ({ id: `k-wrap-${key}`, label, icon: icon(ic, 16), showWhen: onPicture, action: (ed, ctx) => choose(ed, ctx, fn) })) },
+      { id: 'kertas-picture-edit', items: more.map(([key, label, ic, fn]) => ({ id: `k-pic-${key}`, label, icon: icon(ic, 16), showWhen: onPicture, action: (ed, ctx) => choose(ed, ctx, fn) })) },
+    ];
+  }
+  // Icons for SuperDoc's built-in right-click items, by label
+  const MENU_ICONS = {
+    'insert link': 'link', 'insert table': 'table', 'edit table': 'table-style', 'cell background': 'fill',
+    cut: 'cut', copy: 'copy', paste: 'paste', 'insert row above': 'insert-row', 'insert row below': 'insert-row',
+    'insert column left': 'insert-col', 'insert column right': 'insert-col', 'delete row': 'trash', 'delete column': 'trash',
+    'delete table': 'trash', 'merge cells': 'merge', 'split cell': 'split', 'remove borders': 'border', 'fix tables': 'magic',
+    'create section': 'section', 'remove section': 'trash', 'accept change': 'check', 'reject change': 'close',
+    'update table of contents': 'refresh', 'restart numbering': 'list-ol', 'continue numbering': 'list-ol',
+    'decrease indent': 'indent-less', 'increase indent': 'indent-more',
+  };
+  function closeContextMenu() {
+    const cur = editor();
+    const plugin = cur?.state?.plugins?.find((p) => String(p.key).startsWith('contextMenu$'));
+    if (!plugin || !plugin.getState(cur.state)?.open) return;
+    try { cur.view.dispatch(cur.state.tr.setMeta(plugin, { type: 'close' })); } catch { /* menu already gone */ }
+  }
+  function restyleMenuIcons() {
+    for (const it of el.querySelectorAll('.context-menu .context-menu-item')) {
+      const span = it.querySelector('.context-menu-item-icon');
+      if (!span || span.querySelector('svg[data-k]')) continue;
+      const name = MENU_ICONS[(it.textContent || '').trim().toLowerCase()];
+      if (!name) continue;
+      span.innerHTML = icon(name, 15).replace('<svg', '<svg data-k="1"');
+    }
+  }
+  // Right-click on text: the Font and Paragraph dialogs, as in Word
+  function textMenuItems() {
+    const onText = (ctx) => ctx.trigger === 'click' && !(ctx.node?.type?.name === 'image' || ctx.currentNodeType === 'image');
+    return [{ id: 'kertas-text', items: [
+      { id: 'k-font', label: 'Font...', icon: icon('font', 16), showWhen: onText, action: () => afterMenu(() => ft.fontDialog()) },
+      { id: 'k-paragraph', label: 'Paragraph...', icon: icon('paragraph', 16), showWhen: onText, action: () => afterMenu(() => paragraphSettings()) },
+      { id: 'k-field', label: 'Form field settings...', icon: icon('field-props', 16), showWhen: (ctx) => ctx.trigger === 'click' && !!forms.fieldAtCursor(), action: () => afterMenu(() => forms.fieldSettings()) },
+    ] }];
+  }
+  let lastMenuAt = { x: 200, y: 200 };
+  // The right-click menu puts the cursor back where it was clicked once an item runs, which would
+  // lose the selected text or cells; this keeps the selection for the dialog the item opens
+  function afterMenu(fn) {
+    const ed = editor();
+    const sel = ed?.state?.selection;
+    const doc = ed?.state?.doc;
+    setTimeout(() => {
+      try { if (sel && ed.state.doc === doc && !ed.state.selection.eq(sel)) ed.view.dispatch(ed.state.tr.setSelection(sel)); } catch { /* the document changed */ }
+      fn();
+    }, 30);
   }
   // Right-click in a table: the everyday table actions, as in Word, without going to the Table tab
   function tableMenuItems() {
@@ -373,6 +436,13 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         item('merge', 'Merge cells', 'merge', run('Merge cells', 'mergeCells'), { showWhen: (ctx) => inTable(ctx) && !!ctx.isCellSelection }),
         item('split', 'Split cell', 'split', run('Split cell', 'splitCell')),
       ] },
+      { id: 'kertas-table-format', items: [
+        item('align', 'Cell alignment...', 'cell-middle-center', () => afterMenu(() => ft.alignPickerAt(lastMenuAt.x, lastMenuAt.y))),
+        item('design', 'Table design...', 'table-style', () => afterMenu(() => ft.designAt(lastMenuAt.x, lastMenuAt.y))),
+        item('borders', 'Borders and shading...', 'border', () => afterMenu(() => ft.bordersDialog())),
+        item('row-height', 'Row height...', 'rows', () => afterMenu(() => ft.rowHeightDialog())),
+        item('margins', 'Cell margins...', 'margins', () => afterMenu(() => ft.cellMarginsDialog())),
+      ] },
       { id: 'kertas-table-delete', items: [
         item('del-row', 'Delete row', 'trash', run('Delete row', 'deleteRow')),
         item('del-col', 'Delete column', 'trash', run('Delete column', 'deleteColumn')),
@@ -380,6 +450,21 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       ] },
     ];
   }
+  // Table borders, row height, cell margins, the Font dialog and the right-click formatting bar
+  const lastColors = { hl: '#FFFF00', fc: '#C00000' };
+  const ft = createFormatTools({
+    editor: () => superdoc?.activeEditor, api: () => api(), act: (...a) => act(...a), toast: (...a) => toast(...a),
+    fmt: (...a) => fmt(...a), setFontSize: (v) => setFontSize(v), growFont: (d) => growFont(d),
+    fonts: () => kFonts.options.map((o) => o.label), designMenu: (a) => designMenu(a), runProp: (k) => selectionRunProp(k),
+    textSelection: () => textSelection(), toSelectionTarget: (x) => toSelectionTarget(x), rulerUnit: () => rulerUnit(),
+    snapshot: () => tbc()?.getSnapshot?.()?.commands || {}, lastColor: (k) => lastColors[k], setLastColor: (k, c) => { lastColors[k] = c; },
+    onBlock: (fn, b) => onBlock(fn, b), closeContextMenu: () => closeContextMenu(), onChange: () => setTimeout(() => { updateTableTab(); syncHome(); }, 0),
+  });
+  const forms = createForms({
+    editor: () => superdoc?.activeEditor, api: () => api(), act: (...a) => act(...a), toast: (...a) => toast(...a),
+    selection: () => selection(), toSelectionTarget: (x) => toSelectionTarget(x), failed: (r) => failed(r),
+  });
+  globalThis.__kertasForms = forms; // for tests
   const ribbon = createRibbon(el.querySelector('[data-ribbon]'), {
     app: 'writer',
     fileMenu,
@@ -419,7 +504,9 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         { label: 'Paragraph', rows: [
           [
             small('ul', 'list-ul', '', () => fmt('bullet-list'), 'Bullets'),
+            menu('ul-lib', 'none', '', () => bulletMenu(), 'Bullet library'),
             small('ol', 'list-ol', '', () => fmt('numbered-list'), 'Numbering'),
+            menu('ol-lib', 'none', '', () => numberMenu(), 'Number formats and multilevel lists'),
             menu('numbering', 'line-numbers', '', () => numberingMenu(), 'Restart or continue list numbering'),
             small('outdent', 'indent-less', '', () => fmt('indent-decrease'), 'Decrease indent'),
             small('indent', 'indent-more', '', () => fmt('indent-increase'), 'Increase indent'),
@@ -469,7 +556,9 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           big('header', 'header', 'Header', () => editFurniture('header'), 'Edit the page header'),
           big('footer', 'footer', 'Footer', () => editFurniture('footer'), 'Edit the page footer'),
           big('pgnum', 'hash', 'Page number', () => pageNumbers()),
+          menu('hf-options', 'settings', 'Options', () => headerFooterMenu(), 'Different first page, odd and even pages, position, remove'),
         ] },
+        { label: 'Forms', items: [menu('form-field', 'field-text', 'Form field', () => forms.menu(), 'Text field, tick box, dropdown list or date picker that can be filled in')] },
         { label: 'Text', items: [
           big('date', 'calendar', 'Date & time', () => insertDate()),
           menu('symbol', 'omega', 'Symbol', () => symbolMenu()),
@@ -537,6 +626,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         ] },
         { label: 'Paragraph', items: [
           big('para2', 'paragraph', 'Indents & spacing', () => paragraphSettings()),
+          big('tabs', 'tabs', 'Tabs', () => tabStopsDialog(), 'Tab stops: where Tab moves to, how text lines up there, and dot leaders'),
           small('ltr2', 'ltr', 'Left to right', () => setDirection('ltr')),
           small('rtl2', 'rtl', 'Right to left', () => setDirection('rtl')),
         ] },
@@ -631,18 +721,18 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           big('t-merge', 'merge', 'Merge cells', () => tcmd('Merge cells', 'mergeCells'), 'Select several cells first'),
           big('t-split', 'split', 'Split cell', () => tcmd('Split cell', 'splitCell')),
         ] },
+        { label: 'Alignment', rows: ['top', 'middle', 'bottom'].map((v) => ['left', 'center', 'right'].map((h) => small(`t-al-${v}-${h}`, `cell-${v}-${h}`, '', () => ft.alignCells(v, h), `Align ${ft.alignLabel(v, h).toLowerCase()}`))) },
         { label: 'Size', items: [
           small('t-dist-rows', 'rows', 'Distribute rows', () => tapi('Distribute rows', (id) => api().tables.distributeRows({ nodeId: id }))),
           small('t-dist-cols', 'columns', 'Distribute columns', () => tapi('Distribute columns', (id) => api().tables.distributeColumns({ nodeId: id }))),
+          small('t-row-h', 'rows', 'Row height...', () => ft.rowHeightDialog(), 'Height of the selected rows: automatic, at least or exactly'),
+          small('t-margins', 'margins', 'Cell margins...', () => ft.cellMarginsDialog(), 'Space between the cell edges and the text'),
           small('t-header', 'heading', 'Repeat header row', () => tapi('Header row', (id) => api().tables.setRowOptions({ nodeId: id, rowIndex: 0, repeatHeader: true }), 'The first row repeats at the top of each page'), 'Repeat the first row on every page'),
         ], rows: true },
         { label: 'Design', items: [
-          menu('t-borders', 'border', 'Borders', [
-            { label: 'All borders', icon: 'grid', action: () => tapi('Borders', (id) => api().tables.applyBorderPreset({ nodeId: id, preset: 'all' }), 'All borders') },
-            { label: 'Outside only', icon: 'rect', action: () => tapi('Borders', (id) => api().tables.applyBorderPreset({ nodeId: id, preset: 'box' }), 'Outside border only') },
-            { label: 'Grid', icon: 'table', action: () => tapi('Borders', (id) => api().tables.applyBorderPreset({ nodeId: id, preset: 'grid' }), 'Grid borders') },
-            { label: 'No borders', icon: 'eye-off', action: () => tapi('Borders', (id) => api().tables.applyBorderPreset({ nodeId: id, preset: 'none' }), 'Borders removed') },
-          ]),
+          menu('t-borders', 'border', 'Borders', () => ft.bordersMenu(), 'Borders for the selected cells, or the whole table'),
+          menu('t-line', 'minus', 'Line', () => ft.lineMenu(), 'Line style and width for borders'),
+          { id: 't-pen', kind: 'color', icon: 'brush', label: 'Line colour', value: '#000000', title: 'Colour for borders', action: (v) => ft.setPenColor(v) },
           { id: 't-shade', kind: 'color', icon: 'paint', label: 'Shading', value: '#deeaf6', title: 'Cell shading', action: (v) => tcmd('Cell shading', 'setCellBackground', v) },
         ] },
         { label: 'Data', items: [
@@ -663,8 +753,23 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           { id: 'pic-w', kind: 'number', label: 'Width', unit: 'px', step: 10, min: 4, title: 'Width (keeps the proportions)', action: (v) => picSize('w', v) },
           { id: 'pic-h', kind: 'number', label: 'Height', unit: 'px', step: 10, min: 4, title: 'Height (keeps the proportions)', action: (v) => picSize('h', v) },
         ] },
+        { label: 'Adjust', items: [
+          menu('pic-rotate', 'rotate', 'Rotate', [
+            { label: 'Rotate right 90°', icon: 'rotate-r', action: () => picRotate(90) },
+            { label: 'Rotate left 90°', icon: 'rotate-l', action: () => picRotate(-90) },
+            { label: 'Flip vertical', icon: 'flip-v', action: () => picFlip('v') },
+            { label: 'Flip horizontal', icon: 'flip', action: () => picFlip('h') },
+            'sep',
+            { label: 'More rotation...', icon: 'rotate', action: () => picRotationDialog() },
+          ], 'Rotate or flip the picture'),
+          big('pic-crop', 'crop', 'Crop', () => picCrop(), 'Cut off the edges of the picture'),
+          big('pic-change', 'image', 'Change picture', () => picChange(), 'Use another picture in its place, keeping the size and position'),
+          big('pic-reset', 'restore', 'Reset', () => picReset(), 'Remove rotation, flips and crop'),
+        ] },
         { label: 'Picture', items: [
-          big('pic-alt', 'caption', 'Alt text', () => picAlt(), 'Describe the picture for screen readers'),
+          big('pic-caption', 'caption', 'Caption', () => picCaption(), 'Add a caption under the picture'),
+          big('pic-link', 'link', 'Link', () => picLink(), 'Make the picture a link'),
+          big('pic-alt', 'text', 'Alt text', () => picAlt(), 'Describe the picture for screen readers'),
           big('pic-del', 'trash', 'Delete', () => picAct('Delete picture', (imageId) => api().images.delete({ imageId }))),
         ] },
       ] },
@@ -743,7 +848,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         toolbar: `#${id}-toolbar`,
         modules: {
           toolbar: { selector: `#${id}-toolbar`, excludeItems: ['documentMode', 'zoom', 'search', 'ruler', 'measurementUnit'], fonts: kFonts.options },
-          contextMenu: { includeDefaultItems: true, noSlash: true, customItems: [...pictureMenuItems(), ...tableMenuItems()] }, // "/" opens Kertas's own menu
+          contextMenu: { includeDefaultItems: true, noSlash: true, customItems: [...textMenuItems(), ...tableMenuItems(), ...pictureMenuItems()] }, // "/" opens Kertas's own menu
         },
         fonts: { families: kFonts.families },
         proofing: {
@@ -900,6 +1005,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       ...[1, 1.08, 1.15, 1.5, 2, 2.5, 3].map((v) => ({ label: v === 1.08 ? '1.08 (default)' : String(v.toFixed(v % 1 ? 2 : 1)).replace(/0$/, ''), checked: cur !== null && Math.abs(cur - v) < 0.01, action: () => fmt('line-height', v) })),
       'sep',
       { label: 'Paragraph settings...', icon: 'paragraph', action: () => paragraphSettings() },
+      { label: 'Tabs...', icon: 'tabs', action: () => tabStopsDialog() },
     ];
   }
   let homeCtl = null; let homeUnsub = null;
@@ -1006,6 +1112,45 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     });
     ribbon.setOn('rtl', direction === 'rtl'); ribbon.setOn('rtl2', direction === 'rtl');
     ribbon.setOn('ltr', direction === 'ltr'); ribbon.setOn('ltr2', direction === 'ltr');
+  }
+  // Tab stops for the selected paragraphs, as in Word's Tabs dialog
+  const TAB_ALIGN = [{ value: 'left', label: 'Left' }, { value: 'center', label: 'Centre' }, { value: 'right', label: 'Right' }, { value: 'decimal', label: 'Decimal' }, { value: 'bar', label: 'Bar' }];
+  const TAB_LEADER = [{ value: 'none', label: 'None' }, { value: 'dot', label: 'Dots .......' }, { value: 'hyphen', label: 'Dashes -------' }, { value: 'underscore', label: 'Line _______' }, { value: 'middleDot', label: 'Middle dots ·······' }];
+  async function tabStopsDialog() {
+    const list = await selectedBlocks().catch(() => []);
+    if (!list.length) { toast('Click in a paragraph first'); return; }
+    const u = rulerUnit(); const TW = u === 'in' ? 1440 : 1440 / 2.54;
+    const show = (tw) => `${Math.round((tw / TW) * 100) / 100} ${u}`;
+    // the tab stops of the paragraph with the cursor
+    let tabs = [];
+    const $f = editor()?.state?.selection?.$from;
+    for (let d = $f?.depth ?? 0; d > 0; d--) {
+      const n = $f.node(d);
+      if (n.isTextblock) { tabs = (n.attrs?.paragraphProperties?.tabStops || []).map((x) => x.tab || x).filter((x) => x && x.tabType !== 'clear' && Number.isFinite(Number(x.pos))); break; }
+    }
+    tabs.sort((a, b) => a.pos - b.pos);
+    const describe = (x) => `${show(x.pos)} ${TAB_ALIGN.find((a) => a.value === x.tabType)?.label.toLowerCase() || x.tabType}${x.leader && x.leader !== 'none' ? `, ${TAB_LEADER.find((l) => l.value === x.leader)?.label.split(' ')[0].toLowerCase() || x.leader}` : ''}`;
+    const res = await openDialog({
+      title: 'Tabs',
+      description: tabs.length ? `Tab stops here: ${tabs.map(describe).join('; ')}.` : 'This paragraph has no tab stops of its own yet; Tab moves in default steps.',
+      width: 460,
+      fields: [
+        { id: 'pos', label: `Position (${u}, from the left margin)`, type: 'number', value: tabs.length ? Math.round((tabs[tabs.length - 1].pos / TW) * 100) / 100 : (u === 'in' ? 3 : 8) },
+        { id: 'align', label: 'Alignment', type: 'segmented', value: 'left', options: TAB_ALIGN },
+        { id: 'leader', label: 'Leader', type: 'select', value: 'none', options: TAB_LEADER },
+        ...(tabs.length ? [{ id: 'remove', label: 'Remove a tab stop', type: 'select', value: '', options: [{ value: '', label: '(None)' }, ...tabs.map((x) => ({ value: String(x.pos), label: describe(x) }))] }] : []),
+      ],
+      validate: (v, action) => (action === 'ok' && (v.pos === null || v.pos <= 0 || v.pos * TW > 31680) ? 'Enter a position after the left margin' : null),
+      actions: [...(tabs.length ? [{ id: 'clearAll', label: 'Clear all' }] : []), { id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Set', primary: true }],
+    });
+    if (!res) return;
+    const v = res.values;
+    const p = () => api().format.paragraph;
+    if (res.action === 'clearAll') { await act('Tabs', () => onSelectedBlocks((t) => p().clearAllTabStops({ target: t })), 'Tab stops cleared'); return; }
+    await act('Tabs', () => onSelectedBlocks(async (t) => {
+      if (v.remove) { const r = await p().clearTabStop({ target: t, position: Number(v.remove) }); if (failed(r)) return r; }
+      return p().setTabStop({ target: t, position: Math.round(v.pos * TW), alignment: v.align, ...(v.leader !== 'none' ? { leader: v.leader } : {}) });
+    }), `Tab stop at ${show(Math.round(v.pos * TW))}`);
   }
   async function paragraphSettings() {
     const list = await selectedBlocks().catch(() => []);
@@ -1126,13 +1271,18 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     if (!v) return;
     await act('Table', () => api().create.table({ rows: v.rows, columns: v.columns, ...(b ? { at: { kind: 'after', nodeId: b.nodeId } } : {}) }));
   }
+  /** A picture file as a data URL, with its pixel size */
+  async function readImage(img) {
+    const type = /\.png$/i.test(img.name) ? 'image/png' : 'image/jpeg';
+    const src = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(new Blob([img.data], { type })); });
+    const [w, h] = await new Promise((r) => { const im = new Image(); im.onload = () => r([im.naturalWidth, im.naturalHeight]); im.onerror = () => r([400, 300]); im.src = src; });
+    return { src, w, h };
+  }
   async function insertPicture() {
     const b = await caretBlock().catch(() => null);
     const [img] = await openFiles('image', false);
     if (!img) return;
-    const type = /\.png$/i.test(img.name) ? 'image/png' : 'image/jpeg';
-    const src = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(new Blob([img.data], { type })); });
-    const [w, h] = await new Promise((r) => { const im = new Image(); im.onload = () => r([im.naturalWidth, im.naturalHeight]); im.onerror = () => r([400, 300]); im.src = src; });
+    const { src, w, h } = await readImage(img);
     const s = Math.min(1, 576 / w); // fit within 6 inches
     await act('Picture', () => api().create.image({ src, alt: img.name, size: { width: Math.round(w * s), height: Math.round(h * s), unit: 'px' }, ...(b ? { at: { kind: 'after', target: b } } : {}) }));
   }
@@ -1194,9 +1344,12 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     const v = await pageNumberDialog();
     if (!v) return;
     if (v === 'remove') {
+      // the number lives in its own header or footer (see below), so that one is emptied
       await act('Page numbers', () => onSections(async (t) => {
         for (const kind of ['header', 'footer']) {
-          try { api().headerFooters.refs.clear({ target: hfSlot(t, kind) }); } catch { /* none there */ }
+          const slot = (() => { try { return (api().headerFooters.list({}).items || []).find((x) => x.kind === kind && x.variant === 'default' && x.refId && x.section?.sectionId === t.sectionId); } catch { return null; } })();
+          const text = slot ? (() => { try { return api().getText({ in: hfStory(t, kind) }) || ''; } catch { return ''; } })() : '';
+          if (slot && (/^\s*(page\s*)?\d+(\s*of\s*\d+)?\s*$/i.test(text) || !text.trim())) { const r = emptyHeaderFooter(t, kind); if (failed(r)) return r; }
         }
         return { success: true };
       }), 'Page numbers removed');
@@ -1220,6 +1373,53 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       try { api().sections.setTitlePage({ target: t, enabled: !v.first }); } catch { /* fine */ }
       return { success: true };
     }), 'Page numbers added');
+  }
+  /** As in Word, each header (or footer) of a section in use is replaced by an empty one.
+   *  (Only clearing the reference left the old one on screen.) */
+  function emptyHeaderFooter(t, kind) {
+    let slots = [];
+    try { slots = (api().headerFooters.list({}).items || []).filter((x) => x.kind === kind && x.refId && x.section?.sectionId === t.sectionId); } catch { /* none */ }
+    if (!slots.length) slots = [{ variant: 'default' }];
+    for (const { variant } of slots) {
+      try { api().headerFooters.refs.clear({ target: { ...hfSlot(t, kind), variant } }); } catch { /* not there */ }
+      const r = api().insert({ in: { ...hfStory(t, kind), variant }, content: { kind: 'paragraph', paragraph: { inlines: [] } } });
+      if (failed(r)) return r;
+    }
+    return { success: true };
+  }
+  // Header and footer options, for every section of the document
+  function headerFooterMenu() {
+    let first = null;
+    try { first = api().sections.list().items?.[0] || null; } catch { /* no sections */ }
+    const forAll = (label, fn, ok) => act(label, () => onSections(fn), ok);
+    const removeAll = (kind) => forAll(kind === 'header' ? 'Remove header' : 'Remove footer', (t) => emptyHeaderFooter(t, kind), kind === 'header' ? 'Header removed' : 'Footer removed');
+    return [
+      { label: 'Edit header', icon: 'header', action: () => editFurniture('header') },
+      { label: 'Edit footer', icon: 'footer', action: () => editFurniture('footer') },
+      'sep',
+      { label: 'Different first page', checked: !!first?.titlePage, action: () => forAll('Different first page', (t) => api().sections.setTitlePage({ target: t, enabled: !first?.titlePage }), first?.titlePage ? 'The first page uses the same header and footer again' : 'The first page now has its own header and footer') },
+      { label: 'Different odd and even pages', checked: !!first?.oddEvenHeadersFooters, action: () => act('Odd and even pages', () => api().sections.setOddEvenHeadersFooters({ enabled: !first?.oddEvenHeadersFooters }), first?.oddEvenHeadersFooters ? 'Odd and even pages share the header and footer again' : 'Even pages now have their own header and footer') },
+      { label: 'Position...', icon: 'margins', hint: 'Distance from the top and bottom edges of the page', action: () => headerFooterPosition(first) },
+      'sep',
+      { label: 'Remove header', icon: 'trash', action: () => removeAll('header') },
+      { label: 'Remove footer', icon: 'trash', action: () => removeAll('footer') },
+    ];
+  }
+  async function headerFooterPosition(first) {
+    const u = rulerUnit(); const k = u === 'in' ? 1 : 2.54;
+    const m = first?.headerFooterMargins || { header: 0.5, footer: 0.5 };
+    const res = await openDialog({
+      title: 'Header and footer position',
+      description: `Distance from the edge of the page, in ${u === 'in' ? 'inches' : 'centimetres'}.`,
+      width: 420,
+      fields: [
+        { id: 'header', label: 'Header from top', type: 'number', value: Math.round(m.header * k * 100) / 100 },
+        { id: 'footer', label: 'Footer from bottom', type: 'number', value: Math.round(m.footer * k * 100) / 100 },
+      ],
+      validate: (v) => (['header', 'footer'].some((x) => v[x] === null || v[x] < 0 || v[x] / k > 4) ? `Use 0 to ${u === 'in' ? '4 inches' : '10 cm'}` : null),
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Apply', primary: true }],
+    });
+    if (res) await act('Header and footer position', () => onSections((t) => api().sections.setHeaderFooterMargins({ target: t, header: res.values.header / k, footer: res.values.footer / k })));
   }
   async function insertDate() {
     const text = await dateTimeDialog();
@@ -1430,6 +1630,38 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       setZoom(currentZoom() + (wheelAcc < 0 ? 10 : -10));
       wheelAcc = 0;
     }, { passive: false });
+    // The right-click menu closes when the page scrolls, as in Word, instead of floating over other text
+    body.addEventListener('scroll', (e) => {
+      if (e.target?.closest?.('.context-menu')) return; // scrolling the menu's own list
+      closeContextMenu();
+    }, { capture: true, passive: true });
+    // SuperDoc's own right-click items get Kertas's line icons, to match the slash menu
+    // and a formatting bar above the menu, like Word's mini toolbar (not for pictures)
+    body.addEventListener('contextmenu', (e) => {
+      lastMenuAt = { x: e.clientX, y: e.clientY };
+      setTimeout(restyleMenuIcons, 0);
+      setTimeout(() => {
+        restyleMenuIcons();
+        const menuEl = el.querySelector('.context-menu');
+        const onPicture = editor()?.state?.selection?.node?.type?.name === 'image';
+        if (menuEl && !onPicture) ft.showBar(menuEl); else ft.hideBar();
+        // picking a menu item also puts the bar away
+        menuEl?.addEventListener('click', () => ft.hideBar(), { once: true });
+      }, 80);
+    }, true);
+    // Form fields: a click opens a dropdown's choices or a date picker, or ticks a box
+    // (on pointer up: the editor redraws a locked field on pointer down, so no click event follows)
+    let fieldDown = null;
+    body.addEventListener('pointerdown', (e) => { fieldDown = e.button === 0 ? { x: e.clientX, y: e.clientY } : null; }, true);
+    // on the document: the editor may capture the pointer, so the release lands elsewhere
+    document.addEventListener('pointerup', (e) => {
+      const d = fieldDown; fieldDown = null;
+      if (!el.isConnected) return;
+      if (!d || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) return;
+      // after the editor has finished with the click (it can redraw and close menus)
+      const at = { clientX: e.clientX, clientY: e.clientY };
+      setTimeout(() => forms.onClick(at), 60);
+    }, true);
     // Ctrl+click (Cmd+click on Mac) follows a link, as in Word
     body.addEventListener('pointerdown', (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.button !== 0) return;
@@ -1524,7 +1756,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     if (pic && picKey !== lastPicKey) ribbon.activateTab('picture');
     lastPicKey = picKey;
     if (pic) syncPictureTab(pic);
-    if (inside) syncTableLook();
+    if (inside) { syncTableLook(); syncCellAlign(); }
   }
   // ---- tables: selecting, designs, style options
   function cellPositions() {
@@ -1557,6 +1789,10 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     const list = TABLE_DESIGNS;
     const m = openMenu(anchor, { grid: list.map((d) => d.id), html: list.map(designPreview), titles: list.map((d) => d.name), columns: 4, cell: 84, onPick: (id) => { closeOpenMenu(); applyDesign(list.find((d) => d.id === id)); } });
     m.classList.add('table-designs');
+  }
+  function syncCellAlign() {
+    const cur = ft.currentAlign();
+    for (const v of ft.ALIGN_V) for (const h of ft.ALIGN_H) ribbon.setOn(`t-al-${v}-${h}`, !!cur && cur.v === v && cur.h === h);
   }
   const LOOK = { 't-opt-header': 'headerRow', 't-opt-banded': 'bandedRows', 't-opt-first': 'firstColumn', 't-opt-total': 'lastRow' };
   let tableLook = {};
@@ -1644,6 +1880,87 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     if (res) await picAct('Alt text', (imageId) => api().images.setAltText({ imageId, description: res.values.alt }));
   }
 
+  // ---- picture: rotate, flip, crop, change, reset, caption, link
+  async function picProps(id) { return (await api().images.get({ imageId: id }))?.properties || {}; }
+  async function picRotate(delta, given) {
+    await picAct('Rotate', async (imageId) => {
+      const cur = (await picProps(imageId)).transform?.rotation || 0;
+      return api().images.rotate({ imageId, angle: (((Math.round(cur + delta)) % 360) + 360) % 360 });
+    }, null, given);
+  }
+  async function picFlip(axis, given) {
+    await picAct('Flip', async (imageId) => {
+      const t = (await picProps(imageId)).transform || {};
+      return axis === 'h' ? api().images.flip({ imageId, horizontal: !t.horizontalFlip }) : api().images.flip({ imageId, vertical: !t.verticalFlip });
+    }, null, given);
+  }
+  async function picRotationDialog(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const cur = (await picProps(id)).transform?.rotation || 0;
+    const res = await openDialog({ title: 'Rotation', width: 380, fields: [{ id: 'angle', label: 'Angle (degrees, clockwise)', type: 'number', value: Math.round(cur) }], validate: (v) => (v.angle === null || v.angle < -360 || v.angle > 360 ? 'Enter an angle from -360 to 360' : null), actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Rotate', primary: true }] });
+    if (res) await picAct('Rotate', (imageId) => api().images.rotate({ imageId, angle: ((Math.round(res.values.angle) % 360) + 360) % 360 }), null, id);
+  }
+  async function picCrop(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const c = (await picProps(id)).crop || {};
+    const res = await openDialog({
+      title: 'Crop picture',
+      description: 'How much to cut off each side, as a percentage of the picture.',
+      width: 420,
+      fields: ['left', 'right', 'top', 'bottom'].map((k) => ({ id: k, label: k[0].toUpperCase() + k.slice(1), type: 'number', value: Math.round((c[k] || 0) * 10) / 10 })),
+      validate: (v) => (['left', 'right', 'top', 'bottom'].some((k) => v[k] === null || v[k] < 0 || v[k] > 99) ? 'Use 0 to 99 percent' : v.left + v.right >= 100 || v.top + v.bottom >= 100 ? 'That would cut off the whole picture' : null),
+      actions: [{ id: 'reset', label: 'Remove crop' }, { id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Crop', primary: true }],
+    });
+    if (!res || res.action === 'cancel') return;
+    if (res.action === 'reset') { await picAct('Crop', (imageId) => api().images.resetCrop({ imageId }), null, id); return; }
+    const v = res.values;
+    await picAct('Crop', (imageId) => api().images.crop({ imageId, crop: { left: v.left, right: v.right, top: v.top, bottom: v.bottom } }), null, id);
+  }
+  async function picChange(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const [img] = await openFiles('image', false);
+    if (!img) return;
+    const { src } = await readImage(img);
+    await picAct('Change picture', (imageId) => api().images.replaceSource({ imageId, src, resetSize: false }), 'Picture changed. Its size and position stay the same.', id);
+  }
+  async function picReset(given) {
+    await picAct('Reset picture', async (imageId) => {
+      const p = await picProps(imageId);
+      if (p.transform?.rotation) await api().images.rotate({ imageId, angle: 0 });
+      if (p.transform?.horizontalFlip || p.transform?.verticalFlip) await api().images.flip({ imageId, horizontal: false, vertical: false });
+      return p.crop ? api().images.resetCrop({ imageId }) : { success: true };
+    }, 'Rotation, flips and crop removed', given);
+  }
+  async function picCaption(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const has = !!(await picProps(id)).hasCaption;
+    const res = await openDialog({
+      title: has ? 'Edit caption' : 'Add caption',
+      description: 'Shown under the picture, as "Figure 1: your text".',
+      fields: [{ id: 'text', label: 'Caption', value: '', placeholder: has ? 'New caption text' : 'What the picture shows' }],
+      actions: [...(has ? [{ id: 'remove', label: 'Remove caption' }] : []), { id: 'cancel', label: 'Cancel' }, { id: 'ok', label: has ? 'Update' : 'Add', primary: true }],
+    });
+    if (!res || res.action === 'cancel') return;
+    if (res.action === 'remove') { await picAct('Caption', (imageId) => api().images.removeCaption({ imageId }), null, id); return; }
+    const text = res.values.text.trim();
+    if (!text) return;
+    await picAct('Caption', (imageId) => (has ? api().images.updateCaption({ imageId, text }) : api().images.insertCaption({ imageId, text })), null, id);
+  }
+  async function picLink(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const cur = (await picProps(id)).hyperlink;
+    const res = await openDialog({
+      title: 'Link on picture',
+      description: 'Ctrl+click the picture to open the link. Leave empty to remove it.',
+      fields: [{ id: 'url', label: 'Address', value: cur?.url || 'https://', placeholder: 'https://example.com' }],
+      validate: (v) => { const u = v.url.trim(); return !u || u === 'https://' || /^(https?:\/\/[^\s]+\.[^\s]+|mailto:\S+@\S+)$/i.test(u) ? null : 'Enter a web address starting with https://, or leave it empty'; },
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Save', primary: true }],
+    });
+    if (!res) return;
+    const u = res.values.url.trim();
+    await picAct('Link', (imageId) => api().images.setHyperlink({ imageId, url: !u || u === 'https://' ? null : u }), null, id);
+  }
+
   // ---------------------------------------------------------------- List numbering
   function listTarget() {
     const ed = editor(); const $f = ed?.state?.selection?.$from;
@@ -1657,6 +1974,143 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       }
     }
     return null;
+  }
+  /** The list level of the paragraph at the cursor (0 for the top level) */
+  function listLevel() {
+    const $f = editor()?.state?.selection?.$from;
+    for (let d = $f?.depth ?? 0; d > 0; d--) {
+      const n = $f.node(d);
+      if (n.isTextblock) { const np = n.attrs?.paragraphProperties?.numberingProperties || n.attrs?.numberingProperties; return Number(np?.ilvl) || 0; }
+    }
+    return 0;
+  }
+  /** The list at the cursor as the given kind, made into one first if needed */
+  async function ensureList(kind) {
+    let t = listTarget();
+    if (!t) {
+      fmt(kind === 'bullet' ? 'bullet-list' : 'numbered-list');
+      await new Promise((r) => setTimeout(r, 60));
+      t = listTarget();
+      if (!t) throw new Error('Click in a paragraph first');
+      return t;
+    }
+    const np = (() => { const $f = editor().state.selection.$from; for (let d = $f.depth; d > 0; d--) if ($f.node(d).isTextblock) return $f.node(d).attrs?.listRendering; return null; })();
+    const isBullet = np ? /bullet/i.test(String(np.numberingType || np.format || '')) : null;
+    if (isBullet !== null && isBullet !== (kind === 'bullet')) await api().lists.setType({ target: t, kind: kind === 'bullet' ? 'bullet' : 'ordered' });
+    return listTarget() || t;
+  }
+  const BULLETS = [
+    { text: '•', name: 'Round', font: 'Arial' }, { text: '○', name: 'Circle', font: 'Arial' }, { text: '■', name: 'Square', font: 'Arial' },
+    { text: '◆', name: 'Diamond', font: 'Segoe UI Symbol' }, { text: '➢', name: 'Arrow', font: 'Segoe UI Symbol' }, { text: '✓', name: 'Tick', font: 'Segoe UI Symbol' },
+    { text: '★', name: 'Star', font: 'Segoe UI Symbol' }, { text: '–', name: 'Dash', font: 'Arial' },
+  ];
+  const NUMBERS = [
+    { fmt: 'decimal', text: '%1.', sample: '1.  2.  3.' }, { fmt: 'decimal', text: '%1)', sample: '1)  2)  3)' }, { fmt: 'decimal', text: '(%1)', sample: '(1)  (2)  (3)' },
+    { fmt: 'lowerLetter', text: '%1.', sample: 'a.  b.  c.' }, { fmt: 'lowerLetter', text: '%1)', sample: 'a)  b)  c)' }, { fmt: 'upperLetter', text: '%1.', sample: 'A.  B.  C.' },
+    { fmt: 'lowerRoman', text: '%1.', sample: 'i.  ii.  iii.' }, { fmt: 'upperRoman', text: '%1.', sample: 'I.  II.  III.' },
+  ];
+  const MULTILEVEL = [
+    { name: '1.  a.  i.', hint: 'Numbers, then letters, then roman numerals', levels: [['decimal', '%1.'], ['lowerLetter', '%2.'], ['lowerRoman', '%3.'], ['decimal', '%4.'], ['lowerLetter', '%5.'], ['lowerRoman', '%6.']] },
+    { name: '1.  1.1.  1.1.1.', hint: 'Section numbering, as in reports and contracts', levels: [['decimal', '%1.'], ['decimal', '%1.%2.'], ['decimal', '%1.%2.%3.'], ['decimal', '%1.%2.%3.%4.'], ['decimal', '%1.%2.%3.%4.%5.'], ['decimal', '%1.%2.%3.%4.%5.%6.']] },
+    { name: 'I.  A.  1.  a.', hint: 'Outline numbering', levels: [['upperRoman', '%1.'], ['upperLetter', '%2.'], ['decimal', '%3.'], ['lowerLetter', '%4.'], ['lowerRoman', '%5.'], ['decimal', '%6.']] },
+  ];
+  async function setBullet(b) {
+    await act('Bullets', async () => {
+      const t = await ensureList('bullet'); const level = listLevel();
+      const r = await api().lists.setLevelBullet({ target: t, level, markerText: b.text });
+      if (failed(r)) return r;
+      return api().lists.setLevelMarkerFont({ target: t, level, fontFamily: b.font });
+    });
+  }
+  async function setNumbering(n) {
+    await act('Numbering', async () => {
+      const t = await ensureList('ordered'); const level = listLevel();
+      return api().lists.setLevelNumbering({ target: t, level, numFmt: n.fmt, lvlText: n.text.replace('%1', `%${level + 1}`) });
+    });
+  }
+  async function setMultilevel(m) {
+    // nine levels, as Word makes them; the pattern repeats past the levels given
+    const levels = Array.from({ length: 9 }, (_x, level) => {
+      const [numFmt, lvlText] = m.levels[level % m.levels.length];
+      const text = level < m.levels.length ? lvlText : (m.levels[0][1].includes('%2') ? Array.from({ length: level + 1 }, (_y, i) => `%${i + 1}`).join('.') + '.' : lvlText.replace(/%\d/, `%${level + 1}`));
+      return { level, numFmt, lvlText: text, start: 1, alignment: 'left', indents: { left: 360 + 432 * level, hanging: 360 + 72 * level }, trailingCharacter: 'tab' };
+    });
+    await act('Multilevel list', async () => {
+      const t = await ensureList('ordered');
+      const r = await api().lists.applyTemplate({ target: t, template: { version: 1, levels } });
+      if (!failed(r)) return r;
+      // a list defined with fewer levels (common in files from other programs) is made again
+      // with all nine, keeping each item's level
+      const ed = editor(); const $f = ed.state.selection.$from;
+      let d = $f.depth; while (d > 0 && !$f.node(d).isTextblock) d--;
+      const parent = $f.node(d - 1); const at = $f.index(d - 1);
+      const isItem = (n) => n?.isTextblock && !!n.attrs?.listRendering;
+      let a = at; while (a > 0 && isItem(parent.child(a - 1))) a--;
+      let z = at; while (z < parent.childCount - 1 && isItem(parent.child(z + 1))) z++;
+      const items = [];
+      for (let i = a; i <= z; i++) {
+        const n = parent.child(i); const np = n.attrs?.paragraphProperties?.numberingProperties || n.attrs?.numberingProperties;
+        items.push({ id: n.attrs.paraId || n.attrs.sdBlockId, level: Number(np?.ilvl) || Math.max(0, (n.attrs.listRendering?.path?.length || 1) - 1) });
+      }
+      for (const it of items) await api().lists.detach({ target: { kind: 'block', nodeType: 'listItem', nodeId: it.id } });
+      const block = (id) => ({ kind: 'block', nodeType: 'paragraph', nodeId: id });
+      const c = await api().lists.create({ mode: 'fromParagraphs', target: { from: block(items[0].id), to: block(items[items.length - 1].id) }, kind: 'ordered', style: { version: 1, levels } });
+      if (failed(c)) return c;
+      for (const it of items) if (it.level > 0) await api().lists.setLevel({ target: { kind: 'block', nodeType: 'listItem', nodeId: it.id }, level: it.level });
+      return c;
+    });
+  }
+  async function defineBullet() {
+    const res = await openDialog({
+      title: 'New bullet',
+      description: 'Type or paste any character to use as the bullet.',
+      width: 400,
+      fields: [
+        { id: 'text', label: 'Bullet character', value: '•' },
+        { id: 'font', label: 'Font', type: 'select', value: 'Arial', options: ['Arial', 'Segoe UI Symbol', 'Calibri', 'Times New Roman', 'Wingdings', 'Symbol'].map((f) => ({ value: f, label: f })) },
+      ],
+      validate: (v) => ([...v.text.trim()].length === 1 ? null : 'Use exactly one character'),
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Use bullet', primary: true }],
+    });
+    if (res) await setBullet({ text: res.values.text.trim(), font: res.values.font });
+  }
+  async function defineNumber() {
+    const res = await openDialog({
+      title: 'New number format',
+      description: 'The number, letter or numeral goes where you put #, for example "Step #:" or "#.".',
+      width: 420,
+      fields: [
+        { id: 'fmt', label: 'Style', type: 'select', value: 'decimal', options: [{ value: 'decimal', label: '1, 2, 3' }, { value: 'decimalZero', label: '01, 02, 03' }, { value: 'lowerLetter', label: 'a, b, c' }, { value: 'upperLetter', label: 'A, B, C' }, { value: 'lowerRoman', label: 'i, ii, iii' }, { value: 'upperRoman', label: 'I, II, III' }, { value: 'ordinal', label: '1st, 2nd, 3rd' }] },
+        { id: 'text', label: 'Format', value: '#.' },
+        { id: 'start', label: 'Start at', type: 'number', value: 1 },
+      ],
+      validate: (v) => (v.text.split('#').length === 2 ? (v.start === null || v.start < 0 ? 'Start at 0 or more' : null) : 'Put one # where the number goes'),
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Apply', primary: true }],
+    });
+    if (!res) return;
+    const v = res.values;
+    await act('Numbering', async () => {
+      const t = await ensureList('ordered'); const level = listLevel();
+      return api().lists.setLevelNumbering({ target: t, level, numFmt: v.fmt, lvlText: v.text.replace('#', `%${level + 1}`), start: Math.round(v.start) });
+    });
+  }
+  function bulletMenu() {
+    return [
+      { header: 'Bullets' },
+      ...BULLETS.map((b) => ({ label: `${b.text}   ${b.name}`, icon: 'list-ul', style: 'font-size:14px', action: () => setBullet(b) })),
+      'sep',
+      { label: 'Define new bullet...', icon: 'plus', action: () => defineBullet() },
+    ];
+  }
+  function numberMenu() {
+    return [
+      { header: 'Numbering' },
+      ...NUMBERS.map((n) => ({ label: n.sample, icon: 'list-ol', action: () => setNumbering(n) })),
+      'sep',
+      { label: 'Define new number format...', icon: 'plus', action: () => defineNumber() },
+      { header: 'Multilevel list' },
+      ...MULTILEVEL.map((m) => ({ label: m.name, hint: m.hint, icon: 'outline', action: () => setMultilevel(m) })),
+    ];
   }
   function numberingMenu() {
     const run = (label, fn, ok) => act(label, () => { const t = listTarget(); if (!t) throw new Error('Click in a numbered list first'); return fn(t); }, ok);

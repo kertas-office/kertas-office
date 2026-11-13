@@ -1,6 +1,6 @@
 {
   "name": "kertas-office",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Free, open-source office suite: documents, spreadsheets and PDFs",
   "homepage": "https://kertasoffice.com",
   "repository": {
@@ -14,13 +14,21 @@
     "build": "vite build",
     "start": "vite build && electron .",
     "test": "node --test test/*.test.js",
+    "e2e": "vite build && node --test --test-concurrency=1 test/e2e/*.e2e.mjs",
     "icons": "node scripts/make-icons.cjs",
     "site": "node website/build.mjs",
     "dist": "vite build && electron-builder --config electron-builder.config.cjs --publish never",
     "release": "vite build && electron-builder --config electron-builder.config.cjs --publish always",
     "postinstall": "node scripts/patch-deps.cjs"
   },
-  "keywords": ["office-suite", "docx", "xlsx", "pdf-editor", "electron", "offline"],
+  "keywords": [
+    "office-suite",
+    "docx",
+    "xlsx",
+    "pdf-editor",
+    "electron",
+    "offline"
+  ],
   "bugs": {
     "url": "https://github.com/kertas-office/kertas-office/issues"
   },
@@ -29,6 +37,7 @@
   },
   "license": "AGPL-3.0-or-later",
   "dependencies": {
+    "@univerjs/preset-sheets-thread-comment": "^1.4.0",
     "electron-updater": "^6.8.11",
     "word-extractor": "^1.0.4"
   },
@@ -108,6 +117,7 @@
     "node-forge": "^1.4.3",
     "nspell": "^2.1.5",
     "pdfjs-dist": "^6.5.438",
+    "playwright": "1.63.0",
     "png2icons": "^2.0.1",
     "superdoc": "1.47.2",
     "temml": "^0.14.0",

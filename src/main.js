@@ -4,7 +4,7 @@ if (import.meta.env?.DEV) globalThis.__kertasFreezeJson = true;
 import { userName, setUserName } from './lib/user.js';
 import './styles.css';
 import {
-  openFiles, readPath, saveFile, recentFiles, pinRecent, confirmDialog, onNative, confirmClose,
+  openFiles, readPath, saveFile, recentFiles, pinRecent, removeRecent, confirmDialog, onNative, confirmClose,
   kindForName, extOf, isDesktop, platform, previewPdf, printToPdf, setNativeTheme,
   recoveryWrite, recoveryDelete, recoveryList, recoveryRead, convertLegacyNative, updates,
 } from './lib/platform.js';
@@ -478,7 +478,8 @@ function recentRow(r) {
     <button class="recent-row" data-path="${esc(r.path)}" title="${esc(r.path)}"${r.missing ? ' data-missing="1"' : ''}>${k ? badge(k) : ''}
       <span style="min-width:0"><span class="name">${esc(r.name)}</span><span class="path">${esc(folderLabel(r.path))}</span></span>
       <span class="when">${r.missing ? 'Not found' : timeAgo(r.openedAt)}</span></button>
-    ${isDesktop ? `<button class="pin-btn" data-pin="${esc(r.path)}" data-pinned="${r.pinned ? 1 : 0}" title="${r.pinned ? 'Unpin from Home' : 'Pin to Home'}" aria-label="${r.pinned ? 'Unpin' : 'Pin'} ${esc(r.name)}">${r.pinned ? `<span class="is-pinned">${icon('pin', 15)}</span><span class="unpin">${icon('pin-off', 15)}</span>` : icon('pin', 15)}</button>` : ''}
+    ${isDesktop ? `<button class="pin-btn" data-pin="${esc(r.path)}" data-pinned="${r.pinned ? 1 : 0}" title="${r.pinned ? 'Unpin from Home' : 'Pin to Home'}" aria-label="${r.pinned ? 'Unpin' : 'Pin'} ${esc(r.name)}">${r.pinned ? `<span class="is-pinned">${icon('pin', 15)}</span><span class="unpin">${icon('pin-off', 15)}</span>` : icon('pin', 15)}</button>
+    <button class="rm-btn" data-remove="${esc(r.path)}" title="Remove from list" aria-label="Remove ${esc(r.name)} from the list">${icon('close', 15)}</button>` : ''}
   </div>`;
 }
 
@@ -486,7 +487,7 @@ async function renderHome() {
   const home = document.getElementById('view-home');
   const all = await recentFiles();
   const pinned = all.filter((r) => r.pinned).sort((a, b) => (a.pinnedAt || 0) - (b.pinnedAt || 0));
-  const recent = all.filter((r) => !r.pinned);
+  const recent = all.filter((r) => !r.pinned).slice(0, 10);
   const live = liveTabIds();
   const recovered = (await recoveryList()).filter((r) => !live.has(r.id));
   const hour = new Date().getHours();
@@ -557,13 +558,18 @@ async function renderHome() {
   home.querySelectorAll('[data-cmd]').forEach((b) => b.addEventListener('click', () => runCommand(b.dataset.cmd)));
   home.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openDialog(b.dataset.open)));
   home.querySelectorAll('[data-path]').forEach((b) => b.addEventListener('click', () => {
-    if (b.dataset.missing) { toast('This file was moved or deleted. Unpin it, or open it from its new place.', true); return; }
+    if (b.dataset.missing) { toast('This file was moved or deleted. Remove it from the list, or open it from its new place.', true); return; }
     openPath(b.dataset.path);
   }));
   home.querySelectorAll('[data-pin]').forEach((b) => b.addEventListener('click', async (e) => {
     e.stopPropagation();
     const on = b.dataset.pinned !== '1';
     await pinRecent(b.dataset.pin, on);
+    renderHome();
+  }));
+  home.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await removeRecent(b.dataset.remove);
     renderHome();
   }));
   home.querySelectorAll('[data-recover]').forEach((b) => b.addEventListener('click', () => openRecovered(recovered.find((r) => r.id === b.dataset.recover))));
@@ -608,19 +614,37 @@ if (!isDesktop) {
 
 // Drag and drop
 let dragDepth = 0;
-window.addEventListener('dragenter', (e) => { if (e.dataTransfer?.types.includes('Files')) { dragDepth++; document.body.classList.add('dragging'); } });
+// Pictures dragged over a Writer document are inserted by the editor where they land,
+// so the "Drop files to open" cover stays away for them
+const picturesIntoWriter = (dt) => active()?.kind === 'writer' && dt?.items?.length
+  && [...dt.items].every((i) => i.kind === 'file' && i.type.startsWith('image/'));
+const endDrag = () => { dragDepth = 0; document.body.classList.remove('dragging'); };
+window.addEventListener('dragenter', (e) => {
+  if (!e.dataTransfer?.types.includes('Files') || picturesIntoWriter(e.dataTransfer)) return;
+  dragDepth++;
+  document.body.classList.add('dragging');
+});
+window.addEventListener('dragend', endDrag, true);
 window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
 window.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+// Handled on the way down, before the editors: they would otherwise take (and stop)
+// any drop on a page. Only pictures dropped on a Writer document go on to the editor.
 window.addEventListener('drop', async (e) => {
+  endDrag();
   if (!e.dataTransfer?.files?.length) return;
+  if (picturesIntoWriter(e.dataTransfer)) {
+    // the editor puts it where it lands on the page, or at the cursor when dropped elsewhere;
+    // the browser itself must never take it and leave the app to show the picture
+    if (!e.target.closest?.('.superdoc-page')) e.preventDefault();
+    return;
+  }
   e.preventDefault();
-  dragDepth = 0;
-  document.body.classList.remove('dragging');
+  e.stopPropagation();
   const records = await Promise.all([...e.dataTransfer.files].map(async (f) => ({
     name: f.name, path: window.kertasNative?.pathForFile?.(f) || null, data: new Uint8Array(await f.arrayBuffer()),
   })));
   await openFileRecords(records);
-});
+}, true);
 
 // Test hook so automated checks can drive the app
 window.__kertas = { openTab, saveTab, tabs, closeTab, activate, exportPdf, runCommand, applyTheme, snapshotAll, newFromTemplate, openTemplates };

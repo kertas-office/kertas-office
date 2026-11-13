@@ -10,7 +10,7 @@ const SUPPORTED = ['.docx', '.xlsx', '.csv', '.pdf', '.doc', '.rtf', '.odt', '.x
 const { convertLegacy, findSoffice } = require('./legacy.cjs');
 const { setupUpdates } = require('./updates.cjs');
 const RECENT_FILE = () => path.join(app.getPath('userData'), 'recent.json');
-const MAX_RECENT = 20;
+const MAX_RECENT = 10;
 
 let mainWindow = null;
 let rendererReady = false;
@@ -71,7 +71,16 @@ async function writeRecent(list) {
   await fs.writeFile(RECENT_FILE(), JSON.stringify(trimRecent(list), null, 2));
 }
 
-async function addRecent(filePath) {
+// Changes to the list are made one after another: each reads the list, changes it and
+// writes it back, so two at once (several files opened together) would lose all but one
+let recentQueue = Promise.resolve();
+const inTurn = (fn) => (...args) => {
+  const run = recentQueue.then(() => fn(...args));
+  recentQueue = run.catch(() => {});
+  return run;
+};
+
+const addRecent = inTurn(async function addRecent(filePath) {
   if (!RECENT_TYPES.test(filePath)) return;
   const all = await readRecent();
   const was = all.find((r) => r.path === filePath);
@@ -79,22 +88,40 @@ async function addRecent(filePath) {
   list.unshift({ path: filePath, name: path.basename(filePath), openedAt: Date.now(), ...(was?.pinned ? { pinned: true, pinnedAt: was.pinnedAt } : {}) });
   await writeRecent(list);
   app.addRecentDocument(filePath);
-}
+});
 
-async function pinRecent(filePath, pinned) {
+const pinRecent = inTurn(async function pinRecent(filePath, pinned) {
   const list = await readRecent();
   const r = list.find((x) => x.path === filePath);
   if (!r) return false;
   if (pinned) { r.pinned = true; r.pinnedAt = Date.now(); } else { delete r.pinned; delete r.pinnedAt; }
   await writeRecent(list);
   return true;
-}
+});
+
+const removeRecent = inTurn(async function removeRecent(filePath) {
+  const list = await readRecent();
+  const left = list.filter((r) => r.path !== filePath);
+  if (left.length === list.length) return false;
+  await writeRecent(left);
+  return true;
+});
 
 async function loadFile(filePath) {
   assertReadable(filePath);
   const data = await fs.readFile(filePath);
   grant(filePath);
   await addRecent(filePath);
+  return { path: filePath, name: path.basename(filePath), data: new Uint8Array(data) };
+}
+
+// A file the person picked in an Open dialog shown by this process. The dialog itself limits
+// the types (pictures, certificates, documents), so any of them may be read; only documents
+// are granted for saving and listed in Recent.
+async function loadPicked(filePath) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('This file cannot be opened');
+  const data = await fs.readFile(filePath);
+  if (RECENT_TYPES.test(filePath)) { grant(filePath); await addRecent(filePath); }
   return { path: filePath, name: path.basename(filePath), data: new Uint8Array(data) };
 }
 
@@ -238,6 +265,7 @@ const FILTERS = {
   pdf: [{ name: 'PDF Document', extensions: ['pdf'] }],
   image: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
   cert: [{ name: 'Certificates', extensions: ['p12', 'pfx'] }],
+  any: [{ name: 'All files', extensions: ['*'] }],
 };
 // Opening also accepts older and OpenDocument formats (they are saved as .docx / .xlsx)
 const OPEN_FILTERS = {
@@ -252,10 +280,20 @@ ipcMain.handle('kertas:open-dialog', async (_e, { kind = 'all', multi = true } =
     filters: OPEN_FILTERS[kind] || FILTERS[kind] || OPEN_FILTERS.all,
   });
   if (res.canceled) return [];
-  return Promise.all(res.filePaths.map(loadFile));
+  return Promise.all(res.filePaths.map(loadPicked));
 });
 
 ipcMain.handle('kertas:read-path', async (_e, filePath) => loadFile(filePath));
+
+// A file attached to a PDF, saved where the person chooses in a Save dialog shown here
+// (any type, as in Acrobat: the dialog is the person's decision, not the page's)
+ipcMain.handle('kertas:save-attachment', async (_e, { name, data }) => {
+  const base = path.basename(String(name || 'attachment')).replace(/[<>:"|?*\x00-\x1f]/g, '_') || 'attachment';
+  const res = await dialog.showSaveDialog(mainWindow, { defaultPath: base });
+  if (res.canceled || !res.filePath) return null;
+  await fs.writeFile(res.filePath, Buffer.from(data));
+  return { path: res.filePath, name: path.basename(res.filePath) };
+});
 
 // .doc / .xls / .rtf / .odt / .ods -> .docx / .xlsx (LibreOffice when installed)
 ipcMain.handle('kertas:convert-legacy', async (_e, { name, data }) => convertLegacy({ name, data }));
@@ -371,6 +409,7 @@ async function makeDefaultApp() {
 ipcMain.handle('kertas:default-app', () => makeDefaultApp());
 
 ipcMain.handle('kertas:pin-recent', (_e, { path: p, pinned }) => pinRecent(p, !!pinned));
+ipcMain.handle('kertas:remove-recent', (_e, p) => removeRecent(String(p || '')));
 ipcMain.handle('kertas:recent', async () => {
   const list = await readRecent();
   const checked = await Promise.all(list.map(async (r) => {

@@ -19,8 +19,12 @@ Every file opens in its own tab, so a report, the spreadsheet behind it and a si
 Opens and saves Word documents (.docx), and opens .doc, .rtf and .odt.
 
 - A familiar ribbon: fonts, colours, styles, lists, alignment, spacing, borders and shading, with live previews
-- Tables with ready-made designs, header and banded rows, sorting, merging and moving rows and columns
-- Headers and footers, page numbers, columns, margins, paper sizes, watermarks, page borders, line numbers
+- A right-click menu with a formatting bar, and Font, Paragraph and Tabs dialogs
+- Bullet and number libraries, custom numbering and multilevel lists
+- Tables with ready-made designs, header and banded rows, sorting, merging and moving rows and columns, plus borders, shading, row height, cell margins and cell alignment
+- Pictures you can drag in, rotate, flip, crop, caption and link
+- Form fields: text, tick box, dropdown list and date picker, saved as Word content controls
+- Headers and footers (with different first, odd and even pages), page numbers, columns, margins, paper sizes, watermarks, page borders, line numbers
 - Table of contents, footnotes and endnotes, captions, citations and bibliography (APA, MLA, Chicago, Harvard, IEEE)
 - Equations typed in LaTeX and saved as real Word equations
 - Comments, track changes with accept and reject, and protection for read-only or comment-only documents
@@ -40,6 +44,7 @@ Opens and saves Excel workbooks (.xlsx) and CSV, and opens .xls, .xlsm, .xlsb an
 - PivotTables with several row, column and value fields, saved as real Excel PivotTables
 - Conditional formatting: highlight rules, top and bottom, data bars, colour scales and icon sets
 - Sort and filter, slicers, data validation and drop-down lists, remove duplicates, text to columns
+- Threaded comments with replies and resolve, and named ranges
 - Sparklines, grouped rows and columns, freeze and split panes, cell styles, format as table, protected ranges
 - Eight ready-made templates: monthly budget, invoice, expense tracker, project timeline, sales tracker, timesheet, inventory and loan calculator
 
@@ -54,6 +59,7 @@ Opens and saves Excel workbooks (.xlsx) and CSV, and opens .xls, .xlsm, .xlsb an
 - Edit the existing text of a PDF
 - Sign with a drawn signature or a digital certificate (.p12 / .pfx)
 - Merge, split, extract, reorder, rotate and delete pages; turn images into a PDF
+- Attach files to a PDF, and open or save the files attached to it
 - Compress PDFs to a fraction of their size
 - Password protection with permissions, true redaction, watermarks, headers, footers and page numbers
 - Convert to Word, Excel or images, and make scanned pages searchable with built-in text recognition (OCR)
@@ -96,7 +102,7 @@ Kertas Office stands on excellent open-source projects:
 
 Kertas started as a solo project and is now developed in the open by its community. Bug reports, ideas and pull requests are welcome; files that do not open correctly are especially helpful. Questions go to [Discussions](https://github.com/kertas-office/kertas-office/discussions), and security problems should be [reported privately](https://github.com/kertas-office/kertas-office/security/advisories/new).
 
-Pull requests go to the `develop` branch; `main` only receives tested releases. Please open an issue first for larger changes, run `npm test` before sending a pull request, and keep the interface wording plain and friendly.
+Pull requests go to the `develop` branch; `main` only receives tested releases. Please open an issue first for larger changes, run `npm test` before sending a pull request (and `npm run e2e` for changes to how the apps behave; on Linux run it under `xvfb-run -a`), and keep the interface wording plain and friendly.
 
 ## License
 

@@ -4,7 +4,7 @@
 <!-- nav: home -->
 
 <section class="hero wrap" id="top">
-  <a class="pill" href="/changelog"><b>v1.0</b><span>Free · Open source · Works offline</span></a>
+  <a class="pill" href="/changelog"><b>New in 1.1</b><span>Form fields, comments, PDF attachments and more</span></a>
   <h1>The office suite that is <span class="grad-text">simply yours.</span></h1>
   <p class="lead">Write documents, crunch spreadsheets and edit PDFs in one fast desktop app. No subscriptions, no accounts, no ads. Your files stay on your computer.</p>
   <div class="cta-row">
@@ -77,6 +77,7 @@
         <li>Equations Word can edit</li>
         <li>Citations in APA, MLA, Chicago, Harvard, IEEE</li>
         <li>Mail merge from Excel or CSV</li>
+        <li>Form fields: tick boxes, dropdowns and dates</li>
         <li>Eight ready-made templates</li>
       </ul>
     </article>
@@ -89,6 +90,7 @@
         <li>PivotTables that refresh</li>
         <li>Conditional formatting and sparklines</li>
         <li>A responsive formula engine designed for large calculations</li>
+        <li>Threaded comments and named ranges</li>
         <li>Eight ready-made templates</li>
       </ul>
     </article>
@@ -102,44 +104,79 @@
         <li>Text recognition (OCR) for scanned pages</li>
         <li>Convert to Word and Excel</li>
         <li>Fill and create forms, merge and reorder pages</li>
+        <li>Attach files inside a PDF</li>
       </ul>
     </article>
   </div>
 </section>
 
+<section class="section wrap" id="new">
+  <div class="center">
+    <div class="eyebrow">New in version 1.1</div>
+    <h2 class="h2" style="margin-left:auto; margin-right:auto; max-width:760px">More of what you reach for every day.</h2>
+    <p class="lead" style="margin-left:auto; margin-right:auto; max-width:620px">A free update for everyone. Kertas checks for it on its own, or you can <a href="/download">download it here</a>.</p>
+  </div>
+  <div class="grid-3 new-grid">
+    <article class="new-card w">
+      <figure class="shot new-shot"><img src="/img/new-writer.webp" width="1200" height="750" alt="Writer's right-click menu with a formatting bar above it, showing font, size, bold, colours, alignment and lists" loading="lazy"></figure>
+      <span class="new-tag"><span class="badge">W</span>Writer</span>
+      <h3>Format from the right-click menu</h3>
+      <p>A formatting bar sits above the menu, with Font and Paragraph one click away. Tables get borders, shading, row height and cell alignment, and pictures rotate, flip and crop.</p>
+    </article>
+    <article class="new-card s">
+      <figure class="shot new-shot"><img src="/img/new-sheets.webp" width="1200" height="750" alt="Sheets with the Comments pane open, showing a conversation on cell D6" loading="lazy"></figure>
+      <span class="new-tag"><span class="badge">S</span>Sheets</span>
+      <h3>Talk it through on the cell</h3>
+      <p>Threaded comments with replies and resolve, saved so Excel, LibreOffice and WPS can read them. Named ranges make formulas read like plain words.</p>
+    </article>
+    <article class="new-card p">
+      <figure class="shot new-shot"><img src="/img/new-pdf.webp" width="1200" height="750" alt="The PDF editor's Files tab listing a spreadsheet, a PDF and a photo attached to the document" loading="lazy"></figure>
+      <span class="new-tag"><span class="badge">P</span>PDF</span>
+      <h3>Keep the files with the PDF</h3>
+      <p>Attach a spreadsheet, a photo or any other file to a PDF, so everything travels together. Open, save or remove them from the Files tab.</p>
+    </article>
+  </div>
+  <ul class="new-more">
+    <li>Form fields: tick box, dropdown, date</li>
+    <li>Multilevel lists and custom numbering</li>
+    <li>Different first, odd and even page headers</li>
+    <li>Drag pictures straight onto the page</li>
+  </ul>
+  <div class="center" style="margin-top:22px"><a class="arrow-link" href="/changelog">Everything in 1.1 <span aria-hidden="true">→</span></a></div>
+</section>
+
 <section class="section wrap" id="tour">
   <div class="center">
     <div class="eyebrow">See it in action</div>
-    <h2 class="h2" style="margin-left:auto; margin-right:auto; max-width:760px">A closer look at Kertas Office 1.0</h2>
+    <h2 class="h2" style="margin-left:auto; margin-right:auto; max-width:760px">A closer look at version 1.1</h2>
   </div>
   <div class="tabs" role="tablist" aria-label="Product screens">
     <button class="tab" type="button" role="tab" id="t-writer" aria-controls="p-writer" aria-selected="true" style="--c:var(--writer); --cs:#2457c8" data-glow="#2f6fed"><span class="badge">W</span>Writer</button>
     <button class="tab" type="button" role="tab" id="t-sheets" aria-controls="p-sheets" aria-selected="false" tabindex="-1" style="--c:var(--sheets); --cs:#15803d" data-glow="#1f9d55"><span class="badge">S</span>Sheets</button>
     <button class="tab" type="button" role="tab" id="t-pdf" aria-controls="p-pdf" aria-selected="false" tabindex="-1" style="--c:var(--pdf); --cs:#c2352b" data-glow="#e5483d"><span class="badge">P</span>PDF</button>
     <button class="tab" type="button" role="tab" id="t-templates" aria-controls="p-templates" aria-selected="false" tabindex="-1" style="--c:var(--brand); --cs:var(--brand)" data-glow="#7c3aed"><span class="badge">T</span>Templates</button>
-    <button class="tab" type="button" role="tab" id="t-dark" aria-controls="p-dark" aria-selected="false" tabindex="-1" style="--c:#384050; --cs:#1d2433" data-glow="#384050"><span class="badge">D</span>Dark mode</button>
+  </div>
+  <div class="theme-switch" role="group" aria-label="Screenshot theme">
+    <button type="button" aria-pressed="true" data-shot-theme="light"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>Light</button>
+    <button type="button" aria-pressed="false" data-shot-theme="dark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg>Dark</button>
   </div>
   <div class="tour-stage">
     <div class="shot-glow" aria-hidden="true" data-tour-glow></div>
     <div class="tour-panel" role="tabpanel" id="p-writer" aria-labelledby="t-writer">
-      <figure class="shot" style="margin:0"><img src="/img/writer.webp" srcset="/img/writer-sm.webp 1000w, /img/writer.webp 2000w" sizes="(max-width: 1160px) 100vw, 1120px" width="2000" height="1250" alt="Writer editing an annual report with headings, a figures table and the Home ribbon" loading="lazy"></figure>
+      <figure class="shot" style="margin:0"><img data-shot="writer" src="/img/writer.webp" srcset="/img/writer-sm.webp 1000w, /img/writer.webp 2000w" sizes="(max-width: 1160px) 100vw, 1120px" width="2000" height="1250" alt="Writer editing an annual report with headings, a figures table and the Home ribbon" loading="lazy"></figure>
       <p class="tour-caption">A familiar ribbon for letters, reports and theses, with track changes, equations, citations and mail merge.</p>
     </div>
     <div class="tour-panel" role="tabpanel" id="p-sheets" aria-labelledby="t-sheets" hidden>
-      <figure class="shot" style="margin:0"><img src="/img/sheets.webp" srcset="/img/sheets-sm.webp 1000w, /img/sheets.webp 2000w" sizes="(max-width: 1160px) 100vw, 1120px" width="2000" height="1250" alt="Sheets showing a monthly budget with coloured differences and a doughnut chart" loading="lazy"></figure>
+      <figure class="shot" style="margin:0"><img data-shot="sheets" src="/img/sheets.webp" srcset="/img/sheets-sm.webp 1000w, /img/sheets.webp 2000w" sizes="(max-width: 1160px) 100vw, 1120px" width="2000" height="1250" alt="Sheets showing a monthly budget with coloured differences and a doughnut chart" loading="lazy"></figure>
       <p class="tour-caption">Formulas, charts, PivotTables, conditional formatting and sparklines, saved as standard .xlsx files.</p>
     </div>
     <div class="tour-panel" role="tabpanel" id="p-pdf" aria-labelledby="t-pdf" hidden>
-      <figure class="shot" style="margin:0"><img src="/img/pdf.webp" srcset="/img/pdf-sm.webp 1000w, /img/pdf.webp 2000w" sizes="(max-width: 1160px) 100vw, 1120px" width="2000" height="1250" alt="The PDF editor on the Fill and Sign tab, with page thumbnails and form tools" loading="lazy"></figure>
-      <p class="tour-caption">Fill and sign, edit text, run OCR on scans and rearrange pages, all on your own computer.</p>
+      <figure class="shot" style="margin:0"><img data-shot="pdf" src="/img/pdf.webp" srcset="/img/pdf-sm.webp 1000w, /img/pdf.webp 2000w" sizes="(max-width: 1160px) 100vw, 1120px" width="2000" height="1250" alt="The PDF editor showing a project proposal, with three files attached in the sidebar" loading="lazy"></figure>
+      <p class="tour-caption">Fill and sign, edit text, run OCR on scans, rearrange pages and attach files, all on your own computer.</p>
     </div>
     <div class="tour-panel" role="tabpanel" id="p-templates" aria-labelledby="t-templates" hidden>
-      <figure class="shot" style="margin:0"><img src="/img/templates.webp" srcset="/img/templates-sm.webp 1000w, /img/templates.webp 2000w" sizes="(max-width: 1160px) 100vw, 1120px" width="2000" height="1250" alt="The Writer template gallery with a resume, cover letter, business letter, invoice and more" loading="lazy"></figure>
+      <figure class="shot" style="margin:0"><img data-shot="templates" src="/img/templates.webp" srcset="/img/templates-sm.webp 1000w, /img/templates.webp 2000w" sizes="(max-width: 1160px) 100vw, 1120px" width="2000" height="1250" alt="The Writer template gallery with a resume, cover letter, business letter, invoice and more" loading="lazy"></figure>
       <p class="tour-caption">Sixteen ready-made templates, from a resume and invoice to a budget, timesheet and loan calculator.</p>
-    </div>
-    <div class="tour-panel" role="tabpanel" id="p-dark" aria-labelledby="t-dark" hidden>
-      <figure class="shot" style="margin:0"><img src="/img/dark.webp" srcset="/img/dark-sm.webp 1000w, /img/dark.webp 2000w" sizes="(max-width: 1160px) 100vw, 1120px" width="2000" height="1250" alt="Writer in the dark theme, editing a two-column resume" loading="lazy"></figure>
-      <p class="tour-caption">Light and dark themes. The page stays white, so what you see is what prints.</p>
     </div>
   </div>
 </section>
@@ -240,7 +277,7 @@
 <section class="section wrap" id="get">
   <div class="center">
     <h2 class="h2">Get Kertas Office</h2>
-    <p class="lead" style="margin-left:auto; margin-right:auto; max-width:560px">Version <span data-release-version>1.0</span>. Built automatically from the public source on GitHub.</p>
+    <p class="lead" style="margin-left:auto; margin-right:auto; max-width:560px">Version <span data-release-version>1.1</span>. Built automatically from the public source on GitHub.</p>
   </div>
   <div class="grid-3" style="margin-top:44px">
     <div class="platform" data-platform="windows">
@@ -308,7 +345,7 @@
     </div>
     <div class="card-purple">
       <h3>Support the project</h3>
-      <p>Kertas has no investors and no advertisers. Contributions pay for code signing, Apple's developer programme and development time, so the app stays free for everyone.</p>
+      <p>Kertas has no investors and no advertisers. Contributions pay for development time to keep improving the app.</p>
       <div class="btn-row">
         <a class="btn btn-primary" href="https://buymeacoffee.com/hasheee" style="height:52px; padding:0 22px">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>
