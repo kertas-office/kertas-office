@@ -1092,3 +1092,8 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 .tpl-plus { width: 54px; height: 54px; border-radius: 14px; display: grid; place-items: center; color: #fff; }
 .tpl-gallery.writer .tpl-plus { background: linear-gradient(180deg, #3b82f6, #2563eb); }
 .tpl-gallery.sheets .tpl-plus { background: linear-gradient(180deg, #10b981, #059669); }
+
+/* Document text: Word and WPS do not join letters like "fi" or "fl" unless the document asks
+   for it, so neither does Kertas. Text on the page also uses the system's normal smoothing
+   instead of the thinner grayscale style the app chrome uses on macOS. */
+.writer-body .superdoc-page { font-variant-ligatures: none; -webkit-font-smoothing: auto; }
