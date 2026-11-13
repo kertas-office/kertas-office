@@ -17,7 +17,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
       - run: npm ci
@@ -34,7 +34,7 @@ jobs:
     # Signing secrets live in the "release" environment, so only approved runs can use them
     environment: release
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
       - run: npm ci
