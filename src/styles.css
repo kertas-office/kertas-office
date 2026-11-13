@@ -766,7 +766,7 @@ select.dlg-input { height: 36px; }
 :root[data-theme="dark"] .support-line svg, :root[data-theme="dark"] .support-line a { color: #FBBF24; }
 
 /* Writer slash commands */
-.slash-menu { position: fixed; z-index: 1200; width: 320px; max-height: min(420px, 60vh); display: flex; flex-direction: column; padding: 6px; border-radius: 14px; box-shadow: 0 18px 50px rgba(15, 23, 42, .22), 0 2px 6px rgba(15, 23, 42, .08); animation: slash-in .12s ease-out; }
+.slash-menu { position: fixed; z-index: 1200; width: 320px; max-height: min(420px, 60vh); display: flex; flex-direction: column; padding: 6px; border-radius: 14px; background: var(--surface-solid); box-shadow: 0 18px 50px rgba(15, 23, 42, .22), 0 2px 6px rgba(15, 23, 42, .08); animation: slash-in .12s ease-out; }
 @keyframes slash-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
 .slash-search { display: flex; align-items: center; gap: 8px; padding: 6px 8px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; color: var(--muted); }
 .slash-search input { flex: 1; border: 0; outline: 0; background: transparent; font: inherit; color: var(--ink); }
