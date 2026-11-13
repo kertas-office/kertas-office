@@ -960,6 +960,8 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 .rb-rows { display: grid; grid-template-rows: 28px 28px; gap: 6px; align-content: center; height: var(--tile-h); padding: 0 2px; }
 .rb-row2 { display: flex; align-items: center; gap: 2px; }
 .rb-row2 .rb-ico { width: 28px; }
+/* the small arrow next to Bullets and Numbering that opens their libraries */
+.rb-row2 .rb-ico[data-id$="-lib"] { width: 14px; margin-left: -3px; }
 /* three rows of small buttons (the cell alignment grid) */
 .rb-rows.rb-rows3 { grid-template-rows: repeat(3, 20px); gap: 2px; }
 .rb-rows3 .rb-ico { width: 26px; height: 20px; }

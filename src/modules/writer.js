@@ -493,7 +493,9 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         { label: 'Paragraph', rows: [
           [
             small('ul', 'list-ul', '', () => fmt('bullet-list'), 'Bullets'),
+            menu('ul-lib', 'none', '', () => bulletMenu(), 'Bullet library'),
             small('ol', 'list-ol', '', () => fmt('numbered-list'), 'Numbering'),
+            menu('ol-lib', 'none', '', () => numberMenu(), 'Number formats and multilevel lists'),
             menu('numbering', 'line-numbers', '', () => numberingMenu(), 'Restart or continue list numbering'),
             small('outdent', 'indent-less', '', () => fmt('indent-decrease'), 'Decrease indent'),
             small('indent', 'indent-more', '', () => fmt('indent-increase'), 'Increase indent'),
@@ -1855,6 +1857,143 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       }
     }
     return null;
+  }
+  /** The list level of the paragraph at the cursor (0 for the top level) */
+  function listLevel() {
+    const $f = editor()?.state?.selection?.$from;
+    for (let d = $f?.depth ?? 0; d > 0; d--) {
+      const n = $f.node(d);
+      if (n.isTextblock) { const np = n.attrs?.paragraphProperties?.numberingProperties || n.attrs?.numberingProperties; return Number(np?.ilvl) || 0; }
+    }
+    return 0;
+  }
+  /** The list at the cursor as the given kind, made into one first if needed */
+  async function ensureList(kind) {
+    let t = listTarget();
+    if (!t) {
+      fmt(kind === 'bullet' ? 'bullet-list' : 'numbered-list');
+      await new Promise((r) => setTimeout(r, 60));
+      t = listTarget();
+      if (!t) throw new Error('Click in a paragraph first');
+      return t;
+    }
+    const np = (() => { const $f = editor().state.selection.$from; for (let d = $f.depth; d > 0; d--) if ($f.node(d).isTextblock) return $f.node(d).attrs?.listRendering; return null; })();
+    const isBullet = np ? /bullet/i.test(String(np.numberingType || np.format || '')) : null;
+    if (isBullet !== null && isBullet !== (kind === 'bullet')) await api().lists.setType({ target: t, kind: kind === 'bullet' ? 'bullet' : 'ordered' });
+    return listTarget() || t;
+  }
+  const BULLETS = [
+    { text: '•', name: 'Round', font: 'Arial' }, { text: '○', name: 'Circle', font: 'Arial' }, { text: '■', name: 'Square', font: 'Arial' },
+    { text: '◆', name: 'Diamond', font: 'Segoe UI Symbol' }, { text: '➢', name: 'Arrow', font: 'Segoe UI Symbol' }, { text: '✓', name: 'Tick', font: 'Segoe UI Symbol' },
+    { text: '★', name: 'Star', font: 'Segoe UI Symbol' }, { text: '–', name: 'Dash', font: 'Arial' },
+  ];
+  const NUMBERS = [
+    { fmt: 'decimal', text: '%1.', sample: '1.  2.  3.' }, { fmt: 'decimal', text: '%1)', sample: '1)  2)  3)' }, { fmt: 'decimal', text: '(%1)', sample: '(1)  (2)  (3)' },
+    { fmt: 'lowerLetter', text: '%1.', sample: 'a.  b.  c.' }, { fmt: 'lowerLetter', text: '%1)', sample: 'a)  b)  c)' }, { fmt: 'upperLetter', text: '%1.', sample: 'A.  B.  C.' },
+    { fmt: 'lowerRoman', text: '%1.', sample: 'i.  ii.  iii.' }, { fmt: 'upperRoman', text: '%1.', sample: 'I.  II.  III.' },
+  ];
+  const MULTILEVEL = [
+    { name: '1.  a.  i.', hint: 'Numbers, then letters, then roman numerals', levels: [['decimal', '%1.'], ['lowerLetter', '%2.'], ['lowerRoman', '%3.'], ['decimal', '%4.'], ['lowerLetter', '%5.'], ['lowerRoman', '%6.']] },
+    { name: '1.  1.1.  1.1.1.', hint: 'Section numbering, as in reports and contracts', levels: [['decimal', '%1.'], ['decimal', '%1.%2.'], ['decimal', '%1.%2.%3.'], ['decimal', '%1.%2.%3.%4.'], ['decimal', '%1.%2.%3.%4.%5.'], ['decimal', '%1.%2.%3.%4.%5.%6.']] },
+    { name: 'I.  A.  1.  a.', hint: 'Outline numbering', levels: [['upperRoman', '%1.'], ['upperLetter', '%2.'], ['decimal', '%3.'], ['lowerLetter', '%4.'], ['lowerRoman', '%5.'], ['decimal', '%6.']] },
+  ];
+  async function setBullet(b) {
+    await act('Bullets', async () => {
+      const t = await ensureList('bullet'); const level = listLevel();
+      const r = await api().lists.setLevelBullet({ target: t, level, markerText: b.text });
+      if (failed(r)) return r;
+      return api().lists.setLevelMarkerFont({ target: t, level, fontFamily: b.font });
+    });
+  }
+  async function setNumbering(n) {
+    await act('Numbering', async () => {
+      const t = await ensureList('ordered'); const level = listLevel();
+      return api().lists.setLevelNumbering({ target: t, level, numFmt: n.fmt, lvlText: n.text.replace('%1', `%${level + 1}`) });
+    });
+  }
+  async function setMultilevel(m) {
+    // nine levels, as Word makes them; the pattern repeats past the levels given
+    const levels = Array.from({ length: 9 }, (_x, level) => {
+      const [numFmt, lvlText] = m.levels[level % m.levels.length];
+      const text = level < m.levels.length ? lvlText : (m.levels[0][1].includes('%2') ? Array.from({ length: level + 1 }, (_y, i) => `%${i + 1}`).join('.') + '.' : lvlText.replace(/%\d/, `%${level + 1}`));
+      return { level, numFmt, lvlText: text, start: 1, alignment: 'left', indents: { left: 360 + 432 * level, hanging: 360 + 72 * level }, trailingCharacter: 'tab' };
+    });
+    await act('Multilevel list', async () => {
+      const t = await ensureList('ordered');
+      const r = await api().lists.applyTemplate({ target: t, template: { version: 1, levels } });
+      if (!failed(r)) return r;
+      // a list defined with fewer levels (common in files from other programs) is made again
+      // with all nine, keeping each item's level
+      const ed = editor(); const $f = ed.state.selection.$from;
+      let d = $f.depth; while (d > 0 && !$f.node(d).isTextblock) d--;
+      const parent = $f.node(d - 1); const at = $f.index(d - 1);
+      const isItem = (n) => n?.isTextblock && !!n.attrs?.listRendering;
+      let a = at; while (a > 0 && isItem(parent.child(a - 1))) a--;
+      let z = at; while (z < parent.childCount - 1 && isItem(parent.child(z + 1))) z++;
+      const items = [];
+      for (let i = a; i <= z; i++) {
+        const n = parent.child(i); const np = n.attrs?.paragraphProperties?.numberingProperties || n.attrs?.numberingProperties;
+        items.push({ id: n.attrs.paraId || n.attrs.sdBlockId, level: Number(np?.ilvl) || Math.max(0, (n.attrs.listRendering?.path?.length || 1) - 1) });
+      }
+      for (const it of items) await api().lists.detach({ target: { kind: 'block', nodeType: 'listItem', nodeId: it.id } });
+      const block = (id) => ({ kind: 'block', nodeType: 'paragraph', nodeId: id });
+      const c = await api().lists.create({ mode: 'fromParagraphs', target: { from: block(items[0].id), to: block(items[items.length - 1].id) }, kind: 'ordered', style: { version: 1, levels } });
+      if (failed(c)) return c;
+      for (const it of items) if (it.level > 0) await api().lists.setLevel({ target: { kind: 'block', nodeType: 'listItem', nodeId: it.id }, level: it.level });
+      return c;
+    });
+  }
+  async function defineBullet() {
+    const res = await openDialog({
+      title: 'New bullet',
+      description: 'Type or paste any character to use as the bullet.',
+      width: 400,
+      fields: [
+        { id: 'text', label: 'Bullet character', value: '•' },
+        { id: 'font', label: 'Font', type: 'select', value: 'Arial', options: ['Arial', 'Segoe UI Symbol', 'Calibri', 'Times New Roman', 'Wingdings', 'Symbol'].map((f) => ({ value: f, label: f })) },
+      ],
+      validate: (v) => ([...v.text.trim()].length === 1 ? null : 'Use exactly one character'),
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Use bullet', primary: true }],
+    });
+    if (res) await setBullet({ text: res.values.text.trim(), font: res.values.font });
+  }
+  async function defineNumber() {
+    const res = await openDialog({
+      title: 'New number format',
+      description: 'The number, letter or numeral goes where you put #, for example "Step #:" or "#.".',
+      width: 420,
+      fields: [
+        { id: 'fmt', label: 'Style', type: 'select', value: 'decimal', options: [{ value: 'decimal', label: '1, 2, 3' }, { value: 'decimalZero', label: '01, 02, 03' }, { value: 'lowerLetter', label: 'a, b, c' }, { value: 'upperLetter', label: 'A, B, C' }, { value: 'lowerRoman', label: 'i, ii, iii' }, { value: 'upperRoman', label: 'I, II, III' }, { value: 'ordinal', label: '1st, 2nd, 3rd' }] },
+        { id: 'text', label: 'Format', value: '#.' },
+        { id: 'start', label: 'Start at', type: 'number', value: 1 },
+      ],
+      validate: (v) => (v.text.split('#').length === 2 ? (v.start === null || v.start < 0 ? 'Start at 0 or more' : null) : 'Put one # where the number goes'),
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Apply', primary: true }],
+    });
+    if (!res) return;
+    const v = res.values;
+    await act('Numbering', async () => {
+      const t = await ensureList('ordered'); const level = listLevel();
+      return api().lists.setLevelNumbering({ target: t, level, numFmt: v.fmt, lvlText: v.text.replace('#', `%${level + 1}`), start: Math.round(v.start) });
+    });
+  }
+  function bulletMenu() {
+    return [
+      { header: 'Bullets' },
+      ...BULLETS.map((b) => ({ label: `${b.text}   ${b.name}`, icon: 'list-ul', style: 'font-size:14px', action: () => setBullet(b) })),
+      'sep',
+      { label: 'Define new bullet...', icon: 'plus', action: () => defineBullet() },
+    ];
+  }
+  function numberMenu() {
+    return [
+      { header: 'Numbering' },
+      ...NUMBERS.map((n) => ({ label: n.sample, icon: 'list-ol', action: () => setNumbering(n) })),
+      'sep',
+      { label: 'Define new number format...', icon: 'plus', action: () => defineNumber() },
+      { header: 'Multilevel list' },
+      ...MULTILEVEL.map((m) => ({ label: m.name, hint: m.hint, icon: 'outline', action: () => setMultilevel(m) })),
+    ];
   }
   function numberingMenu() {
     const run = (label, fn, ok) => act(label, () => { const t = listTarget(); if (!t) throw new Error('Click in a numbered list first'); return fn(t); }, ok);
