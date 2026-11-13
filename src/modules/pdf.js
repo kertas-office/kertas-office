@@ -266,6 +266,10 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   let disposed = false;
   let findQuery = '';
   let currentPage = 0;
+  // A page picked in the thumbnails (or just moved, rotated or deleted) stays current until
+  // the person scrolls the pages themselves: a short last page may never reach the line
+  // that marks the current page while scrolling
+  let pickedPage = null;
   let keySeq = 0;
   // document-level settings
   let security = null;     // { userPassword, ownerPassword, permissions, restrict }
@@ -1352,7 +1356,14 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     if (!wrap) return;
     const i = pages.findIndex((p) => p.key === wrap.dataset.key);
     const op = e.target.closest('[data-op]')?.dataset.op;
-    if (!op) { pagesEl.querySelector(`.pdf-page[data-key="${wrap.dataset.key}"]`)?.scrollIntoView({ behavior: 'smooth' }); return; }
+    if (!op) {
+      // the picked page is the current one at once, not when the smooth scroll gets there
+      // (Delete or Rotate pressed straight after acted on the page that was in view before)
+      pickedPage = i;
+      updatePageInfo();
+      pagesEl.querySelector(`.pdf-page[data-key="${wrap.dataset.key}"]`)?.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
     await pageOp(op, i);
   });
 
@@ -1497,9 +1508,11 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     }
     undoStack.length = 0; // page edits are not undoable in this version
     changed();
+    pickedPage = focus;
     await layout();
     await renderThumbs();
     pagesEl.querySelectorAll('.pdf-page')[focus]?.scrollIntoView({ block: 'start' });
+    updatePageInfo();
   }
 
   async function insertBlank() {
@@ -1830,11 +1843,21 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   }
 
   // ---------------------------------------------------------------- page info
+  // a page picked in the thumbnails stays current until the person scrolls the pages
+  for (const ev of ['wheel', 'touchstart', 'keydown']) pagesEl.addEventListener(ev, () => { pickedPage = null; }, { passive: true });
+  // working on a page makes it the current one, even one that cannot scroll up to the line
+  pagesEl.addEventListener('pointerdown', (e) => {
+    const div = e.target.closest?.('.pdf-page');
+    const i = div ? [...pagesEl.querySelectorAll('.pdf-page')].indexOf(div) : -1;
+    pickedPage = i >= 0 ? i : null;
+    updatePageInfo();
+  }, { passive: true });
   function updatePageInfo() {
     const top = pagesEl.scrollTop + pagesEl.clientHeight / 3;
     const divs = [...pagesEl.querySelectorAll('.pdf-page')];
     let current = 0;
     divs.forEach((d, i) => { if (d.offsetTop <= top) current = i; });
+    if (pickedPage !== null && pickedPage < divs.length) current = pickedPage;
     ribbon.setLabel('pageinfo', `Page ${current + 1} / ${pages.length}`);
     if (current !== currentPage || pages.length !== updatePageInfo.last) setStatus(`${pages.length} page${pages.length === 1 ? '' : 's'}`);
     updatePageInfo.last = pages.length;
