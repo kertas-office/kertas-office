@@ -613,6 +613,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         ] },
         { label: 'Paragraph', items: [
           big('para2', 'paragraph', 'Indents & spacing', () => paragraphSettings()),
+          big('tabs', 'tabs', 'Tabs', () => tabStopsDialog(), 'Tab stops: where Tab moves to, how text lines up there, and dot leaders'),
           small('ltr2', 'ltr', 'Left to right', () => setDirection('ltr')),
           small('rtl2', 'rtl', 'Right to left', () => setDirection('rtl')),
         ] },
@@ -991,6 +992,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       ...[1, 1.08, 1.15, 1.5, 2, 2.5, 3].map((v) => ({ label: v === 1.08 ? '1.08 (default)' : String(v.toFixed(v % 1 ? 2 : 1)).replace(/0$/, ''), checked: cur !== null && Math.abs(cur - v) < 0.01, action: () => fmt('line-height', v) })),
       'sep',
       { label: 'Paragraph settings...', icon: 'paragraph', action: () => paragraphSettings() },
+      { label: 'Tabs...', icon: 'tabs', action: () => tabStopsDialog() },
     ];
   }
   let homeCtl = null; let homeUnsub = null;
@@ -1097,6 +1099,45 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     });
     ribbon.setOn('rtl', direction === 'rtl'); ribbon.setOn('rtl2', direction === 'rtl');
     ribbon.setOn('ltr', direction === 'ltr'); ribbon.setOn('ltr2', direction === 'ltr');
+  }
+  // Tab stops for the selected paragraphs, as in Word's Tabs dialog
+  const TAB_ALIGN = [{ value: 'left', label: 'Left' }, { value: 'center', label: 'Centre' }, { value: 'right', label: 'Right' }, { value: 'decimal', label: 'Decimal' }, { value: 'bar', label: 'Bar' }];
+  const TAB_LEADER = [{ value: 'none', label: 'None' }, { value: 'dot', label: 'Dots .......' }, { value: 'hyphen', label: 'Dashes -------' }, { value: 'underscore', label: 'Line _______' }, { value: 'middleDot', label: 'Middle dots ·······' }];
+  async function tabStopsDialog() {
+    const list = await selectedBlocks().catch(() => []);
+    if (!list.length) { toast('Click in a paragraph first'); return; }
+    const u = rulerUnit(); const TW = u === 'in' ? 1440 : 1440 / 2.54;
+    const show = (tw) => `${Math.round((tw / TW) * 100) / 100} ${u}`;
+    // the tab stops of the paragraph with the cursor
+    let tabs = [];
+    const $f = editor()?.state?.selection?.$from;
+    for (let d = $f?.depth ?? 0; d > 0; d--) {
+      const n = $f.node(d);
+      if (n.isTextblock) { tabs = (n.attrs?.paragraphProperties?.tabStops || []).map((x) => x.tab || x).filter((x) => x && x.tabType !== 'clear' && Number.isFinite(Number(x.pos))); break; }
+    }
+    tabs.sort((a, b) => a.pos - b.pos);
+    const describe = (x) => `${show(x.pos)} ${TAB_ALIGN.find((a) => a.value === x.tabType)?.label.toLowerCase() || x.tabType}${x.leader && x.leader !== 'none' ? `, ${TAB_LEADER.find((l) => l.value === x.leader)?.label.split(' ')[0].toLowerCase() || x.leader}` : ''}`;
+    const res = await openDialog({
+      title: 'Tabs',
+      description: tabs.length ? `Tab stops here: ${tabs.map(describe).join('; ')}.` : 'This paragraph has no tab stops of its own yet; Tab moves in default steps.',
+      width: 460,
+      fields: [
+        { id: 'pos', label: `Position (${u}, from the left margin)`, type: 'number', value: tabs.length ? Math.round((tabs[tabs.length - 1].pos / TW) * 100) / 100 : (u === 'in' ? 3 : 8) },
+        { id: 'align', label: 'Alignment', type: 'segmented', value: 'left', options: TAB_ALIGN },
+        { id: 'leader', label: 'Leader', type: 'select', value: 'none', options: TAB_LEADER },
+        ...(tabs.length ? [{ id: 'remove', label: 'Remove a tab stop', type: 'select', value: '', options: [{ value: '', label: '(None)' }, ...tabs.map((x) => ({ value: String(x.pos), label: describe(x) }))] }] : []),
+      ],
+      validate: (v, action) => (action === 'ok' && (v.pos === null || v.pos <= 0 || v.pos * TW > 31680) ? 'Enter a position after the left margin' : null),
+      actions: [...(tabs.length ? [{ id: 'clearAll', label: 'Clear all' }] : []), { id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Set', primary: true }],
+    });
+    if (!res) return;
+    const v = res.values;
+    const p = () => api().format.paragraph;
+    if (res.action === 'clearAll') { await act('Tabs', () => onSelectedBlocks((t) => p().clearAllTabStops({ target: t })), 'Tab stops cleared'); return; }
+    await act('Tabs', () => onSelectedBlocks(async (t) => {
+      if (v.remove) { const r = await p().clearTabStop({ target: t, position: Number(v.remove) }); if (failed(r)) return r; }
+      return p().setTabStop({ target: t, position: Math.round(v.pos * TW), alignment: v.align, ...(v.leader !== 'none' ? { leader: v.leader } : {}) });
+    }), `Tab stop at ${show(Math.round(v.pos * TW))}`);
   }
   async function paragraphSettings() {
     const list = await selectedBlocks().catch(() => []);
