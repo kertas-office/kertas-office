@@ -50,6 +50,18 @@ module.exports = {
     ? { publish: [{ provider: 'generic', url: process.env.KERTAS_UPDATE_URL }] }
     : owner ? { publish: [{ provider: 'github', owner, repo, releaseType: 'draft' }] } : {}),
 
+  // Electron fuses: the packaged app cannot be turned into a Node runtime or debugged from
+  // the command line, and refuses to start if its app.asar has been tampered with.
+  electronFuses: {
+    runAsNode: false,
+    enableCookieEncryption: true,
+    enableNodeOptionsEnvironmentVariable: false,
+    enableNodeCliInspectArguments: false,
+    enableEmbeddedAsarIntegrityValidation: true,
+    onlyLoadAppFromAsar: true,
+    grantFileProtocolExtraPrivileges: false,
+  },
+
   win: {
     target: [{ target: 'nsis', arch: ['x64', 'arm64'] }],
     icon: 'build/icon.ico',
