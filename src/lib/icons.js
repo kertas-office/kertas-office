@@ -21,6 +21,7 @@ import {
   BookMarked, Library, FileOutput, ScanText as ScanTextIcon, FileSignature, TrendingUp, ListTree, Ungroup, Triangle, Star,
   ArrowBigRight, MessageCircle, BringToFront, SendToBack, Ellipsis, Move, LayersPlus, WrapText, AlignLeft, AlignCenter, AlignRight, Bold, Italic, Baseline, PaintbrushVertical, AlignJustify, AArrowUp, AArrowDown, Grid2x2, TableCellsMerge, DollarSign, DecimalsArrowLeft, DecimalsArrowRight, AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, ArrowDownUp, Hexagon, Diamond, TextCursor, BadgeCheck, KeyRound, ScanLine, Languages, Type as TypeIcon,
   PinOff, CircleDot, SquareChevronDown, FileArchive, LetterText, Settings2, SlidersHorizontal, PanelsTopLeft,
+  Crop, FlipHorizontal2, FlipVertical2,
 } from 'lucide';
 
 const ICONS = {
@@ -67,6 +68,7 @@ const ICONS = {
   ltr: PilcrowRight, rtl: PilcrowLeft, 'indent-more': IndentIncrease, 'indent-less': IndentDecrease, spell: SpellCheck,
   shapes: Shapes, equation: Radical, quote: TextQuote, mail: Mail, mails: Mails, citation: BookMarked, bibliography: Library,
   'file-out': FileOutput, 'scan-text': ScanTextIcon, 'file-sign': FileSignature, sparkline: TrendingUp, outline: ListTree,
+  crop: Crop, flip: FlipHorizontal2, 'flip-v': FlipVertical2,
   ungroup: Ungroup, fold: FoldVertical, coffee: Coffee, 'heading-1': Heading1, 'heading-2': Heading2, 'heading-3': Heading3, heading: Heading, 'check-square': SquareCheck, unfold: UnfoldVertical, triangle: Triangle, star: Star, 'arrow-shape': ArrowBigRight, callout: MessageCircle, hexagon: Hexagon,
   diamond: Diamond, 'text-box': TextCursor, verified: BadgeCheck, key: KeyRound, 'scan-line': ScanLine, languages: Languages, font: TypeIcon,
 };

@@ -356,7 +356,18 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       ['behind', 'Behind text', 'back', (id) => setWrap('None', true, id)],
       ['front', 'In front of text', 'front', (id) => setWrap('None', false, id)],
     ];
-    return [{ id: 'kertas-picture', items: opts.map(([key, label, ic, fn]) => ({ id: `k-wrap-${key}`, label, icon: icon(ic, 16), showWhen: onPicture, action: (ed, ctx) => choose(ed, ctx, fn) })) }];
+    const more = [
+      ['change', 'Change picture...', 'image', (id) => picChange(id)],
+      ['crop', 'Crop...', 'crop', (id) => picCrop(id)],
+      ['rotate', 'Rotate right 90°', 'rotate-r', (id) => picRotate(90, id)],
+      ['flip', 'Flip horizontal', 'flip', (id) => picFlip('h', id)],
+      ['caption', 'Caption...', 'caption', (id) => picCaption(id)],
+      ['link', 'Link...', 'link', (id) => picLink(id)],
+    ];
+    return [
+      { id: 'kertas-picture', items: opts.map(([key, label, ic, fn]) => ({ id: `k-wrap-${key}`, label, icon: icon(ic, 16), showWhen: onPicture, action: (ed, ctx) => choose(ed, ctx, fn) })) },
+      { id: 'kertas-picture-edit', items: more.map(([key, label, ic, fn]) => ({ id: `k-pic-${key}`, label, icon: icon(ic, 16), showWhen: onPicture, action: (ed, ctx) => choose(ed, ctx, fn) })) },
+    ];
   }
   // Icons for SuperDoc's built-in right-click items, by label
   const MENU_ICONS = {
@@ -726,8 +737,23 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           { id: 'pic-w', kind: 'number', label: 'Width', unit: 'px', step: 10, min: 4, title: 'Width (keeps the proportions)', action: (v) => picSize('w', v) },
           { id: 'pic-h', kind: 'number', label: 'Height', unit: 'px', step: 10, min: 4, title: 'Height (keeps the proportions)', action: (v) => picSize('h', v) },
         ] },
+        { label: 'Adjust', items: [
+          menu('pic-rotate', 'rotate', 'Rotate', [
+            { label: 'Rotate right 90°', icon: 'rotate-r', action: () => picRotate(90) },
+            { label: 'Rotate left 90°', icon: 'rotate-l', action: () => picRotate(-90) },
+            { label: 'Flip vertical', icon: 'flip-v', action: () => picFlip('v') },
+            { label: 'Flip horizontal', icon: 'flip', action: () => picFlip('h') },
+            'sep',
+            { label: 'More rotation...', icon: 'rotate', action: () => picRotationDialog() },
+          ], 'Rotate or flip the picture'),
+          big('pic-crop', 'crop', 'Crop', () => picCrop(), 'Cut off the edges of the picture'),
+          big('pic-change', 'image', 'Change picture', () => picChange(), 'Use another picture in its place, keeping the size and position'),
+          big('pic-reset', 'restore', 'Reset', () => picReset(), 'Remove rotation, flips and crop'),
+        ] },
         { label: 'Picture', items: [
-          big('pic-alt', 'caption', 'Alt text', () => picAlt(), 'Describe the picture for screen readers'),
+          big('pic-caption', 'caption', 'Caption', () => picCaption(), 'Add a caption under the picture'),
+          big('pic-link', 'link', 'Link', () => picLink(), 'Make the picture a link'),
+          big('pic-alt', 'text', 'Alt text', () => picAlt(), 'Describe the picture for screen readers'),
           big('pic-del', 'trash', 'Delete', () => picAct('Delete picture', (imageId) => api().images.delete({ imageId }))),
         ] },
       ] },
@@ -1189,13 +1215,18 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     if (!v) return;
     await act('Table', () => api().create.table({ rows: v.rows, columns: v.columns, ...(b ? { at: { kind: 'after', nodeId: b.nodeId } } : {}) }));
   }
+  /** A picture file as a data URL, with its pixel size */
+  async function readImage(img) {
+    const type = /\.png$/i.test(img.name) ? 'image/png' : 'image/jpeg';
+    const src = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(new Blob([img.data], { type })); });
+    const [w, h] = await new Promise((r) => { const im = new Image(); im.onload = () => r([im.naturalWidth, im.naturalHeight]); im.onerror = () => r([400, 300]); im.src = src; });
+    return { src, w, h };
+  }
   async function insertPicture() {
     const b = await caretBlock().catch(() => null);
     const [img] = await openFiles('image', false);
     if (!img) return;
-    const type = /\.png$/i.test(img.name) ? 'image/png' : 'image/jpeg';
-    const src = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(new Blob([img.data], { type })); });
-    const [w, h] = await new Promise((r) => { const im = new Image(); im.onload = () => r([im.naturalWidth, im.naturalHeight]); im.onerror = () => r([400, 300]); im.src = src; });
+    const { src, w, h } = await readImage(img);
     const s = Math.min(1, 576 / w); // fit within 6 inches
     await act('Picture', () => api().create.image({ src, alt: img.name, size: { width: Math.round(w * s), height: Math.round(h * s), unit: 'px' }, ...(b ? { at: { kind: 'after', target: b } } : {}) }));
   }
@@ -1728,6 +1759,87 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     const cur = (await api().images.get({ imageId: id }))?.properties || {};
     const res = await openDialog({ title: 'Alt text', description: 'Read aloud by screen readers in place of the picture.', fields: [{ id: 'alt', label: 'Description', type: 'textarea', rows: 3, value: cur.description || cur.alt || '' }], actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Save', primary: true }] });
     if (res) await picAct('Alt text', (imageId) => api().images.setAltText({ imageId, description: res.values.alt }));
+  }
+
+  // ---- picture: rotate, flip, crop, change, reset, caption, link
+  async function picProps(id) { return (await api().images.get({ imageId: id }))?.properties || {}; }
+  async function picRotate(delta, given) {
+    await picAct('Rotate', async (imageId) => {
+      const cur = (await picProps(imageId)).transform?.rotation || 0;
+      return api().images.rotate({ imageId, angle: (((Math.round(cur + delta)) % 360) + 360) % 360 });
+    }, null, given);
+  }
+  async function picFlip(axis, given) {
+    await picAct('Flip', async (imageId) => {
+      const t = (await picProps(imageId)).transform || {};
+      return axis === 'h' ? api().images.flip({ imageId, horizontal: !t.horizontalFlip }) : api().images.flip({ imageId, vertical: !t.verticalFlip });
+    }, null, given);
+  }
+  async function picRotationDialog(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const cur = (await picProps(id)).transform?.rotation || 0;
+    const res = await openDialog({ title: 'Rotation', width: 380, fields: [{ id: 'angle', label: 'Angle (degrees, clockwise)', type: 'number', value: Math.round(cur) }], validate: (v) => (v.angle === null || v.angle < -360 || v.angle > 360 ? 'Enter an angle from -360 to 360' : null), actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Rotate', primary: true }] });
+    if (res) await picAct('Rotate', (imageId) => api().images.rotate({ imageId, angle: ((Math.round(res.values.angle) % 360) + 360) % 360 }), null, id);
+  }
+  async function picCrop(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const c = (await picProps(id)).crop || {};
+    const res = await openDialog({
+      title: 'Crop picture',
+      description: 'How much to cut off each side, as a percentage of the picture.',
+      width: 420,
+      fields: ['left', 'right', 'top', 'bottom'].map((k) => ({ id: k, label: k[0].toUpperCase() + k.slice(1), type: 'number', value: Math.round((c[k] || 0) * 10) / 10 })),
+      validate: (v) => (['left', 'right', 'top', 'bottom'].some((k) => v[k] === null || v[k] < 0 || v[k] > 99) ? 'Use 0 to 99 percent' : v.left + v.right >= 100 || v.top + v.bottom >= 100 ? 'That would cut off the whole picture' : null),
+      actions: [{ id: 'reset', label: 'Remove crop' }, { id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Crop', primary: true }],
+    });
+    if (!res || res.action === 'cancel') return;
+    if (res.action === 'reset') { await picAct('Crop', (imageId) => api().images.resetCrop({ imageId }), null, id); return; }
+    const v = res.values;
+    await picAct('Crop', (imageId) => api().images.crop({ imageId, crop: { left: v.left, right: v.right, top: v.top, bottom: v.bottom } }), null, id);
+  }
+  async function picChange(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const [img] = await openFiles('image', false);
+    if (!img) return;
+    const { src } = await readImage(img);
+    await picAct('Change picture', (imageId) => api().images.replaceSource({ imageId, src, resetSize: false }), 'Picture changed. Its size and position stay the same.', id);
+  }
+  async function picReset(given) {
+    await picAct('Reset picture', async (imageId) => {
+      const p = await picProps(imageId);
+      if (p.transform?.rotation) await api().images.rotate({ imageId, angle: 0 });
+      if (p.transform?.horizontalFlip || p.transform?.verticalFlip) await api().images.flip({ imageId, horizontal: false, vertical: false });
+      return p.crop ? api().images.resetCrop({ imageId }) : { success: true };
+    }, 'Rotation, flips and crop removed', given);
+  }
+  async function picCaption(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const has = !!(await picProps(id)).hasCaption;
+    const res = await openDialog({
+      title: has ? 'Edit caption' : 'Add caption',
+      description: 'Shown under the picture, as "Figure 1: your text".',
+      fields: [{ id: 'text', label: 'Caption', value: '', placeholder: has ? 'New caption text' : 'What the picture shows' }],
+      actions: [...(has ? [{ id: 'remove', label: 'Remove caption' }] : []), { id: 'cancel', label: 'Cancel' }, { id: 'ok', label: has ? 'Update' : 'Add', primary: true }],
+    });
+    if (!res || res.action === 'cancel') return;
+    if (res.action === 'remove') { await picAct('Caption', (imageId) => api().images.removeCaption({ imageId }), null, id); return; }
+    const text = res.values.text.trim();
+    if (!text) return;
+    await picAct('Caption', (imageId) => (has ? api().images.updateCaption({ imageId, text }) : api().images.insertCaption({ imageId, text })), null, id);
+  }
+  async function picLink(given) {
+    const id = given || picId(); if (!id) { toast('Click a picture first', true); return; }
+    const cur = (await picProps(id)).hyperlink;
+    const res = await openDialog({
+      title: 'Link on picture',
+      description: 'Ctrl+click the picture to open the link. Leave empty to remove it.',
+      fields: [{ id: 'url', label: 'Address', value: cur?.url || 'https://', placeholder: 'https://example.com' }],
+      validate: (v) => { const u = v.url.trim(); return !u || u === 'https://' || /^(https?:\/\/[^\s]+\.[^\s]+|mailto:\S+@\S+)$/i.test(u) ? null : 'Enter a web address starting with https://, or leave it empty'; },
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Save', primary: true }],
+    });
+    if (!res) return;
+    const u = res.values.url.trim();
+    await picAct('Link', (imageId) => api().images.setHyperlink({ imageId, url: !u || u === 'https://' ? null : u }), null, id);
   }
 
   // ---------------------------------------------------------------- List numbering
