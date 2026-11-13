@@ -1,6 +1,6 @@
 {
   "name": "kertas-office",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Free, open-source office suite: documents, spreadsheets and PDFs",
   "homepage": "https://kertasoffice.com",
   "repository": {
@@ -104,7 +104,7 @@
     "exceljs": "^4.4.0",
     "fontkit": "^2.0.4",
     "jszip": "^3.10.2",
-    "lucide": "^1.70.0",
+    "lucide": "^1.71.0",
     "node-forge": "^1.4.3",
     "nspell": "^2.1.5",
     "pdfjs-dist": "^6.5.438",

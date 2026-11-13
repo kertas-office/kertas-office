@@ -5,6 +5,23 @@ const path = require('path');
 const root = path.join(__dirname, '..', 'node_modules');
 const patches = [
   {
+    // superdoc 1.47.2: "single" line spacing was always 1.15 times the font size. Word uses
+    // each font's own line height instead: 1.22 for Calibri, 1.17 for Cambria, 1.15 for Arial
+    // and Times New Roman. Calibri text (most Word files) came out about 6% tighter than in
+    // Word and WPS, so pages also broke in different places.
+    dir: 'superdoc/dist/chunks',
+    find: /const lineHeight = resolveLineHeight\(spacing, fontSize, ascent \+ descent\);/,
+    replace: 'const lineHeight = resolveLineHeight(spacing, fontSize, ascent + descent) * ((spacing?.lineRule ?? "auto") === "auto" ? (({ calibri: 1.2207, "calibri light": 1.2207, carlito: 1.2207, cambria: 1.1724, caladea: 1.1724, verdana: 1.2153, tahoma: 1.2075, "segoe ui": 1.3301, georgia: 1.1362, consolas: 1.1709, "courier new": 1.1328, cousine: 1.1328 })[String(fontInfo?.fontFamily || "").split(",")[0].replace(/[^a-z ]/gi, "").trim().toLowerCase()] || 1.15) / 1.15 : 1); // kertas: word line height',
+    marker: 'kertas: word line height',
+  },
+  {
+    // the same for empty paragraphs
+    dir: 'superdoc/dist/chunks',
+    find: /const lineHeight = roundValue\(resolveLineHeight\(spacing, resolvedFontSize, Math\.max\(resolvedFontSize, ascent \+ descent\)\)\);/,
+    replace: 'const lineHeight = roundValue(resolveLineHeight(spacing, resolvedFontSize, Math.max(resolvedFontSize, ascent + descent)) * ((spacing?.lineRule ?? "auto") === "auto" ? (({ calibri: 1.2207, "calibri light": 1.2207, carlito: 1.2207, cambria: 1.1724, caladea: 1.1724, verdana: 1.2153, tahoma: 1.2075, "segoe ui": 1.3301, georgia: 1.1362, consolas: 1.1709, "courier new": 1.1328, cousine: 1.1328 })[String(fontInfo?.fontFamily || "").split(",")[0].replace(/[^a-z ]/gi, "").trim().toLowerCase()] || 1.15) / 1.15 : 1)); // kertas: word line height (empty)',
+    marker: 'kertas: word line height (empty)',
+  },
+  {
     // fontkit 2.0.4: OpenType allows a NULL anchor in mark attachment tables
     // (Noto Sans Malayalam and Devanagari have them); fontkit crashes on it.
     files: ['fontkit/dist/module.mjs', 'fontkit/dist/main.cjs', 'fontkit/dist/browser-module.mjs', 'fontkit/dist/browser.cjs'],
