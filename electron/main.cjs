@@ -256,6 +256,7 @@ const FILTERS = {
   pdf: [{ name: 'PDF Document', extensions: ['pdf'] }],
   image: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
   cert: [{ name: 'Certificates', extensions: ['p12', 'pfx'] }],
+  any: [{ name: 'All files', extensions: ['*'] }],
 };
 // Opening also accepts older and OpenDocument formats (they are saved as .docx / .xlsx)
 const OPEN_FILTERS = {
@@ -274,6 +275,16 @@ ipcMain.handle('kertas:open-dialog', async (_e, { kind = 'all', multi = true } =
 });
 
 ipcMain.handle('kertas:read-path', async (_e, filePath) => loadFile(filePath));
+
+// A file attached to a PDF, saved where the person chooses in a Save dialog shown here
+// (any type, as in Acrobat: the dialog is the person's decision, not the page's)
+ipcMain.handle('kertas:save-attachment', async (_e, { name, data }) => {
+  const base = path.basename(String(name || 'attachment')).replace(/[<>:"|?*\x00-\x1f]/g, '_') || 'attachment';
+  const res = await dialog.showSaveDialog(mainWindow, { defaultPath: base });
+  if (res.canceled || !res.filePath) return null;
+  await fs.writeFile(res.filePath, Buffer.from(data));
+  return { path: res.filePath, name: path.basename(res.filePath) };
+});
 
 // .doc / .xls / .rtf / .odt / .ods -> .docx / .xlsx (LibreOffice when installed)
 ipcMain.handle('kertas:convert-legacy', async (_e, { name, data }) => convertLegacy({ name, data }));
