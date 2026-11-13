@@ -466,6 +466,17 @@ function handleTableNode(node, context) {
     replace: '\ttoRTreeItem() {\n\t\tif (this.type === 1) return []; // kertas: other formulas have no cell\n',
     marker: 'kertas: other formulas have no cell',
   })),
+  {
+    // superdoc 1.47.2: every open document listens for key presses on the whole window and takes
+    // those typed into "another" editor, meant for its own header and footer editors. With two
+    // documents open, the hidden one took the keys typed into the visible one and the visible one
+    // took them back, endlessly: nothing typed in the second document arrived, and the page
+    // threw "Maximum call stack size exceeded". A document that is not on screen leaves keys alone.
+    dir: 'superdoc/dist/chunks',
+    find: /if \(isInRegisteredSurface\(event\)\) return null;(\s*)const originNode = event\.target;/,
+    replace: 'if (isInRegisteredSurface(event)) return null;$1if (![...this.#layoutSurfaces].some((s) => s?.isConnected && s.getClientRects().length)) return null; // kertas: hidden documents leave keys alone$1const originNode = event.target;',
+    marker: 'kertas: hidden documents leave keys alone',
+  },
 ];
 
 for (const p of patches) {
