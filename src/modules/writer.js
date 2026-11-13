@@ -357,6 +357,29 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     ];
     return [{ id: 'kertas-picture', items: opts.map(([key, label, ic, fn]) => ({ id: `k-wrap-${key}`, label, icon: icon(ic, 16), showWhen: onPicture, action: (ed, ctx) => choose(ed, ctx, fn) })) }];
   }
+  // Right-click in a table: the everyday table actions, as in Word, without going to the Table tab
+  function tableMenuItems() {
+    const inTable = (ctx) => ctx.trigger === 'click' && (!!ctx.isInTable || !!ctx.isCellSelection);
+    const run = (label, name, ...args) => () => setTimeout(() => tcmd(label, name, ...args), 30);
+    const item = (id, label, ic, fn, extra = {}) => ({ id: `k-table-${id}`, label, icon: icon(ic, 16), showWhen: inTable, action: fn, ...extra });
+    return [
+      { id: 'kertas-table-insert', items: [
+        item('row-above', 'Insert row above', 'insert-row', run('Insert row', 'addRowBefore')),
+        item('row-below', 'Insert row below', 'insert-row', run('Insert row', 'addRowAfter')),
+        item('col-left', 'Insert column left', 'insert-col', run('Insert column', 'addColumnBefore')),
+        item('col-right', 'Insert column right', 'insert-col', run('Insert column', 'addColumnAfter')),
+      ] },
+      { id: 'kertas-table-cells', items: [
+        item('merge', 'Merge cells', 'merge', run('Merge cells', 'mergeCells'), { showWhen: (ctx) => inTable(ctx) && !!ctx.isCellSelection }),
+        item('split', 'Split cell', 'split', run('Split cell', 'splitCell')),
+      ] },
+      { id: 'kertas-table-delete', items: [
+        item('del-row', 'Delete row', 'trash', run('Delete row', 'deleteRow')),
+        item('del-col', 'Delete column', 'trash', run('Delete column', 'deleteColumn')),
+        item('del-table', 'Delete table', 'trash', run('Delete table', 'deleteTable')),
+      ] },
+    ];
+  }
   const ribbon = createRibbon(el.querySelector('[data-ribbon]'), {
     app: 'writer',
     fileMenu,
@@ -720,7 +743,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         toolbar: `#${id}-toolbar`,
         modules: {
           toolbar: { selector: `#${id}-toolbar`, excludeItems: ['documentMode', 'zoom', 'search', 'ruler', 'measurementUnit'], fonts: kFonts.options },
-          contextMenu: { includeDefaultItems: true, noSlash: true, customItems: pictureMenuItems() }, // "/" opens Kertas's own menu
+          contextMenu: { includeDefaultItems: true, noSlash: true, customItems: [...pictureMenuItems(), ...tableMenuItems()] }, // "/" opens Kertas's own menu
         },
         fonts: { families: kFonts.families },
         proofing: {
@@ -1421,6 +1444,28 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       if (document.querySelector('.modal')) return;
       if (e.key === 'F9' && !e.ctrlKey && !e.altKey) { e.preventDefault(); updateFields(); }
       if (e.altKey && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); e.stopPropagation(); act('Move', () => moveBlock(e.key === 'ArrowUp' ? -1 : 1)); }
+      refocusForTyping(e);
+    };
+    // Keys meant for the document can land nowhere: after a click on the grey area around the
+    // pages, or after leaving a ribbon box with Escape, focus sits on the page itself while the
+    // caret still shows in the text. Typing, Backspace, Delete and Ctrl+A then did nothing.
+    // Such keys now go back to the document, at the caret it already has.
+    const refocusForTyping = (e) => {
+      const ed = superdoc?.activeEditor;
+      const view = ed?.view;
+      if (!view || e.defaultPrevented || e.isComposing) return;
+      const a = document.activeElement;
+      if (a && (a === view.dom || view.dom.contains(a))) return;
+      if (a && a !== document.body && (a.closest('input, textarea, select, [contenteditable="true"], .modal, [role="dialog"], [role="menu"]') || (!el.contains(a)))) return;
+      const onButton = a && a !== document.body && a.closest('button, [role="button"], [tabindex]');
+      const mod = e.ctrlKey || e.metaKey;
+      const selectAll = mod && !e.altKey && e.key.toLowerCase() === 'a';
+      const deleting = !mod && !e.altKey && (e.key === 'Backspace' || e.key === 'Delete');
+      const typing = !mod && !e.altKey && e.key.length === 1 && !(onButton && e.key === ' ');
+      if (!selectAll && !deleting && !typing) return;
+      view.focus();
+      if (selectAll) { e.preventDefault(); ed.commands.selectAll?.(); return; }
+      // a typed character, Backspace or Delete follows the focus to the document by itself
     };
     document.addEventListener('keydown', keys, true);
     unwire = () => document.removeEventListener('keydown', keys, true);
