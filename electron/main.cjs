@@ -71,7 +71,16 @@ async function writeRecent(list) {
   await fs.writeFile(RECENT_FILE(), JSON.stringify(trimRecent(list), null, 2));
 }
 
-async function addRecent(filePath) {
+// Changes to the list are made one after another: each reads the list, changes it and
+// writes it back, so two at once (several files opened together) would lose all but one
+let recentQueue = Promise.resolve();
+const inTurn = (fn) => (...args) => {
+  const run = recentQueue.then(() => fn(...args));
+  recentQueue = run.catch(() => {});
+  return run;
+};
+
+const addRecent = inTurn(async function addRecent(filePath) {
   if (!RECENT_TYPES.test(filePath)) return;
   const all = await readRecent();
   const was = all.find((r) => r.path === filePath);
@@ -79,24 +88,24 @@ async function addRecent(filePath) {
   list.unshift({ path: filePath, name: path.basename(filePath), openedAt: Date.now(), ...(was?.pinned ? { pinned: true, pinnedAt: was.pinnedAt } : {}) });
   await writeRecent(list);
   app.addRecentDocument(filePath);
-}
+});
 
-async function pinRecent(filePath, pinned) {
+const pinRecent = inTurn(async function pinRecent(filePath, pinned) {
   const list = await readRecent();
   const r = list.find((x) => x.path === filePath);
   if (!r) return false;
   if (pinned) { r.pinned = true; r.pinnedAt = Date.now(); } else { delete r.pinned; delete r.pinnedAt; }
   await writeRecent(list);
   return true;
-}
+});
 
-async function removeRecent(filePath) {
+const removeRecent = inTurn(async function removeRecent(filePath) {
   const list = await readRecent();
   const left = list.filter((r) => r.path !== filePath);
   if (left.length === list.length) return false;
   await writeRecent(left);
   return true;
-}
+});
 
 async function loadFile(filePath) {
   assertReadable(filePath);
