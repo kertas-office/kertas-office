@@ -66,6 +66,19 @@ import { makeSparklines, SPARK_TYPES, sparkValues, DEFAULT_SPARK } from '../lib/
 import { createSparkLayer } from './sheet-sparklines.js';
 import { createSlicerLayer } from './sheet-slicers.js';
 import { openDialog } from '../lib/dialog.js';
+
+// Kertas's wording for the name box and the named ranges panel
+// (locales merge one level deep only, so the rest of sheets-ui's wording is carried over)
+const NAME_WORDS = {
+  'sheets-ui': { ...sheetsEnUS['sheets-ui'], definedName: {
+    managerTitle: 'Named ranges',
+    managerDescription: 'To name cells: select them, type a name in this box and press Enter. Names can be used in formulas instead of cell addresses.',
+    addButton: 'New name', featureTitle: 'Named ranges', ratioRange: 'Range', ratioFormula: 'Formula', confirm: 'Save', cancel: 'Cancel',
+    scopeWorkbook: 'Whole workbook', inputNamePlaceholder: 'Name (letters, numbers and underscores, no spaces)', inputCommentPlaceholder: 'Comment (optional)',
+    formulaOrRefStringInvalid: 'That is not a cell range or formula', defaultName: 'MyRange', updateButton: 'Save', deleteButton: 'Delete',
+    deleteConfirmText: 'Delete this name? Formulas that use it will show #NAME?.',
+  } },
+};
 import { parseA1 } from '../lib/xlsx-features.js';
 import { createChartLayer, renderChartPng } from './sheet-charts.js';
 import {
@@ -148,7 +161,7 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
   const { univer, univerAPI } = createUniver({
     locale: LocaleType.EN_US,
     darkMode: !!dark,
-    locales: { [LocaleType.EN_US]: mergeLocales(sheetsEnUS, filterEnUS, sortEnUS, cfEnUS, dvEnUS, findEnUS, linkEnUS, noteEnUS, drawingEnUS, commentEnUS, COMMENT_WORDS) },
+    locales: { [LocaleType.EN_US]: mergeLocales(sheetsEnUS, filterEnUS, sortEnUS, cfEnUS, dvEnUS, findEnUS, linkEnUS, noteEnUS, drawingEnUS, commentEnUS, COMMENT_WORDS, NAME_WORDS) },
     presets: [
       UniverSheetsCorePreset({
         container: host,
@@ -641,6 +654,68 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
         : left < col ? rangeToA1({ startRow: row, startColumn: left, endRow: row, endColumn: col - 1 }) : '';
       r.setValue(`=${fn}(${ref})`);
     });
+  }
+
+  // ---------------------------------------------------------------- named ranges
+  const NAME_RE = /^[A-Za-z_\\][A-Za-z0-9_.\\]{0,254}$/;
+  const looksLikeCell = (n) => /^[A-Za-z]{1,3}\d{1,7}$/.test(n) || /^R\d*C\d*$/i.test(n);
+  async function defineName() {
+    const r = selection();
+    const sheetName = ws().getSheetName();
+    const quoted = /^[A-Za-z_][A-Za-z0-9_.]*$/.test(sheetName) ? sheetName : `'${sheetName.replace(/'/g, "''")}'`;
+    const ref = `${quoted}!${rangeToA1(bounds(r), true)}`;
+    // a label in the cell above or to the left is a good suggestion, as in Excel
+    const b = bounds(r);
+    const textAt = (row, col) => { const x = row >= 0 && col >= 0 ? ws().getRange(row, col).getValue() : ''; return typeof x === 'string' ? x : ''; };
+    const near = textAt(b.startRow - 1, b.startColumn) || textAt(b.startRow, b.startColumn - 1) || (b.endRow > b.startRow ? textAt(b.startRow, b.startColumn) : '');
+    const suggest = String(near || '').trim().replace(/[^A-Za-z0-9_.]+/g, '_').replace(/^(\d)/, '_$1').slice(0, 40);
+    const taken = new Set(workbook.getDefinedNames().map((d) => d.getName().toLowerCase()));
+    const res = await openDialog({
+      title: 'Define name',
+      description: 'A name for cells, to use in formulas, for example =SUM(Sales) instead of =SUM(B2:B20).',
+      width: 460,
+      fields: [
+        { id: 'name', label: 'Name', value: suggest && !looksLikeCell(suggest) ? suggest : '' },
+        { id: 'scope', label: 'Works in', type: 'select', value: 'workbook', options: [{ value: 'workbook', label: 'The whole workbook' }, { value: 'sheet', label: `Only the sheet "${sheetName}"` }] },
+        { id: 'ref', label: 'Refers to', value: `=${ref}` },
+        { id: 'comment', label: 'Comment (optional)', value: '' },
+      ],
+      validate: (v) => {
+        const n = v.name.trim();
+        if (!NAME_RE.test(n)) return 'Start with a letter or _, then letters, numbers, _ or . (no spaces)';
+        if (looksLikeCell(n) || /^(true|false)$/i.test(n)) return 'That looks like a cell address or a value; choose another name';
+        if (taken.has(n.toLowerCase())) return `"${n}" is already a name. Use Name manager to change it.`;
+        if (!v.ref.trim().replace(/^=/, '')) return 'Say which cells (or formula) the name stands for';
+        return null;
+      },
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Define', primary: true }],
+    });
+    if (!res) return;
+    const v = res.values;
+    busy('Define name', () => {
+      let bld = workbook.newDefinedNameBuilder().setName(v.name.trim()).setRef(v.ref.trim().replace(/^=/, ''));
+      if (v.comment.trim()) bld = bld.setComment(v.comment.trim());
+      bld = v.scope === 'sheet' ? bld.setScopeToWorksheet(ws()) : bld.setScopeToWorkbook();
+      workbook.insertDefinedNameBuilder(bld.build());
+      markDirty();
+      toast(`"${v.name.trim()}" now stands for ${v.ref.trim().replace(/^=/, '')}`);
+    });
+  }
+  /** Names to put into the selected cell's formula */
+  function useNameMenu() {
+    const names = workbook.getDefinedNames().filter((d) => !d.isHidden?.()).map((d) => d.getName()).sort((a, b) => a.localeCompare(b));
+    if (!names.length) return [{ label: 'No named ranges yet', icon: 'bookmark', disabled: true }, 'sep', { label: 'Define name...', icon: 'plus', action: () => defineName() }];
+    return [
+      ...names.map((n) => ({ label: n, icon: 'bookmark', action: () => busy('Use name', () => {
+        const r = selection(); const cell = ws().getRange(r.getRow(), r.getColumn());
+        const cur = String(cell.getFormula?.() || '');
+        // into the formula already there (at its end), or a new formula
+        cell.setValue(cur.startsWith('=') ? `${cur}${/[(,+\-*/^&=<>]$/.test(cur) ? '' : '+'}${n}` : `=${n}`);
+        markDirty();
+      }) })),
+      'sep',
+      { label: 'Define name...', icon: 'plus', action: () => defineName() },
+    ];
   }
 
   async function insertFunction(preset) {
@@ -1275,6 +1350,11 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
       },
       {
         id: 'formulas', label: 'Formulas', groups: [
+          { label: 'Named ranges', items: [
+            { id: 'name-define', kind: 'big', icon: 'bookmark', label: 'Define name', title: 'Name the selected cells, to use the name in formulas', action: () => defineName() },
+            { id: 'name-use', kind: 'menu', icon: 'function', label: 'Use in formula', items: () => useNameMenu() },
+            { id: 'name-manager', kind: 'big', icon: 'list', label: 'Name manager', title: 'All named ranges: change, rename or delete them', action: () => run('sidebar.operation.defined-name', { value: 'open' }) },
+          ] },
           { label: 'Function library', items: [
             { id: 'fx2', kind: 'big', icon: 'function', label: 'Insert function', action: () => insertFunction() },
             { id: 'autosum2', kind: 'menu', icon: 'sigma', label: 'AutoSum', items: sumMenu },
