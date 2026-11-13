@@ -70,7 +70,8 @@ test('a document opened from disk is listed in Recent and can be removed from it
   await row.waitFor({ state: 'visible' });
   await row.hover();
   await row.locator('.rm-btn').click();
-  await sleep(500);
+  // the list is redrawn once the main process has saved it, which can take a moment on a busy machine
+  await win.locator('.recent-item', { hasText: 'Letter.docx' }).waitFor({ state: 'detached', timeout: 5000 });
   assert.equal(await win.locator('.recent-item', { hasText: 'Letter.docx' }).count(), 0);
 });
 
