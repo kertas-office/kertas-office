@@ -65,7 +65,7 @@ export async function paragraphDialog() {
       { id: 'specialBy', label: 'By (cm)', type: 'number', value: 1.27, show: (v) => v.special !== 'none' },
       { id: 'before', label: 'Spacing before (pt)', type: 'number', value: 0 },
       { id: 'after', label: 'Spacing after (pt)', type: 'number', value: 8 },
-      { id: 'line', label: 'Line spacing', type: 'select', value: '1.08', options: [{ value: '1', label: 'Single' }, { value: '1.08', label: '1.08 (Word default)' }, { value: '1.15', label: '1.15' }, { value: '1.5', label: '1.5 lines' }, { value: '2', label: 'Double' }] },
+      { id: 'line', label: 'Line spacing', type: 'select', value: '1.08', options: [{ value: '1', label: 'Single' }, { value: '1.08', label: '1.08 (default)' }, { value: '1.15', label: '1.15' }, { value: '1.5', label: '1.5 lines' }, { value: '2', label: 'Double' }] },
       { id: 'keepNext', type: 'checkbox', label: 'Keep with next', value: false },
       { id: 'keepLines', type: 'checkbox', label: 'Keep lines together', value: false },
       { id: 'breakBefore', type: 'checkbox', label: 'Page break before', value: false },
