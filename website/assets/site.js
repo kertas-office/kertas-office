@@ -182,6 +182,18 @@ function tour() {
     });
   });
   select(tabs[0]);
+
+  // Light and dark screenshots of the same screens
+  const modes = $$('[data-shot-theme]');
+  const show = (dark) => {
+    modes.forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.shotTheme === 'dark') === dark)));
+    $$('#tour img[data-shot]').forEach((img) => {
+      const n = img.dataset.shot + (dark ? '-dark' : '');
+      img.srcset = `/img/${n}-sm.webp 1000w, /img/${n}.webp 2000w`;
+      img.src = `/img/${n}.webp`;
+    });
+  };
+  modes.forEach((b) => b.addEventListener('click', () => show(b.dataset.shotTheme === 'dark')));
 }
 
 function helpSearch() {
