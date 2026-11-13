@@ -188,9 +188,12 @@ function tour() {
   const show = (dark) => {
     modes.forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.shotTheme === 'dark') === dark)));
     $$('#tour img[data-shot]').forEach((img) => {
-      const n = img.dataset.shot + (dark ? '-dark' : '');
-      img.srcset = `/img/${n}-sm.webp 1000w, /img/${n}.webp 2000w`;
-      img.src = `/img/${n}.webp`;
+      // the light links come from the page, with their cache-busting hashes
+      img.dataset.light ??= JSON.stringify([img.getAttribute('src'), img.getAttribute('srcset')]);
+      const [src, set] = JSON.parse(img.dataset.light);
+      const n = img.dataset.shot;
+      img.srcset = dark ? `/img/${n}-dark-sm.webp 1000w, /img/${n}-dark.webp 2000w` : set;
+      img.src = dark ? `/img/${n}-dark.webp` : src;
     });
   };
   modes.forEach((b) => b.addEventListener('click', () => show(b.dataset.shotTheme === 'dark')));
