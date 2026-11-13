@@ -1,20 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs><linearGradient id="tile" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
-    <stop offset="0" stop-color="#5b5ff5"/><stop offset=".52" stop-color="#8b5cf6"/><stop offset="1" stop-color="#d946ef"/></linearGradient><linearGradient id="ink" x1="300" y1="300" x2="700" y2="760" gradientUnits="userSpaceOnUse">
-    <stop offset="0" stop-color="#4338ca"/><stop offset=".55" stop-color="#6d28d9"/><stop offset="1" stop-color="#a21caf"/></linearGradient>
-    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#eef0ff"/></linearGradient>
-    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".42"/><stop offset=".55" stop-color="#fff" stop-opacity=".06"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <stop offset="0" stop-color="#5b5ff5"/><stop offset=".52" stop-color="#8b5cf6"/><stop offset="1" stop-color="#d946ef"/></linearGradient><linearGradient id="crease" gradientUnits="userSpaceOnUse" x1="104" y1="166" x2="124" y2="192">
+    <stop offset="0" stop-color="#2e1065" stop-opacity=".28"/><stop offset="1" stop-color="#2e1065" stop-opacity="0"/></linearGradient>
     <filter id="drop" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#1e1b4b" flood-opacity=".38"/></filter>
-    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#312e81" flood-opacity=".32"/></filter>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#312e81" flood-opacity=".28"/></filter>
     <clipPath id="body"><rect x="8" y="8" width="1008" height="1008" rx="210"/></clipPath>
   </defs>
   <g><rect x="8" y="8" width="1008" height="1008" rx="210" fill="url(#tile)"/></g>
   <g clip-path="url(#body)">
-    <circle cx="860" cy="170" r="300" fill="#fff" opacity=".10"/>
-    <circle cx="140" cy="930" r="340" fill="#312e81" opacity=".16"/>
     
-    <path d="M322 232V792M714 232L322 512L714 792" stroke="#fff" stroke-width="150" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-    
+    <g filter="url(#lift)"><g transform="translate(72 72) scale(3.4375) translate(-27 -8)">
+      <path d="M64 72Q64 40 96 40H238L64 208Z" fill="#fff"/>
+      <path d="M142 132L246 232H102C78 232 64 222 64 211C64 206 66 202.5 70 200.3Z" fill="#e3d4ff"/>
+      <path d="M142 132L246 232H102C78 232 64 222 64 211C64 206 66 202.5 70 200.3Z" fill="url(#crease)"/>
+    </g></g>
   </g>
   <rect x="10" y="10" width="1004" height="1004" rx="208" fill="none" stroke="#fff" stroke-opacity=".3" stroke-width="4"/>
 </svg>
