@@ -897,7 +897,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     const cur = Number(tbc()?.getSnapshot?.()?.commands?.['line-height']?.value) || null;
     return [
       { header: 'Line spacing' },
-      ...[1, 1.08, 1.15, 1.5, 2, 2.5, 3].map((v) => ({ label: v === 1.08 ? '1.08 (Word default)' : String(v.toFixed(v % 1 ? 2 : 1)).replace(/0$/, ''), checked: cur !== null && Math.abs(cur - v) < 0.01, action: () => fmt('line-height', v) })),
+      ...[1, 1.08, 1.15, 1.5, 2, 2.5, 3].map((v) => ({ label: v === 1.08 ? '1.08 (default)' : String(v.toFixed(v % 1 ? 2 : 1)).replace(/0$/, ''), checked: cur !== null && Math.abs(cur - v) < 0.01, action: () => fmt('line-height', v) })),
       'sep',
       { label: 'Paragraph settings...', icon: 'paragraph', action: () => paragraphSettings() },
     ];
