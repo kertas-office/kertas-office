@@ -20,6 +20,7 @@ import { paragraphStyles, createStyleFromCursor } from './writer-styles.js';
 import { TABLE_DESIGNS, ensureTableStyle, designPreview } from './writer-table-styles.js';
 import { enablePictureDrag } from './writer-picture-drag.js';
 import { createFormatTools } from './writer-format.js';
+import { createForms } from './writer-forms.js';
 import { fieldsToCitations, citationsToFields } from '../lib/docx-citations.js';
 import { repairDocx } from '../lib/docx-repair.js';
 import { prepareDocx } from '../lib/docx-prepare.js';
@@ -296,6 +297,10 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     { id: 'quote', group: 'Text', label: 'Quote', keys: ['blockquote', 'citation text'], icon: 'quote', hint: 'Quoted passage', run: () => applyStyle('Quote', 'Quote') },
     { id: 'bullets', group: 'Lists', label: 'Bulleted list', keys: ['ul', 'bullet', 'unordered', '-'], icon: 'list', hint: 'A simple list', run: () => makeList('bullet') },
     { id: 'numbers', group: 'Lists', label: 'Numbered list', keys: ['ol', 'ordered', '1.', 'steps'], icon: 'line-numbers', hint: '1, 2, 3', run: () => makeList('ordered') },
+    { id: 'f-text', group: 'Forms', label: 'Text field', keys: ['form', 'field', 'input', 'fill in'], icon: 'field-text', hint: 'A box to type in', run: () => forms.insertField('text') },
+    { id: 'f-check', group: 'Forms', label: 'Tick box field', keys: ['form', 'checkbox field'], icon: 'field-check', hint: 'Click to tick or clear', run: () => forms.insertField('checkbox') },
+    { id: 'f-drop', group: 'Forms', label: 'Dropdown list', keys: ['form', 'select', 'choices', 'combo'], icon: 'field-drop', hint: 'Pick one of your choices', run: () => forms.insertField('dropDownList') },
+    { id: 'f-date', group: 'Forms', label: 'Date picker', keys: ['form', 'calendar', 'date field'], icon: 'calendar', hint: 'Pick a date from a calendar', run: () => forms.insertField('date') },
     { id: 'tick', group: 'Lists', label: 'Tick box', keys: ['checkbox', 'todo', 'checklist', 'task'], icon: 'check-square', hint: 'A ☐ to tick later', run: () => insertTextAtCaret('☐ ') },
     { id: 'table', group: 'Insert', label: 'Table', keys: ['grid', 'rows', 'columns'], icon: 'table', hint: 'Rows and columns', run: () => insertTable() },
     { id: 'picture', group: 'Insert', label: 'Picture', keys: ['image', 'photo', 'img'], icon: 'image', hint: 'From your computer', run: () => insertPicture() },
@@ -400,6 +405,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     return [{ id: 'kertas-text', items: [
       { id: 'k-font', label: 'Font...', icon: icon('font', 16), showWhen: onText, action: () => afterMenu(() => ft.fontDialog()) },
       { id: 'k-paragraph', label: 'Paragraph...', icon: icon('paragraph', 16), showWhen: onText, action: () => afterMenu(() => paragraphSettings()) },
+      { id: 'k-field', label: 'Form field settings...', icon: icon('field-props', 16), showWhen: (ctx) => ctx.trigger === 'click' && !!forms.fieldAtCursor(), action: () => afterMenu(() => forms.fieldSettings()) },
     ] }];
   }
   let lastMenuAt = { x: 200, y: 200 };
@@ -454,6 +460,11 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     snapshot: () => tbc()?.getSnapshot?.()?.commands || {}, lastColor: (k) => lastColors[k], setLastColor: (k, c) => { lastColors[k] = c; },
     onBlock: (fn, b) => onBlock(fn, b), closeContextMenu: () => closeContextMenu(), onChange: () => setTimeout(() => { updateTableTab(); syncHome(); }, 0),
   });
+  const forms = createForms({
+    editor: () => superdoc?.activeEditor, api: () => api(), act: (...a) => act(...a), toast: (...a) => toast(...a),
+    selection: () => selection(), toSelectionTarget: (x) => toSelectionTarget(x), failed: (r) => failed(r),
+  });
+  globalThis.__kertasForms = forms; // for tests
   const ribbon = createRibbon(el.querySelector('[data-ribbon]'), {
     app: 'writer',
     fileMenu,
@@ -547,6 +558,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           big('pgnum', 'hash', 'Page number', () => pageNumbers()),
           menu('hf-options', 'settings', 'Options', () => headerFooterMenu(), 'Different first page, odd and even pages, position, remove'),
         ] },
+        { label: 'Forms', items: [menu('form-field', 'field-text', 'Form field', () => forms.menu(), 'Text field, tick box, dropdown list or date picker that can be filled in')] },
         { label: 'Text', items: [
           big('date', 'calendar', 'Date & time', () => insertDate()),
           menu('symbol', 'omega', 'Symbol', () => symbolMenu()),
@@ -1636,6 +1648,19 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         // picking a menu item also puts the bar away
         menuEl?.addEventListener('click', () => ft.hideBar(), { once: true });
       }, 80);
+    }, true);
+    // Form fields: a click opens a dropdown's choices or a date picker, or ticks a box
+    // (on pointer up: the editor redraws a locked field on pointer down, so no click event follows)
+    let fieldDown = null;
+    body.addEventListener('pointerdown', (e) => { fieldDown = e.button === 0 ? { x: e.clientX, y: e.clientY } : null; }, true);
+    // on the document: the editor may capture the pointer, so the release lands elsewhere
+    document.addEventListener('pointerup', (e) => {
+      const d = fieldDown; fieldDown = null;
+      if (!el.isConnected) return;
+      if (!d || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) return;
+      // after the editor has finished with the click (it can redraw and close menus)
+      const at = { clientX: e.clientX, clientY: e.clientY };
+      setTimeout(() => forms.onClick(at), 60);
     }, true);
     // Ctrl+click (Cmd+click on Mac) follows a link, as in Word
     body.addEventListener('pointerdown', (e) => {
