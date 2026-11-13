@@ -1430,6 +1430,14 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       setZoom(currentZoom() + (wheelAcc < 0 ? 10 : -10));
       wheelAcc = 0;
     }, { passive: false });
+    // The right-click menu closes when the page scrolls, as in Word, instead of floating over other text
+    body.addEventListener('scroll', (e) => {
+      if (e.target?.closest?.('.context-menu')) return; // scrolling the menu's own list
+      const cur = editor();
+      const plugin = cur?.state?.plugins?.find((p) => String(p.key).startsWith('contextMenu$'));
+      if (!plugin || !plugin.getState(cur.state)?.open) return;
+      try { cur.view.dispatch(cur.state.tr.setMeta(plugin, { type: 'close' })); } catch { /* menu already gone */ }
+    }, { capture: true, passive: true });
     // Ctrl+click (Cmd+click on Mac) follows a link, as in Word
     body.addEventListener('pointerdown', (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.button !== 0) return;
