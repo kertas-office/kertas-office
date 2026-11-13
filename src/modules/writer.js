@@ -545,6 +545,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           big('header', 'header', 'Header', () => editFurniture('header'), 'Edit the page header'),
           big('footer', 'footer', 'Footer', () => editFurniture('footer'), 'Edit the page footer'),
           big('pgnum', 'hash', 'Page number', () => pageNumbers()),
+          menu('hf-options', 'settings', 'Options', () => headerFooterMenu(), 'Different first page, odd and even pages, position, remove'),
         ] },
         { label: 'Text', items: [
           big('date', 'calendar', 'Date & time', () => insertDate()),
@@ -1331,9 +1332,12 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     const v = await pageNumberDialog();
     if (!v) return;
     if (v === 'remove') {
+      // the number lives in its own header or footer (see below), so that one is emptied
       await act('Page numbers', () => onSections(async (t) => {
         for (const kind of ['header', 'footer']) {
-          try { api().headerFooters.refs.clear({ target: hfSlot(t, kind) }); } catch { /* none there */ }
+          const slot = (() => { try { return (api().headerFooters.list({}).items || []).find((x) => x.kind === kind && x.variant === 'default' && x.refId && x.section?.sectionId === t.sectionId); } catch { return null; } })();
+          const text = slot ? (() => { try { return api().getText({ in: hfStory(t, kind) }) || ''; } catch { return ''; } })() : '';
+          if (slot && (/^\s*(page\s*)?\d+(\s*of\s*\d+)?\s*$/i.test(text) || !text.trim())) { const r = emptyHeaderFooter(t, kind); if (failed(r)) return r; }
         }
         return { success: true };
       }), 'Page numbers removed');
@@ -1357,6 +1361,53 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       try { api().sections.setTitlePage({ target: t, enabled: !v.first }); } catch { /* fine */ }
       return { success: true };
     }), 'Page numbers added');
+  }
+  /** As in Word, each header (or footer) of a section in use is replaced by an empty one.
+   *  (Only clearing the reference left the old one on screen.) */
+  function emptyHeaderFooter(t, kind) {
+    let slots = [];
+    try { slots = (api().headerFooters.list({}).items || []).filter((x) => x.kind === kind && x.refId && x.section?.sectionId === t.sectionId); } catch { /* none */ }
+    if (!slots.length) slots = [{ variant: 'default' }];
+    for (const { variant } of slots) {
+      try { api().headerFooters.refs.clear({ target: { ...hfSlot(t, kind), variant } }); } catch { /* not there */ }
+      const r = api().insert({ in: { ...hfStory(t, kind), variant }, content: { kind: 'paragraph', paragraph: { inlines: [] } } });
+      if (failed(r)) return r;
+    }
+    return { success: true };
+  }
+  // Header and footer options, for every section of the document
+  function headerFooterMenu() {
+    let first = null;
+    try { first = api().sections.list().items?.[0] || null; } catch { /* no sections */ }
+    const forAll = (label, fn, ok) => act(label, () => onSections(fn), ok);
+    const removeAll = (kind) => forAll(kind === 'header' ? 'Remove header' : 'Remove footer', (t) => emptyHeaderFooter(t, kind), kind === 'header' ? 'Header removed' : 'Footer removed');
+    return [
+      { label: 'Edit header', icon: 'header', action: () => editFurniture('header') },
+      { label: 'Edit footer', icon: 'footer', action: () => editFurniture('footer') },
+      'sep',
+      { label: 'Different first page', checked: !!first?.titlePage, action: () => forAll('Different first page', (t) => api().sections.setTitlePage({ target: t, enabled: !first?.titlePage }), first?.titlePage ? 'The first page uses the same header and footer again' : 'The first page now has its own header and footer') },
+      { label: 'Different odd and even pages', checked: !!first?.oddEvenHeadersFooters, action: () => act('Odd and even pages', () => api().sections.setOddEvenHeadersFooters({ enabled: !first?.oddEvenHeadersFooters }), first?.oddEvenHeadersFooters ? 'Odd and even pages share the header and footer again' : 'Even pages now have their own header and footer') },
+      { label: 'Position...', icon: 'margins', hint: 'Distance from the top and bottom edges of the page', action: () => headerFooterPosition(first) },
+      'sep',
+      { label: 'Remove header', icon: 'trash', action: () => removeAll('header') },
+      { label: 'Remove footer', icon: 'trash', action: () => removeAll('footer') },
+    ];
+  }
+  async function headerFooterPosition(first) {
+    const u = rulerUnit(); const k = u === 'in' ? 1 : 2.54;
+    const m = first?.headerFooterMargins || { header: 0.5, footer: 0.5 };
+    const res = await openDialog({
+      title: 'Header and footer position',
+      description: `Distance from the edge of the page, in ${u === 'in' ? 'inches' : 'centimetres'}.`,
+      width: 420,
+      fields: [
+        { id: 'header', label: 'Header from top', type: 'number', value: Math.round(m.header * k * 100) / 100 },
+        { id: 'footer', label: 'Footer from bottom', type: 'number', value: Math.round(m.footer * k * 100) / 100 },
+      ],
+      validate: (v) => (['header', 'footer'].some((x) => v[x] === null || v[x] < 0 || v[x] / k > 4) ? `Use 0 to ${u === 'in' ? '4 inches' : '10 cm'}` : null),
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Apply', primary: true }],
+    });
+    if (res) await act('Header and footer position', () => onSections((t) => api().sections.setHeaderFooterMargins({ target: t, header: res.values.header / k, footer: res.values.footer / k })));
   }
   async function insertDate() {
     const text = await dateTimeDialog();
