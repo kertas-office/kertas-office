@@ -14,6 +14,7 @@ import { chartXml, parseChartXml, injectCharts, refValues, chartId } from './xls
 import { parseSparklines, sparklinesExtXml, addSparklinesToSheetXml } from './sparklines.js';
 import { injectPivots, readPivots } from './pivot-xlsx.js';
 import { readPageSetup, writePageSetup } from './xlsx-print.js';
+import { writeThreadedComments } from './xlsx-comments.js';
 import { NAMES_RESOURCE, readDefinedNames, writeDefinedNames, readSheetKeep, writeSheetKeep } from './xlsx-keep.js';
 import { AGGREGATES, normSpec, aggLabel, fieldNames } from './pivot.js';
 
@@ -499,6 +500,14 @@ function cellValue(c) {
  * IWorkbookData -> xlsx bytes (Uint8Array).
  * charts: { [sheetId]: [chart model] } written as real Excel charts.
  */
+/** True when the cell holds a note of its own (not a conversation) */
+function hasOwnNote(res, sid, ref) {
+  const m = String(ref || '').toUpperCase().match(/^([A-Z]+)(\d+)$/);
+  if (!m) return false;
+  const col = [...m[1]].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+  return !!res.note?.[sid]?.[+m[2] - 1]?.[col]?.note;
+}
+
 export async function snapshotToXlsx(snapshot, { charts = snapshot.charts || {}, extras = snapshot.extras || {} } = {}) {
   const wb = new ExcelJS.Workbook();
   const props = snapshot.custom?.props || {};
@@ -587,9 +596,12 @@ export async function snapshotToXlsx(snapshot, { charts = snapshot.charts || {},
   const hasNames = Object.keys(names).length > 0;
   const keepSheets = Object.entries(extras.keep || {}).filter(([sid]) => snapshot.sheets[sid]);
   const hasDynamic = Object.keys(dynamicCells).length > 0;
+  // conversations by sheet name; a cell with a note of its own keeps that note as it is
+  const commentSheets = Object.entries(res.comment || {}).filter(([sid, l]) => l?.length && snapshot.sheets[sid])
+    .map(([sid, l]) => [snapshot.sheets[sid].name, l.map((t) => ({ ...t, ownNote: hasOwnNote(res, sid, t.ref) }))]);
   const defaultFont = snapshot.custom?.defaultFont;
   const internalLinks = hasInternalLinks(snapshot);
-  if (!hasDynamic && !patches.length && !chartCount && !sparkSheets.length && !pivots.length && !slicerSheets.length && !hasNames && !keepSheets.length && !defaultFont && !internalLinks && props.creator && props.lastModifiedBy) return new Uint8Array(buf);
+  if (!hasDynamic && !patches.length && !chartCount && !sparkSheets.length && !pivots.length && !slicerSheets.length && !hasNames && !keepSheets.length && !commentSheets.length && !defaultFont && !internalLinks && props.creator && props.lastModifiedBy) return new Uint8Array(buf);
   const zip = await JSZip.loadAsync(buf);
   // ExcelJS writes "Unknown" as the author of a file that has none, and as the last editor
   {
@@ -608,6 +620,10 @@ export async function snapshotToXlsx(snapshot, { charts = snapshot.charts || {},
       const cd = sheetByName[sheetName]?.cellData?.[r]?.[c];
       return cd?.v ?? '';
     });
+  }
+  if (commentSheets.length) {
+    const pathByName = Object.fromEntries((await sheetParts(zip)).map((p) => [p.name, p.path]));
+    await writeThreadedComments(zip, Object.fromEntries(commentSheets), pathByName);
   }
   if (slicerSheets.length) await writeSlicers(zip, Object.fromEntries(slicerSheets.map(([sid, l]) => [snapshot.sheets[sid].name, l])));
   if (sparkSheets.length || pivots.length) {

@@ -22,6 +22,7 @@ import {
   ArrowBigRight, MessageCircle, BringToFront, SendToBack, Ellipsis, Move, LayersPlus, WrapText, AlignLeft, AlignCenter, AlignRight, Bold, Italic, Baseline, PaintbrushVertical, AlignJustify, AArrowUp, AArrowDown, Grid2x2, TableCellsMerge, DollarSign, DecimalsArrowLeft, DecimalsArrowRight, AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, ArrowDownUp, Hexagon, Diamond, TextCursor, BadgeCheck, KeyRound, ScanLine, Languages, Type as TypeIcon,
   PinOff, CircleDot, SquareChevronDown, FileArchive, LetterText, Settings2, SlidersHorizontal, PanelsTopLeft,
   Paperclip,
+  Crop, FlipHorizontal2, FlipVertical2, ArrowRightToLine,
 } from 'lucide';
 
 const ICONS = {
@@ -69,9 +70,18 @@ const ICONS = {
   shapes: Shapes, equation: Radical, quote: TextQuote, mail: Mail, mails: Mails, citation: BookMarked, bibliography: Library,
   'file-out': FileOutput, 'scan-text': ScanTextIcon, 'file-sign': FileSignature, sparkline: TrendingUp, outline: ListTree,
   attach: Paperclip,
+  settings: Settings2, tabs: ArrowRightToLine, crop: Crop, flip: FlipHorizontal2, 'flip-v': FlipVertical2,
   ungroup: Ungroup, fold: FoldVertical, coffee: Coffee, 'heading-1': Heading1, 'heading-2': Heading2, 'heading-3': Heading3, heading: Heading, 'check-square': SquareCheck, unfold: UnfoldVertical, triangle: Triangle, star: Star, 'arrow-shape': ArrowBigRight, callout: MessageCircle, hexagon: Hexagon,
   diamond: Diamond, 'text-box': TextCursor, verified: BadgeCheck, key: KeyRound, 'scan-line': ScanLine, languages: Languages, font: TypeIcon,
 };
+
+// Cell alignment: text lines placed in a box, top/middle/bottom by left/centre/right
+const cellAlignIcon = (v, h) => {
+  const y = { top: 7.5, middle: 11, bottom: 14.5 }[v];
+  const line = (len, dy) => { const x = h === 'left' ? 7 : h === 'right' ? 17 - len : 12 - len / 2; return ['path', { d: `M${x} ${y + dy}h${len}` }]; };
+  return [['rect', { width: '18', height: '18', x: '3', y: '3', rx: '2' }], line(10, 0), line(6, 3)];
+};
+for (const v of ['top', 'middle', 'bottom']) for (const h of ['left', 'center', 'right']) ICONS[`cell-${v}-${h}`] = cellAlignIcon(v, h);
 
 const cache = new Map();
 

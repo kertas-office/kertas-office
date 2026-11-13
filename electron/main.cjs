@@ -10,7 +10,7 @@ const SUPPORTED = ['.docx', '.xlsx', '.csv', '.pdf', '.doc', '.rtf', '.odt', '.x
 const { convertLegacy, findSoffice } = require('./legacy.cjs');
 const { setupUpdates } = require('./updates.cjs');
 const RECENT_FILE = () => path.join(app.getPath('userData'), 'recent.json');
-const MAX_RECENT = 20;
+const MAX_RECENT = 10;
 
 let mainWindow = null;
 let rendererReady = false;
@@ -87,6 +87,14 @@ async function pinRecent(filePath, pinned) {
   if (!r) return false;
   if (pinned) { r.pinned = true; r.pinnedAt = Date.now(); } else { delete r.pinned; delete r.pinnedAt; }
   await writeRecent(list);
+  return true;
+}
+
+async function removeRecent(filePath) {
+  const list = await readRecent();
+  const left = list.filter((r) => r.path !== filePath);
+  if (left.length === list.length) return false;
+  await writeRecent(left);
   return true;
 }
 
@@ -392,6 +400,7 @@ async function makeDefaultApp() {
 ipcMain.handle('kertas:default-app', () => makeDefaultApp());
 
 ipcMain.handle('kertas:pin-recent', (_e, { path: p, pinned }) => pinRecent(p, !!pinned));
+ipcMain.handle('kertas:remove-recent', (_e, p) => removeRecent(String(p || '')));
 ipcMain.handle('kertas:recent', async () => {
   const list = await readRecent();
   const checked = await Promise.all(list.map(async (r) => {

@@ -5,6 +5,59 @@ const path = require('path');
 const root = path.join(__dirname, '..', 'node_modules');
 const patches = [
   {
+    // superdoc 1.47.2: a turned picture that is also a link was squeezed to the width of its
+    // link box (max-width 100%), which is the turned width, and drew square and out of place
+    dir: 'superdoc/dist/chunks',
+    find: /img\.style\.zIndex = "1";(\s*)img\.style\.maxWidth = "100%";/,
+    replace: 'img.style.zIndex = "1";$1if (!run.rotation) img.style.maxWidth = "100%"; // kertas: turned picture keeps its width',
+    marker: 'kertas: turned picture keeps its width',
+  },
+  {
+    // superdoc 1.47.2: the size a picture takes in its line was cached by its width and height
+    // only, so rotating it (or changing its spacing) kept the old line height until the text changed
+    dir: 'superdoc/dist/chunks',
+    find: /return `img:\$\{imgRun\.src\.slice\(0, 50\)\}:\$\{imgRun\.width\}x\$\{imgRun\.height\}`;/,
+    replace: 'return `img:${imgRun.src.slice(0, 50)}:${imgRun.width}x${imgRun.height}:${imgRun.rotation ?? 0}:${imgRun.distTop ?? 0}:${imgRun.distBottom ?? 0}:${imgRun.distLeft ?? 0}:${imgRun.distRight ?? 0}`; // kertas: picture size key',
+    marker: 'kertas: picture size key',
+  },
+  {
+    // superdoc 1.47.2: a picture in line with text that was rotated kept its unrotated space, so
+    // after turning it 90 degrees it covered the lines above and below. Word makes room for the
+    // turned picture; this does the same by growing (or shrinking) its margins to the turned size.
+    dir: 'superdoc/dist/chunks',
+    find: /if \(rotation !== void 0\) run\$1\.rotation = rotation;/,
+    replace: 'if (rotation !== void 0) { run$$1.rotation = rotation; const ra = rotation * Math.PI / 180, rc = Math.abs(Math.cos(ra)), rs = Math.abs(Math.sin(ra)), ex = (width * rc + height * rs - width) / 2, ey = (width * rs + height * rc - height) / 2; if (Math.abs(ex) > 0.5 || Math.abs(ey) > 0.5) { run$$1.distLeft = (run$$1.distLeft ?? 0) + ex; run$$1.distRight = (run$$1.distRight ?? 0) + ex; run$$1.distTop = (run$$1.distTop ?? 0) + ey; run$$1.distBottom = (run$$1.distBottom ?? 0) + ey; } } // kertas: room for a turned picture',
+    marker: 'kertas: room for a turned picture',
+  },
+  {
+    // superdoc 1.47.2: a rotated picture was shifted away from its place (often off the page),
+    // because it was moved for a corner-based rotation while turning around its centre. Word
+    // turns a picture around its centre and leaves it where it is.
+    dir: 'superdoc/dist/chunks',
+    find: /transforms\.push\(`translate\(\$\{-newTopLeftX\}px, \$\{-newTopLeftY\}px\)`\);/g,
+    replace: '/* kertas: rotate in place */',
+    marker: 'kertas: rotate in place',
+  },
+  {
+    // superdoc 1.47.2: right-clicking inside selected table cells moved the cursor and dropped the
+    // cell selection, because "inside the selection" only looked at the first and last positions.
+    // Word keeps the selected cells, so the menu's actions apply to them.
+    dir: 'superdoc/dist/chunks',
+    find: /isClickInsideSelection = hit\.pos >= from\$1 && hit\.pos <= to;/,
+    replace: 'isClickInsideSelection = hit.pos >= from$$1 && hit.pos <= to; if (!isClickInsideSelection && typeof editorState.selection.forEachCell === "function") editorState.selection.forEachCell((n, p) => { if (hit.pos >= p && hit.pos <= p + n.nodeSize) isClickInsideSelection = true; }); // kertas: right-click in selected cells',
+    marker: 'kertas: right-click in selected cells',
+  },
+  {
+    // superdoc 1.47.2: once a table had any border set directly (one edge, say), the borders from
+    // its table style were dropped, so setting the top border erased all the others. Word keeps the
+    // style's borders and overrides only the edges that were set. The converter already merges the
+    // two; this uses that merged set whenever the table has direct borders.
+    dir: 'superdoc/dist/chunks',
+    find: /const getBorderSource = \(\) => \{(\s*)if \(node\.attrs\?\.borders && /,
+    replace: 'const getBorderSource = () => {$1if (node.attrs?.tableProperties?.borders && hydratedTableStyle?.borders && typeof hydratedTableStyle.borders === "object") return { borders: hydratedTableStyle.borders, unit: "eighthPoints" }; // kertas: style and direct table borders$1if (node.attrs?.borders && ',
+    marker: 'kertas: style and direct table borders',
+  },
+  {
     // superdoc 1.47.2: "single" line spacing was always 1.15 times the font size. Word uses
     // each font's own line height instead: 1.22 for Calibri, 1.17 for Cambria, 1.15 for Arial
     // and Times New Roman. Calibri text (most Word files) came out about 6% tighter than in

@@ -6,12 +6,15 @@
 // each keyed by sheet id. ExcelJS covers most of them; filter criteria are
 // not written by ExcelJS, so they are patched into the sheet XML with JSZip.
 
+import { COMMENT_RES, readThreadedComments, threadAsNote } from './xlsx-comments.js';
+
 export const RES = {
   filter: 'SHEET_FILTER_PLUGIN',
   cf: 'SHEET_CONDITIONAL_FORMATTING_PLUGIN',
   dv: 'SHEET_DATA_VALIDATION_PLUGIN',
   note: 'SHEET_NOTE_PLUGIN',
   drawing: 'SHEET_DRAWING_PLUGIN',
+  comment: COMMENT_RES,
 };
 
 const EMU = 9525; // EMUs per pixel
@@ -510,16 +513,17 @@ export async function readDrawing(zip, drawingPath) {
   return out;
 }
 
-/** Notes (legacy comments) of a sheet part: [{ row, col, text }] */
+/** Notes (legacy comments) of a sheet part: [{ row, col, text, author }] */
 export async function readNotes(zip, commentsPath) {
   const xml = await zip.file(commentsPath)?.async('string');
   if (!xml) return [];
+  const authors = [...xml.matchAll(/<(?:\w+:)?author\b[^>]*>([\s\S]*?)<\/(?:\w+:)?author>/g)].map((m) => xmlUnesc(m[1]));
   const out = [];
   for (const m of xml.matchAll(/<(?:\w+:)?comment\b([^>]*)>([\s\S]*?)<\/(?:\w+:)?comment>/g)) {
     const r = parseA1(attr(m[1], 'ref') || '');
     if (!r) continue;
     const text = [...m[2].matchAll(/<(?:\w+:)?t\b[^>]*>([\s\S]*?)<\/(?:\w+:)?t>/g)].map((t) => xmlUnesc(t[1])).join('');
-    out.push({ row: r.startRow, col: r.startColumn, text });
+    out.push({ row: r.startRow, col: r.startColumn, text, author: authors[Number(attr(m[1], 'authorId'))] || '' });
   }
   return out;
 }
@@ -614,7 +618,7 @@ export function cellLink(cd) {
  * Also mutates sh (filter rows, link cells).
  */
 export async function importFeatures({ wb, zip, sheets, unitId }) {
-  const res = { filter: {}, cf: {}, dv: {}, note: {}, drawing: {} };
+  const res = { filter: {}, cf: {}, dv: {}, note: {}, drawing: {}, comment: {} };
   const charts = {}; // sheet id -> chart anchors, returned for the chart reader
   const parts = zip ? await sheetParts(zip) : [];
   const idByName = Object.fromEntries(sheets.map(({ ws, sh }) => [ws.name, sh.id]));
@@ -673,8 +677,10 @@ export async function importFeatures({ wb, zip, sheets, unitId }) {
 
     // Notes, read straight from the comments part
     const notes = {};
+    const standIns = new Set(); // notes Excel writes beside a conversation (author "tc={id}")
     for (const rel of sheetRels.filter((x) => x.type === 'comments' && !x.external)) {
       for (const n of await readNotes(zip, rel.target)) {
+        if (/^tc=/.test(n.author)) { standIns.add(`${n.row}:${n.col}`); continue; }
         if (n.text) (notes[n.row] ||= {})[n.col] = { id: rid('n'), row: n.row, col: n.col, note: n.text, width: 220, height: 92, show: false };
       }
     }
@@ -699,6 +705,17 @@ export async function importFeatures({ wb, zip, sheets, unitId }) {
         }
       });
     });
+    // Conversations (Excel 365 threaded comments). The stand-in notes above are skipped; a file
+    // with conversations and no stand-ins (some other apps) is fine too
+    if (part && zip) {
+      const threads = await readThreadedComments(zip, part.path).catch(() => []);
+      if (threads.length) res.comment[id] = threads;
+    }
+    if (standIns.size === 0 && res.comment[id]) {
+      // older Excel files mark the stand-in by its text instead
+      for (const t of res.comment[id]) { const r = parseA1(t.ref); const n = r && notes[r.startRow]?.[r.startColumn]; if (n && /^\[Threaded comment\]/.test(n.note)) delete notes[r.startRow][r.startColumn]; }
+      for (const r of Object.keys(notes)) if (!Object.keys(notes[r]).length) delete notes[r];
+    }
     if (Object.keys(notes).length) res.note[id] = notes;
 
     // Pictures (and, from the same drawing parts, charts)
@@ -785,6 +802,13 @@ export function exportSheetFeatures({ wb, ws, sh, res, sheetNameById }) {
     for (const r of dv.ranges || []) ws.dataValidations.add(rangeToA1(clampRange(r, sh)), rule);
   }
 
+  // Conversations: written as notes for older readers (Excel 365 hides these and shows the
+  // conversation, see xlsx-comments.js); a cell's own note wins
+  for (const t of res.comment?.[id] || []) {
+    const r = parseA1(t.ref);
+    if (!r || res.note?.[id]?.[r.startRow]?.[r.startColumn]?.note) continue;
+    ws.getCell(r.startRow + 1, r.startColumn + 1).note = threadAsNote(t);
+  }
   // Notes
   for (const [r, cols] of Object.entries(res.note?.[id] || {})) {
     for (const [c, n] of Object.entries(cols || {})) {
