@@ -26,3 +26,16 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: node website/build.mjs
+
+  # End to end: the built app driven in Chromium and in Electron, with the saved files
+  # checked by independent readers. Separate from "test" so that check stays quick.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: xvfb-run -a npm run e2e
