@@ -84,7 +84,7 @@ export function openPalette(anchor, it, onPick) {
     closeOpenMenu();
     onPick(c);
   } });
-  m.classList.add('palette');
+  m.classList.add('color-palette');
   return m;
 }
 
