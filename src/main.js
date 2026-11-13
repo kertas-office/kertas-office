@@ -614,19 +614,37 @@ if (!isDesktop) {
 
 // Drag and drop
 let dragDepth = 0;
-window.addEventListener('dragenter', (e) => { if (e.dataTransfer?.types.includes('Files')) { dragDepth++; document.body.classList.add('dragging'); } });
+// Pictures dragged over a Writer document are inserted by the editor where they land,
+// so the "Drop files to open" cover stays away for them
+const picturesIntoWriter = (dt) => active()?.kind === 'writer' && dt?.items?.length
+  && [...dt.items].every((i) => i.kind === 'file' && i.type.startsWith('image/'));
+const endDrag = () => { dragDepth = 0; document.body.classList.remove('dragging'); };
+window.addEventListener('dragenter', (e) => {
+  if (!e.dataTransfer?.types.includes('Files') || picturesIntoWriter(e.dataTransfer)) return;
+  dragDepth++;
+  document.body.classList.add('dragging');
+});
+window.addEventListener('dragend', endDrag, true);
 window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
 window.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+// Handled on the way down, before the editors: they would otherwise take (and stop)
+// any drop on a page. Only pictures dropped on a Writer document go on to the editor.
 window.addEventListener('drop', async (e) => {
+  endDrag();
   if (!e.dataTransfer?.files?.length) return;
+  if (picturesIntoWriter(e.dataTransfer)) {
+    // the editor puts it where it lands on the page, or at the cursor when dropped elsewhere;
+    // the browser itself must never take it and leave the app to show the picture
+    if (!e.target.closest?.('.superdoc-page')) e.preventDefault();
+    return;
+  }
   e.preventDefault();
-  dragDepth = 0;
-  document.body.classList.remove('dragging');
+  e.stopPropagation();
   const records = await Promise.all([...e.dataTransfer.files].map(async (f) => ({
     name: f.name, path: window.kertasNative?.pathForFile?.(f) || null, data: new Uint8Array(await f.arrayBuffer()),
   })));
   await openFileRecords(records);
-});
+}, true);
 
 // Test hook so automated checks can drive the app
 window.__kertas = { openTab, saveTab, tabs, closeTab, activate, exportPdf, runCommand, applyTheme, snapshotAll, newFromTemplate, openTemplates };
