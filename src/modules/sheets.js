@@ -1,7 +1,8 @@
 // Sheets: spreadsheet editing powered by Univer (Apache-2.0),
 // with our own ExcelJS bridge for .xlsx and .csv files, an Excel-style
 // ribbon, live charts and PivotTable summaries.
-import { createUniver, LocaleType, mergeLocales } from '@univerjs/presets';
+import { createUniver, LocaleType, mergeLocales, UserManagerService } from '@univerjs/presets';
+import { userName } from '../lib/user.js';
 import { FormulaDataModel } from '@univerjs/engine-formula';
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
 import sheetsEnUS from '@univerjs/preset-sheets-core/locales/en-US';
@@ -27,6 +28,26 @@ import '@univerjs/preset-sheets-hyper-link/lib/index.css';
 import { UniverSheetsNotePreset } from '@univerjs/preset-sheets-note';
 import noteEnUS from '@univerjs/preset-sheets-note/locales/en-US';
 import '@univerjs/preset-sheets-note/lib/index.css';
+import { UniverSheetsThreadCommentPreset } from '@univerjs/preset-sheets-thread-comment';
+import commentEnUS from '@univerjs/preset-sheets-thread-comment/locales/en-US';
+import '@univerjs/preset-sheets-thread-comment/lib/index.css';
+// Kertas's wording for the comments panel (plain English, as in Writer)
+// (locales merge one level deep only, so the rest of each part's wording is carried over)
+const COMMENT_WORDS = {
+  'thread-comment-ui': {
+    ...commentEnUS['thread-comment-ui'],
+    panel: { title: 'Comments', empty: 'No comments yet. Select a cell and choose New comment.', reset: 'Show all', addComment: 'New comment', solved: 'Resolved' },
+    editor: { placeholder: 'Write a comment or a reply', reply: 'Post', cancel: 'Cancel', save: 'Save' },
+    item: { markResolved: 'Resolve', markUnresolved: 'Reopen', edit: 'Edit', delete: 'Delete comment', more: 'More' },
+    filter: { sheet: { all: 'All sheets', current: 'This sheet' }, status: { all: 'All comments', resolved: 'Resolved', unsolved: 'Open', concernMe: 'Mentioning me' } },
+  },
+  'sheets-thread-comment-ui': {
+    ...commentEnUS['sheets-thread-comment-ui'],
+    panel: { title: 'Comments' },
+    permission: { commentErr: 'Comments are switched off in this workbook.' },
+    menu: { addComment: 'New comment', openComments: 'Show comments', commentManagement: 'Comments' },
+  },
+};
 import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
 import drawingEnUS from '@univerjs/preset-sheets-drawing/locales/en-US';
 import '@univerjs/preset-sheets-drawing/lib/index.css';
@@ -127,7 +148,7 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
   const { univer, univerAPI } = createUniver({
     locale: LocaleType.EN_US,
     darkMode: !!dark,
-    locales: { [LocaleType.EN_US]: mergeLocales(sheetsEnUS, filterEnUS, sortEnUS, cfEnUS, dvEnUS, findEnUS, linkEnUS, noteEnUS, drawingEnUS) },
+    locales: { [LocaleType.EN_US]: mergeLocales(sheetsEnUS, filterEnUS, sortEnUS, cfEnUS, dvEnUS, findEnUS, linkEnUS, noteEnUS, drawingEnUS, commentEnUS, COMMENT_WORDS) },
     presets: [
       UniverSheetsCorePreset({
         container: host,
@@ -145,11 +166,21 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
       UniverSheetsFindReplacePreset(),
       UniverSheetsHyperLinkPreset(),
       UniverSheetsNotePreset(),
+      UniverSheetsThreadCommentPreset(),
       UniverSheetsDrawingPreset(),
     ],
   });
 
+  // Comments carry the name set in File > Options (the same as in Writer)
+  const setCommentUser = () => {
+    // only the name changes: the user's id is what gives permission to comment
+    try { const um = univer.__getInjector().get(UserManagerService); um.setCurrentUser({ ...um.getCurrentUser(), name: userName() || 'Me' }); } catch (e) { console.warn('comment user', e); }
+  };
+  setCommentUser();
+  window.addEventListener('kertas-user', setCommentUser);
+
   const workbook = univerAPI.createWorkbook(snapshot);
+  setCommentUser(); // the workbook sets up its own user; the name goes on again
 
   // Formulas are worked out in the background. Saving (or printing) waits for that to finish, so
   // the file never holds answers from before the last edit: Kertas and other apps show the
@@ -170,6 +201,20 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
     try { await univerAPI.getFormula().onCalculationResultApplied(5000); } catch { /* applied already */ }
   }
   const markDirty = () => setDirty(true);
+  // Comments made here carry the user's id only; the saved file gets the name from File > Options
+  function nameCommentAuthors(snap) {
+    const r = (snap.resources || []).find((x) => x.name === 'SHEET_UNIVER_THREAD_COMMENT_PLUGIN');
+    if (!r?.data) return snap;
+    let me = null;
+    try { me = univer.__getInjector().get(UserManagerService).getCurrentUser(); } catch { /* no user */ }
+    try {
+      const data = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+      const fill = (c) => { if (!c.authorName) c.authorName = c.personId && me && c.personId === me.userID ? (userName() || me.name || 'Me') : 'Someone'; (c.children || []).forEach(fill); };
+      Object.values(data || {}).forEach((list) => (list || []).forEach(fill));
+      r.data = JSON.stringify(data);
+    } catch (e) { console.warn('comment authors', e); }
+    return snap;
+  }
 
   // ---------------------------------------------------------------- helpers
   const ws = () => workbook.getActiveSheet();
@@ -1278,6 +1323,10 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
       },
       {
         id: 'review', label: 'Review', groups: [
+          { label: 'Comments', items: [
+            { id: 'comment-new', kind: 'big', icon: 'messages', label: 'New comment', title: 'Start a conversation about the selected cell; others can reply', action: () => run('sheet.operation.show-comment-modal') },
+            { id: 'comment-panel', kind: 'big', icon: 'reply', label: 'Show comments', title: 'All comments in this workbook, with replies and resolved threads', action: () => run('sheet.operation.toggle-comment-panel') },
+          ] },
           { label: 'Notes', items: [
             { id: 'note2', kind: 'big', icon: 'note-add', label: 'New note', action: () => run('sheet.operation.add-note-popup') },
           ] },
@@ -1425,7 +1474,7 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
         // a CSV that was opened without a byte-order mark is saved without one; new ones get it, for Excel
         return new TextEncoder().encode(`${snap.custom?.csvBom === false ? '' : '\uFEFF'}${snapshotToCsv(snap, activeId)}`);
       }
-      return snapshotToXlsx(snap, { charts: models, extras: ex });
+      return snapshotToXlsx(nameCommentAuthors(snap), { charts: models, extras: ex });
     },
     async exportPdf() {
       try { await workbook.endEditingAsync?.(true); } catch { /* not editing */ }
