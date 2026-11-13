@@ -31,6 +31,16 @@ const version = crypto.createHash('sha1')
   .update(fs.readFileSync(path.join(root, 'assets/site.js')))
   .digest('hex').slice(0, 8);
 
+// Images keep their names, so each link carries a short hash of the file: a changed image
+// (a new logo, new screenshots) is fetched again instead of coming from the browser's cache.
+const imgHash = {};
+const versionImages = (html) => html.replace(/\/img\/([\w.-]+\.(?:svg|png|webp|ico|jpg))(?![\w?])/g, (m, name) => {
+  const file = path.join(root, 'img', name);
+  if (!fs.existsSync(file)) return m;
+  imgHash[name] ??= crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex').slice(0, 8);
+  return `/img/${name}?v=${imgHash[name]}`;
+});
+
 const layout = fs.readFileSync(path.join(root, 'src/layout.html'), 'utf8');
 const pages = [];
 for (const file of fs.readdirSync(path.join(root, 'src/pages')).filter((f) => f.endsWith('.html'))) {
@@ -38,9 +48,9 @@ for (const file of fs.readdirSync(path.join(root, 'src/pages')).filter((f) => f.
   const meta = {};
   const body = src.replace(/^\s*<!--\s*(\w+):\s*([\s\S]*?)\s*-->\s*$/gm, (_, k, v) => { meta[k] = v; return ''; }).trim();
   for (const k of ['title', 'description', 'path', 'nav']) if (!meta[k]) throw new Error(`${file}: missing <!-- ${k}: ... -->`);
-  const html = layout
+  const html = versionImages(layout
     .replace(/\{\{cur:(\w+)\}\}/g, (_, n) => (n === meta.nav ? ' aria-current="page"' : ''))
-    .replace(/\{\{(\w+)\}\}/g, (_, k) => (k === 'content' ? body : k === 'version' ? version : (meta[k] ?? '').replace(/"/g, '&quot;')));
+    .replace(/\{\{(\w+)\}\}/g, (_, k) => (k === 'content' ? body : k === 'version' ? version : (meta[k] ?? '').replace(/"/g, '&quot;'))));
   if (/\u2014/.test(html)) throw new Error(`${file}: contains an em dash`);
   fs.writeFileSync(path.join(out, file), html);
   if (meta.path !== '/404') pages.push(meta.path);
