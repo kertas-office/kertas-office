@@ -32,14 +32,17 @@ import { UniverSheetsThreadCommentPreset } from '@univerjs/preset-sheets-thread-
 import commentEnUS from '@univerjs/preset-sheets-thread-comment/locales/en-US';
 import '@univerjs/preset-sheets-thread-comment/lib/index.css';
 // Kertas's wording for the comments panel (plain English, as in Writer)
+// (locales merge one level deep only, so the rest of each part's wording is carried over)
 const COMMENT_WORDS = {
   'thread-comment-ui': {
+    ...commentEnUS['thread-comment-ui'],
     panel: { title: 'Comments', empty: 'No comments yet. Select a cell and choose New comment.', reset: 'Show all', addComment: 'New comment', solved: 'Resolved' },
     editor: { placeholder: 'Write a comment or a reply', reply: 'Post', cancel: 'Cancel', save: 'Save' },
     item: { markResolved: 'Resolve', markUnresolved: 'Reopen', edit: 'Edit', delete: 'Delete comment', more: 'More' },
     filter: { sheet: { all: 'All sheets', current: 'This sheet' }, status: { all: 'All comments', resolved: 'Resolved', unsolved: 'Open', concernMe: 'Mentioning me' } },
   },
   'sheets-thread-comment-ui': {
+    ...commentEnUS['sheets-thread-comment-ui'],
     panel: { title: 'Comments' },
     permission: { commentErr: 'Comments are switched off in this workbook.' },
     menu: { addComment: 'New comment', openComments: 'Show comments', commentManagement: 'Comments' },
