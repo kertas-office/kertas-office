@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('kertasNative', {
   recent: () => ipcRenderer.invoke('kertas:recent'),
   makeDefaultApp: () => ipcRenderer.invoke('kertas:default-app'),
   pinRecent: (p, pinned) => ipcRenderer.invoke('kertas:pin-recent', { path: p, pinned }),
+  removeRecent: (p) => ipcRenderer.invoke('kertas:remove-recent', p),
   confirm: (opts) => ipcRenderer.invoke('kertas:confirm', opts),
   showInFolder: (p) => ipcRenderer.invoke('kertas:show-in-folder', p),
   onOpenPath: (cb) => ipcRenderer.on('kertas:open-path', (_e, p) => cb(p)),

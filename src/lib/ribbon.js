@@ -64,7 +64,7 @@ const PALETTES = {
   highlight: ['#FFFF00', '#00FF00', '#00FFFF', '#FF00FF', '#0000FF', '#FF0000', '#000080', '#008080', '#008000', '#800080', '#800000', '#808000', '#808080', '#C0C0C0', '#000000'],
 };
 /** Colour palette menu for a swatch button */
-function openPalette(anchor, it, onPick) {
+export function openPalette(anchor, it, onPick) {
   const colours = PALETTES[it.palette || 'text'] || PALETTES.text;
   const grid = [...colours, 'none', 'more'];
   const html = grid.map((c) => (c === 'none' ? `<span class="pal-none">${icon('close', 14)}</span>` : c === 'more' ? `<span class="pal-more">${icon('palette', 15)}</span>` : `<span class="pal-chip" style="background:${c}"></span>`));
@@ -84,7 +84,7 @@ function openPalette(anchor, it, onPick) {
     closeOpenMenu();
     onPick(c);
   } });
-  m.classList.add('palette');
+  m.classList.add('color-palette');
   return m;
 }
 
@@ -118,7 +118,7 @@ function iconCellHtml(it) {
     : `<button class="rb-ico" data-id="${it.id}" title="${title}">${icon(it.icon, 16)}</button>`;
 }
 function groupRowsHtml(rows) {
-  return `<div class="rb-rows">${rows.map((r) => `<div class="rb-row2">${r.map(rowItemHtml).join('')}</div>`).join('')}</div>`;
+  return `<div class="rb-rows${rows.length === 3 ? ' rb-rows3' : ''}">${rows.map((r) => `<div class="rb-row2">${r.map(rowItemHtml).join('')}</div>`).join('')}</div>`;
 }
 function groupItemsHtml(items) {
   const icons = items.filter(isIconOnly);

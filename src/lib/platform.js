@@ -87,6 +87,12 @@ export async function pinRecent(path, pinned) {
   return false;
 }
 
+/** Takes a file off the recent list (the file itself is not touched) */
+export async function removeRecent(path) {
+  if (native?.removeRecent) return native.removeRecent(path);
+  return false;
+}
+
 /** Returns index of the chosen button */
 export async function confirmDialog(message, detail, buttons) {
   if (native) return native.confirm({ message, detail, buttons });

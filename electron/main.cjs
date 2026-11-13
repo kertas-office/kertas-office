@@ -10,7 +10,7 @@ const SUPPORTED = ['.docx', '.xlsx', '.csv', '.pdf', '.doc', '.rtf', '.odt', '.x
 const { convertLegacy, findSoffice } = require('./legacy.cjs');
 const { setupUpdates } = require('./updates.cjs');
 const RECENT_FILE = () => path.join(app.getPath('userData'), 'recent.json');
-const MAX_RECENT = 20;
+const MAX_RECENT = 10;
 
 let mainWindow = null;
 let rendererReady = false;
@@ -90,11 +90,29 @@ async function pinRecent(filePath, pinned) {
   return true;
 }
 
+async function removeRecent(filePath) {
+  const list = await readRecent();
+  const left = list.filter((r) => r.path !== filePath);
+  if (left.length === list.length) return false;
+  await writeRecent(left);
+  return true;
+}
+
 async function loadFile(filePath) {
   assertReadable(filePath);
   const data = await fs.readFile(filePath);
   grant(filePath);
   await addRecent(filePath);
+  return { path: filePath, name: path.basename(filePath), data: new Uint8Array(data) };
+}
+
+// A file the person picked in an Open dialog shown by this process. The dialog itself limits
+// the types (pictures, certificates, documents), so any of them may be read; only documents
+// are granted for saving and listed in Recent.
+async function loadPicked(filePath) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('This file cannot be opened');
+  const data = await fs.readFile(filePath);
+  if (RECENT_TYPES.test(filePath)) { grant(filePath); await addRecent(filePath); }
   return { path: filePath, name: path.basename(filePath), data: new Uint8Array(data) };
 }
 
@@ -252,7 +270,7 @@ ipcMain.handle('kertas:open-dialog', async (_e, { kind = 'all', multi = true } =
     filters: OPEN_FILTERS[kind] || FILTERS[kind] || OPEN_FILTERS.all,
   });
   if (res.canceled) return [];
-  return Promise.all(res.filePaths.map(loadFile));
+  return Promise.all(res.filePaths.map(loadPicked));
 });
 
 ipcMain.handle('kertas:read-path', async (_e, filePath) => loadFile(filePath));
@@ -371,6 +389,7 @@ async function makeDefaultApp() {
 ipcMain.handle('kertas:default-app', () => makeDefaultApp());
 
 ipcMain.handle('kertas:pin-recent', (_e, { path: p, pinned }) => pinRecent(p, !!pinned));
+ipcMain.handle('kertas:remove-recent', (_e, p) => removeRecent(String(p || '')));
 ipcMain.handle('kertas:recent', async () => {
   const list = await readRecent();
   const checked = await Promise.all(list.map(async (r) => {
