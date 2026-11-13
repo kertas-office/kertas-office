@@ -7,6 +7,7 @@ function boxAt(x, y) {
   // The painted text can sit under the editor's own overlays, so look through every layer
   const span = document.elementsFromPoint(x, y).find((el) => el.matches?.('span[data-pm-start]'));
   if (!span || !/[☐☑☒]/.test(span.textContent)) return null;
+  if (span.dataset.sdtId) return null; // a Word tick box form field toggles itself (writer-forms)
   let before = 0;
   const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
   const glyph = document.createRange();
