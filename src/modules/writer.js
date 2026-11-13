@@ -357,6 +357,25 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     ];
     return [{ id: 'kertas-picture', items: opts.map(([key, label, ic, fn]) => ({ id: `k-wrap-${key}`, label, icon: icon(ic, 16), showWhen: onPicture, action: (ed, ctx) => choose(ed, ctx, fn) })) }];
   }
+  // Icons for SuperDoc's built-in right-click items, by label
+  const MENU_ICONS = {
+    'insert link': 'link', 'insert table': 'table', 'edit table': 'table-style', 'cell background': 'fill',
+    cut: 'cut', copy: 'copy', paste: 'paste', 'insert row above': 'insert-row', 'insert row below': 'insert-row',
+    'insert column left': 'insert-col', 'insert column right': 'insert-col', 'delete row': 'trash', 'delete column': 'trash',
+    'delete table': 'trash', 'merge cells': 'merge', 'split cell': 'split', 'remove borders': 'border', 'fix tables': 'magic',
+    'create section': 'section', 'remove section': 'trash', 'accept change': 'check', 'reject change': 'close',
+    'update table of contents': 'refresh', 'restart numbering': 'list-ol', 'continue numbering': 'list-ol',
+    'decrease indent': 'indent-less', 'increase indent': 'indent-more',
+  };
+  function restyleMenuIcons() {
+    for (const it of el.querySelectorAll('.context-menu .context-menu-item')) {
+      const span = it.querySelector('.context-menu-item-icon');
+      if (!span || span.querySelector('svg[data-k]')) continue;
+      const name = MENU_ICONS[(it.textContent || '').trim().toLowerCase()];
+      if (!name) continue;
+      span.innerHTML = icon(name, 15).replace('<svg', '<svg data-k="1"');
+    }
+  }
   // Right-click in a table: the everyday table actions, as in Word, without going to the Table tab
   function tableMenuItems() {
     const inTable = (ctx) => ctx.trigger === 'click' && (!!ctx.isInTable || !!ctx.isCellSelection);
@@ -1438,6 +1457,8 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       if (!plugin || !plugin.getState(cur.state)?.open) return;
       try { cur.view.dispatch(cur.state.tr.setMeta(plugin, { type: 'close' })); } catch { /* menu already gone */ }
     }, { capture: true, passive: true });
+    // SuperDoc's own right-click items get Kertas's line icons, to match the slash menu
+    body.addEventListener('contextmenu', () => { setTimeout(restyleMenuIcons, 0); setTimeout(restyleMenuIcons, 80); }, true);
     // Ctrl+click (Cmd+click on Mac) follows a link, as in Word
     body.addEventListener('pointerdown', (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.button !== 0) return;

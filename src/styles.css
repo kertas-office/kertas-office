@@ -1034,7 +1034,28 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 .zoom-ctl input[type=range]::-webkit-slider-thumb {
   -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 1px solid rgba(15, 23, 42, .18); box-shadow: 0 1px 3px rgba(15, 23, 42, .25);
 }
+/* SuperDoc's right-click menu, in the same style as the slash command menu */
+.writer-body .context-menu {
+  width: 248px; padding: 6px; border-radius: 14px; border: 1px solid var(--line);
+  background: var(--surface-solid); color: var(--ink); font-size: 13px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, .22), 0 2px 6px rgba(15, 23, 42, .08);
+  animation: slash-in .12s ease-out;
+}
+.writer-body .context-menu-items { max-height: min(420px, 60vh); }
+.writer-body .context-menu-item { padding: 4px 6px; border-radius: 9px; color: var(--ink); transition: background-color .1s; }
+.writer-body .context-menu-item:hover { background: var(--hover, rgba(100, 116, 139, .1)); }
+.writer-body .context-menu-item.sd-is-selected { background: var(--accent-soft, rgba(99, 102, 241, .12)); color: var(--ink); fill: currentColor; }
+.writer-body .context-menu-item-icon {
+  flex: none; display: grid; place-items: center; width: 28px; height: 28px; margin-right: 10px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--surface, rgba(255, 255, 255, .7)); color: var(--accent);
+}
+.writer-body .context-menu .context-menu-item-icon svg { width: 15px; height: 15px; fill: currentColor; }
+.writer-body .context-menu-divider { background: var(--line); margin: 5px 6px; }
+.writer-body .context-menu-search-header { border-radius: 8px; border-bottom: 0; margin-bottom: 4px; background: var(--hover, rgba(100, 116, 139, .08)); color: var(--muted); }
+.writer-body .context-menu-search-header-value { color: var(--ink); }
+.writer-body .context-menu-empty { color: var(--muted); }
 /* Kertas's line icons in SuperDoc's right-click menu */
+.context-menu .context-menu-item-icon svg[data-k], .context-menu .context-menu-item-icon svg[data-k] *,
 .context-menu-custom-item .context-menu-item-icon svg, .context-menu-custom-item .context-menu-item-icon svg * { fill: none !important; stroke: currentColor; }
 /* Sheets: Univer sizes its formula bar in rem, which comes out at 22.75px with the app's 13px
    base and leaves the formula drawn low until it is clicked. 30px keeps it still and centred.
