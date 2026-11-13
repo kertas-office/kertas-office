@@ -597,7 +597,7 @@ select.dlg-input { height: 36px; }
 .menu-header { padding: 8px 10px 4px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 650; }
 .menu-item small { display: block; font-size: 11px; color: var(--muted); margin-top: 1px; }
 .menu-item.disabled { opacity: .45; }
-.menu.symbol-grid { display: grid; grid-template-columns: repeat(10, 34px); gap: 2px; min-width: 0; padding: 8px; }
+.menu.symbol-grid { display: grid; grid-template-columns: repeat(10, 34px); gap: 2px; min-width: 0; padding: 8px; width: max-content; }
 .menu.symbol-grid .sym {
   width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent;
   font-size: 17px; color: var(--ink); font-family: "Segoe UI Symbol", "Noto Sans Symbols", var(--font);
@@ -960,6 +960,9 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 .rb-rows { display: grid; grid-template-rows: 28px 28px; gap: 6px; align-content: center; height: var(--tile-h); padding: 0 2px; }
 .rb-row2 { display: flex; align-items: center; gap: 2px; }
 .rb-row2 .rb-ico { width: 28px; }
+/* three rows of small buttons (the cell alignment grid) */
+.rb-rows.rb-rows3 { grid-template-rows: repeat(3, 20px); gap: 2px; }
+.rb-rows3 .rb-ico { width: 26px; height: 20px; }
 .rb-rowsep { width: 1px; height: 18px; background: var(--line); margin: 0 3px; }
 .rb-combo {
   display: inline-flex; align-items: stretch; height: 26px; margin-right: 4px; border: 1px solid var(--line-strong); border-radius: 7px;

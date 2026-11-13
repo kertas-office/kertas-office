@@ -118,7 +118,7 @@ function iconCellHtml(it) {
     : `<button class="rb-ico" data-id="${it.id}" title="${title}">${icon(it.icon, 16)}</button>`;
 }
 function groupRowsHtml(rows) {
-  return `<div class="rb-rows">${rows.map((r) => `<div class="rb-row2">${r.map(rowItemHtml).join('')}</div>`).join('')}</div>`;
+  return `<div class="rb-rows${rows.length === 3 ? ' rb-rows3' : ''}">${rows.map((r) => `<div class="rb-row2">${r.map(rowItemHtml).join('')}</div>`).join('')}</div>`;
 }
 function groupItemsHtml(items) {
   const icons = items.filter(isIconOnly);

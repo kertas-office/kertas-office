@@ -71,6 +71,14 @@ const ICONS = {
   diamond: Diamond, 'text-box': TextCursor, verified: BadgeCheck, key: KeyRound, 'scan-line': ScanLine, languages: Languages, font: TypeIcon,
 };
 
+// Cell alignment: text lines placed in a box, top/middle/bottom by left/centre/right
+const cellAlignIcon = (v, h) => {
+  const y = { top: 7.5, middle: 11, bottom: 14.5 }[v];
+  const line = (len, dy) => { const x = h === 'left' ? 7 : h === 'right' ? 17 - len : 12 - len / 2; return ['path', { d: `M${x} ${y + dy}h${len}` }]; };
+  return [['rect', { width: '18', height: '18', x: '3', y: '3', rx: '2' }], line(10, 0), line(6, 3)];
+};
+for (const v of ['top', 'middle', 'bottom']) for (const h of ['left', 'center', 'right']) ICONS[`cell-${v}-${h}`] = cellAlignIcon(v, h);
+
 const cache = new Map();
 
 /** Returns an SVG string for the named icon */

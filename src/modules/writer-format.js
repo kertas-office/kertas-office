@@ -60,14 +60,73 @@ export function createFormatTools(deps) {
     const order = [];
     ctx.table.node.descendants((n, pos) => { if (n.type.name === 'tableCell' || n.type.name === 'tableHeader') { order.push(ctx.table.pos + 1 + pos); return false; } return true; });
     const all = api().tables.getCells({ nodeId })?.cells || [];
-    const picked = [];
-    sel.forEachCell((_n, pos) => { const i = order.indexOf(pos); if (i >= 0 && all[i]) picked.push(all[i]); });
+    const picked = []; const positions = [];
+    sel.forEachCell((_n, pos) => { const i = order.indexOf(pos); if (i >= 0 && all[i]) { picked.push(all[i]); positions.push(pos); } });
     if (!picked.length) return null;
     const r0 = Math.min(...picked.map((c) => c.rowIndex));
     const r1 = Math.max(...picked.map((c) => c.rowIndex + (c.rowspan || 1) - 1));
     const c0 = Math.min(...picked.map((c) => c.columnIndex));
     const c1 = Math.max(...picked.map((c) => c.columnIndex + (c.colspan || 1) - 1));
-    return { nodeId, cells: picked, r0, r1, c0, c1 };
+    return { nodeId, cells: picked, positions, r0, r1, c0, c1 };
+  }
+  /** The selected cells, or else the cell with the cursor */
+  function targetCells() {
+    const block = selectedCells();
+    if (block) return block;
+    const ed = editor();
+    const ctx = tableContext(ed);
+    const nodeId = ctx && tableNodeId(ed, api);
+    if (!nodeId) return null;
+    const order = [];
+    ctx.table.node.descendants((n, pos) => { if (n.type.name === 'tableCell' || n.type.name === 'tableHeader') { order.push(ctx.table.pos + 1 + pos); return false; } return true; });
+    const i = order.indexOf(ctx.cell.pos);
+    const cell = (api().tables.getCells({ nodeId })?.cells || [])[i];
+    return cell ? { nodeId, cells: [cell], positions: [ctx.cell.pos] } : null;
+  }
+
+  // ---- cell alignment: top, middle or bottom, and left, centre or right
+  const ALIGN_V = ['top', 'middle', 'bottom'];
+  const ALIGN_H = ['left', 'center', 'right'];
+  const alignLabel = (v, h) => `${{ top: 'Top', middle: 'Middle', bottom: 'Bottom' }[v]} ${{ left: 'left', center: 'centre', right: 'right' }[h]}`;
+  async function alignCells(v, h) {
+    const t = targetCells();
+    if (!t) { toast('Click in a table first', true); return; }
+    const ed = editor();
+    // the paragraphs in those cells, read before anything changes
+    const paras = [];
+    for (const pos of t.positions) {
+      ed.state.doc.nodeAt(pos)?.descendants((n) => { if (!n.isTextblock) return true; const id = n.attrs?.paraId || n.attrs?.sdBlockId; if (id && !paras.includes(id)) paras.push(id); return false; });
+    }
+    await act('Cell alignment', async () => {
+      let r = { success: true };
+      for (const c of t.cells) { r = await api().tables.setCellProperties({ nodeId: c.nodeId, verticalAlign: v === 'middle' ? 'center' : v }); if (r?.success === false) return r; }
+      for (const nodeId of paras) {
+        r = await deps.onBlock((target) => api().format.paragraph.setAlignment({ target, alignment: h }), { kind: 'block', nodeType: 'paragraph', nodeId });
+        if (r?.success === false) return r;
+      }
+      return r;
+    });
+    deps.onChange?.();
+  }
+  /** Which of the nine alignments the cell with the cursor has */
+  function currentAlign() {
+    const ctx = tableContext(editor());
+    if (!ctx) return null;
+    const va = ctx.cell.node.attrs?.verticalAlign;
+    const v = va === 'center' ? 'middle' : va === 'bottom' ? 'bottom' : 'top';
+    // the paragraph's own alignment (the toolbar's value can lag behind the cursor)
+    const $f = editor().state.selection.$from;
+    let ha = 'left';
+    for (let d = $f.depth; d > 0; d--) { const n = $f.node(d); if (n.isTextblock) { ha = n.attrs?.paragraphProperties?.justification || 'left'; break; } }
+    const h = ha === 'center' ? 'center' : ha === 'right' ? 'right' : 'left';
+    return { v, h };
+  }
+  /** The nine alignments as a 3 by 3 picker, opened from the right-click menu */
+  function alignPickerAt(x, y) {
+    const keys = []; const html = []; const titles = [];
+    for (const v of ALIGN_V) for (const h of ALIGN_H) { keys.push(`${v}|${h}`); html.push(icon(`cell-${v}-${h}`, 20)); titles.push(alignLabel(v, h)); }
+    const m = openMenu(anchorAt(x, y), { grid: keys, html, titles, columns: 3, cell: 38, onPick: (k) => { closeOpenMenu(); const [v, h] = k.split('|'); alignCells(v, h); } });
+    m.classList.add('cell-align-picker');
   }
 
   /** Which edges of one cell a target touches, inside the selected block of cells */
@@ -411,6 +470,7 @@ export function createFormatTools(deps) {
   function designAt(x, y) { deps.designMenu(anchorAt(x, y)); }
 
   return {
+    alignCells, currentAlign, alignPickerAt, alignLabel, ALIGN_V, ALIGN_H,
     applyBorder, bordersMenu, lineMenu, bordersDialog, penColor, setPenColor,
     rowHeightDialog, cellMarginsDialog, fontDialog, showBar, hideBar, designAt, selectedCells,
   };

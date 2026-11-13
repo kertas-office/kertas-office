@@ -420,6 +420,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         item('split', 'Split cell', 'split', run('Split cell', 'splitCell')),
       ] },
       { id: 'kertas-table-format', items: [
+        item('align', 'Cell alignment...', 'cell-middle-center', () => afterMenu(() => ft.alignPickerAt(lastMenuAt.x, lastMenuAt.y))),
         item('design', 'Table design...', 'table-style', () => afterMenu(() => ft.designAt(lastMenuAt.x, lastMenuAt.y))),
         item('borders', 'Borders and shading...', 'border', () => afterMenu(() => ft.bordersDialog())),
         item('row-height', 'Row height...', 'rows', () => afterMenu(() => ft.rowHeightDialog())),
@@ -440,7 +441,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     fonts: () => kFonts.options.map((o) => o.label), designMenu: (a) => designMenu(a), runProp: (k) => selectionRunProp(k),
     textSelection: () => textSelection(), toSelectionTarget: (x) => toSelectionTarget(x), rulerUnit: () => rulerUnit(),
     snapshot: () => tbc()?.getSnapshot?.()?.commands || {}, lastColor: (k) => lastColors[k], setLastColor: (k, c) => { lastColors[k] = c; },
-    closeContextMenu: () => closeContextMenu(), onChange: () => setTimeout(() => { updateTableTab(); syncHome(); }, 0),
+    onBlock: (fn, b) => onBlock(fn, b), closeContextMenu: () => closeContextMenu(), onChange: () => setTimeout(() => { updateTableTab(); syncHome(); }, 0),
   });
   const ribbon = createRibbon(el.querySelector('[data-ribbon]'), {
     app: 'writer',
@@ -693,6 +694,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           big('t-merge', 'merge', 'Merge cells', () => tcmd('Merge cells', 'mergeCells'), 'Select several cells first'),
           big('t-split', 'split', 'Split cell', () => tcmd('Split cell', 'splitCell')),
         ] },
+        { label: 'Alignment', rows: ['top', 'middle', 'bottom'].map((v) => ['left', 'center', 'right'].map((h) => small(`t-al-${v}-${h}`, `cell-${v}-${h}`, '', () => ft.alignCells(v, h), `Align ${ft.alignLabel(v, h).toLowerCase()}`))) },
         { label: 'Size', items: [
           small('t-dist-rows', 'rows', 'Distribute rows', () => tapi('Distribute rows', (id) => api().tables.distributeRows({ nodeId: id }))),
           small('t-dist-cols', 'columns', 'Distribute columns', () => tapi('Distribute columns', (id) => api().tables.distributeColumns({ nodeId: id }))),
@@ -1604,7 +1606,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     if (pic && picKey !== lastPicKey) ribbon.activateTab('picture');
     lastPicKey = picKey;
     if (pic) syncPictureTab(pic);
-    if (inside) syncTableLook();
+    if (inside) { syncTableLook(); syncCellAlign(); }
   }
   // ---- tables: selecting, designs, style options
   function cellPositions() {
@@ -1637,6 +1639,10 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     const list = TABLE_DESIGNS;
     const m = openMenu(anchor, { grid: list.map((d) => d.id), html: list.map(designPreview), titles: list.map((d) => d.name), columns: 4, cell: 84, onPick: (id) => { closeOpenMenu(); applyDesign(list.find((d) => d.id === id)); } });
     m.classList.add('table-designs');
+  }
+  function syncCellAlign() {
+    const cur = ft.currentAlign();
+    for (const v of ft.ALIGN_V) for (const h of ft.ALIGN_H) ribbon.setOn(`t-al-${v}-${h}`, !!cur && cur.v === v && cur.h === h);
   }
   const LOOK = { 't-opt-header': 'headerRow', 't-opt-banded': 'bandedRows', 't-opt-first': 'firstColumn', 't-opt-total': 'lastRow' };
   let tableLook = {};
