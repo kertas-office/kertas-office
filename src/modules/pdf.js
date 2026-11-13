@@ -3,7 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFDocument } from '@cantoo/pdf-lib';
 import { buildPdf, listFormFields, imagesToPdf } from '../lib/pdf-ops.js';
-import { openFiles, saveMany, saveFile } from '../lib/platform.js';
+import { openFiles, saveMany, saveFile, saveAnyFile } from '../lib/platform.js';
 import { extractPages as extractTextPages, pdfToDocx, pdfToSnapshot, fontInfo } from '../lib/pdf-convert.js';
 import { findFont, cssStack } from '../lib/font-catalog.js';
 import { snapshotToXlsx } from '../lib/xlsx-bridge.js';
@@ -77,12 +77,14 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     <div class="pdf-layout">
       <aside class="pdf-side">
         <div class="side-tabs">
-          <button class="on" data-side="pages">${icon('grid', 14)}Pages</button>
-          <button data-side="outline">${icon('bookmark', 14)}Bookmarks</button>
-          <button data-side="layers">${icon('layers', 14)}Layers</button>
+          <button class="on" data-side="pages" title="Pages">${icon('grid', 14)}<span>Pages</span></button>
+          <button data-side="outline" title="Bookmarks">${icon('bookmark', 14)}<span>Bookmarks</span></button>
+          <button data-side="layers" title="Layers">${icon('layers', 14)}<span>Layers</span></button>
+          <button data-side="attach" title="Files attached to this PDF">${icon('attach', 14)}<span>Files</span></button>
         </div>
         <div class="pdf-thumbs"></div>
         <div class="pdf-outline" hidden></div>
+        <div class="pdf-attach" hidden></div>
       </aside>
       <div class="pdf-pages" tabindex="0"></div>
     </div>`;
@@ -126,6 +128,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
           toolBtn('image', 'image', 'Image'),
           { id: 'e-blank', kind: 'big', icon: 'file-plus', label: 'Blank page', title: 'Insert a blank page after this one', action: () => insertBlank() },
           { id: 'e-pdf', kind: 'big', icon: 'merge', label: 'Insert PDF', action: () => mergeFiles() },
+          { id: 'e-attach', kind: 'big', icon: 'attach', label: 'Attach file', title: 'Attach any file to this PDF (it travels inside the PDF)', action: () => attachFiles() },
         ] },
         { label: 'Page design', items: [
           { id: 'e-watermark', kind: 'big', icon: 'droplet', label: 'Watermark', action: () => editWatermark() },
@@ -246,6 +249,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   const sideEl = el.querySelector('.pdf-side');
   const thumbsEl = el.querySelector('.pdf-thumbs');
   const outlineEl = el.querySelector('.pdf-outline');
+  const attachEl = el.querySelector('.pdf-attach');
 
   // ---------------------------------------------------------------- state
   const sources = {};      // id -> { bytes, doc (pdfjs), password }
@@ -262,6 +266,10 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   let disposed = false;
   let findQuery = '';
   let currentPage = 0;
+  // A page picked in the thumbnails (or just moved, rotated or deleted) stays current until
+  // the person scrolls the pages themselves: a short last page may never reach the line
+  // that marks the current page while scrolling
+  let pickedPage = null;
   let keySeq = 0;
   // document-level settings
   let security = null;     // { userPassword, ownerPassword, permissions, restrict }
@@ -271,6 +279,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   let fieldShading = true;
   let outline = [];        // [{ title, src, index, children }]
   let outlineTouched = false;
+  let attachments = [];    // files attached to the PDF: [{ name, data, description }]
   const forms = {};        // srcId -> fields (from listFormFields)
   const formValues = {};   // srcId -> { name: value }
   const formInitial = {};
@@ -1311,6 +1320,8 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     sideEl.querySelectorAll('[data-side]').forEach((x) => x.classList.toggle('on', x === b));
     thumbsEl.hidden = b.dataset.side !== 'pages';
     outlineEl.hidden = b.dataset.side !== 'outline';
+    attachEl.hidden = b.dataset.side !== 'attach';
+    if (b.dataset.side === 'attach') renderAttachments();
     objects.panel.hidden = b.dataset.side !== 'layers';
     objects.renderPanel();
   });
@@ -1345,7 +1356,14 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     if (!wrap) return;
     const i = pages.findIndex((p) => p.key === wrap.dataset.key);
     const op = e.target.closest('[data-op]')?.dataset.op;
-    if (!op) { pagesEl.querySelector(`.pdf-page[data-key="${wrap.dataset.key}"]`)?.scrollIntoView({ behavior: 'smooth' }); return; }
+    if (!op) {
+      // the picked page is the current one at once, not when the smooth scroll gets there
+      // (Delete or Rotate pressed straight after acted on the page that was in view before)
+      pickedPage = i;
+      updatePageInfo();
+      pagesEl.querySelector(`.pdf-page[data-key="${wrap.dataset.key}"]`)?.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
     await pageOp(op, i);
   });
 
@@ -1406,6 +1424,58 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     else if (b._item.index !== null) goToSourcePage(b._item.src, b._item.index);
   });
 
+  // ---------------------------------------------------------------- attached files
+  try {
+    // pdf.js lists the files by name and hands over each one's bytes on request
+    const doc = sources[main.id].doc;
+    const found = await doc.getAttachments();
+    const list = found instanceof Map ? [...found] : Object.entries(found || {});
+    for (const [id, a] of list) {
+      const data = a.content || await doc.getAttachmentContent?.(id).catch(() => null);
+      if (data?.length) attachments.push({ name: a.filename || id || 'attachment', data, description: a.description || '' });
+    }
+  } catch (err) { console.warn('attachments', err); }
+  const sizeText = (n) => (n < 1024 ? `${n} bytes` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+  const OPENABLE = /\.(pdf|docx|doc|rtf|odt|xlsx|xlsm|xls|ods|csv)$/i;
+  function renderAttachments() {
+    attachEl.innerHTML = `
+      <div class="att-head"><button class="chip" data-att-add>${icon('plus', 13)}Attach file</button></div>
+      ${attachments.length ? attachments.map((a, i) => `
+        <div class="att-row" data-i="${i}">
+          <div class="att-ic">${icon('attach', 16)}</div>
+          <div class="att-text"><strong title="${esc(a.name)}">${esc(a.name)}</strong><span>${sizeText(a.data.length)}${a.description ? ` · ${esc(a.description)}` : ''}</span></div>
+          <div class="att-ops">
+            ${OPENABLE.test(a.name) ? `<button data-att="open" title="Open in Kertas">${icon('open', 14)}</button>` : ''}
+            <button data-att="save" title="Save a copy">${icon('save', 14)}</button>
+            <button data-att="del" title="Remove from the PDF">${icon('trash', 14)}</button>
+          </div>
+        </div>`).join('') : `<div class="empty small">${icon('attach', 22)}<br>No attached files.<br>Attach spreadsheets, documents or pictures to send them inside this PDF.</div>`}`;
+  }
+  attachEl.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-att-add]')) { attachFiles(); return; }
+    const op = e.target.closest('[data-att]')?.dataset.att;
+    const i = Number(e.target.closest('.att-row')?.dataset.i);
+    const a = attachments[i];
+    if (!op || !a) return;
+    if (op === 'open') openDocument?.({ name: a.name, data: a.data.slice() });
+    if (op === 'save') { const r = await saveAnyFile({ data: a.data, name: a.name }).catch((err) => { toast(String(err.message || err), true); return null; }); if (r) toast(`Saved ${r.name}`); }
+    if (op === 'del') { attachments.splice(i, 1); changed(); renderAttachments(); toast(`${a.name} will be removed when you save`); }
+  });
+  async function attachFiles() {
+    const files = await openFiles('any', true);
+    if (!files?.length) return;
+    const big = files.find((f) => f.data.length > 100 * 1048576);
+    if (big) { toast(`${big.name} is over 100 MB; attach a smaller file`, true); return; }
+    for (const f of files) {
+      const same = attachments.findIndex((a) => a.name === f.name);
+      if (same >= 0) attachments[same] = { ...attachments[same], data: f.data };
+      else attachments.push({ name: f.name, data: f.data, description: '' });
+    }
+    changed();
+    sideEl.querySelector('[data-side="attach"]').click();
+    toast(files.length === 1 ? `${files[0].name} attached` : `${files.length} files attached`);
+  }
+
   async function addBookmark() {
     const p = pages[currentPage];
     if (!p) return;
@@ -1438,9 +1508,11 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     }
     undoStack.length = 0; // page edits are not undoable in this version
     changed();
+    pickedPage = focus;
     await layout();
     await renderThumbs();
     pagesEl.querySelectorAll('.pdf-page')[focus]?.scrollIntoView({ block: 'start' });
+    updatePageInfo();
   }
 
   async function insertBlank() {
@@ -1771,11 +1843,21 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   }
 
   // ---------------------------------------------------------------- page info
+  // a page picked in the thumbnails stays current until the person scrolls the pages
+  for (const ev of ['wheel', 'touchstart', 'keydown']) pagesEl.addEventListener(ev, () => { pickedPage = null; }, { passive: true });
+  // working on a page makes it the current one, even one that cannot scroll up to the line
+  pagesEl.addEventListener('pointerdown', (e) => {
+    const div = e.target.closest?.('.pdf-page');
+    const i = div ? [...pagesEl.querySelectorAll('.pdf-page')].indexOf(div) : -1;
+    pickedPage = i >= 0 ? i : null;
+    updatePageInfo();
+  }, { passive: true });
   function updatePageInfo() {
     const top = pagesEl.scrollTop + pagesEl.clientHeight / 3;
     const divs = [...pagesEl.querySelectorAll('.pdf-page')];
     let current = 0;
     divs.forEach((d, i) => { if (d.offsetTop <= top) current = i; });
+    if (pickedPage !== null && pickedPage < divs.length) current = pickedPage;
     ribbon.setLabel('pageinfo', `Page ${current + 1} / ${pages.length}`);
     if (current !== currentPage || pages.length !== updatePageInfo.last) setStatus(`${pages.length} page${pages.length === 1 ? '' : 's'}`);
     updatePageInfo.last = pages.length;
@@ -1838,6 +1920,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
       formValues, flattenForms,
       watermark, headerFooter: headerFooter ? { ...headerFooter, file: name } : null,
       outline: outlineFor(subset),
+      attachments: attachments.map((a) => ({ name: a.name, data: a.data, description: a.description })),
       layers: objects.saveSpec(),
       encrypt: security && (security.userPassword || security.ownerPassword) ? security : null,
       ...extra,
@@ -1878,6 +1961,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   const bits = [`${pages.length} page${pages.length === 1 ? '' : 's'}`];
   if (forms[main.id]) bits.push(`${forms[main.id].length} form field${forms[main.id].length === 1 ? '' : 's'}`);
   if (outline.length) bits.push('bookmarks');
+  if (attachments.length) bits.push(`${attachments.length} attached file${attachments.length === 1 ? '' : 's'}`);
   setStatus(bits.join(' · '));
   if (forms[main.id]) toast('This PDF has a form you can fill in');
 

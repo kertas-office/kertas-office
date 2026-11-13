@@ -1,7 +1,8 @@
 // Sheets: spreadsheet editing powered by Univer (Apache-2.0),
 // with our own ExcelJS bridge for .xlsx and .csv files, an Excel-style
 // ribbon, live charts and PivotTable summaries.
-import { createUniver, LocaleType, mergeLocales } from '@univerjs/presets';
+import { createUniver, LocaleType, mergeLocales, UserManagerService } from '@univerjs/presets';
+import { userName } from '../lib/user.js';
 import { FormulaDataModel } from '@univerjs/engine-formula';
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
 import sheetsEnUS from '@univerjs/preset-sheets-core/locales/en-US';
@@ -27,6 +28,26 @@ import '@univerjs/preset-sheets-hyper-link/lib/index.css';
 import { UniverSheetsNotePreset } from '@univerjs/preset-sheets-note';
 import noteEnUS from '@univerjs/preset-sheets-note/locales/en-US';
 import '@univerjs/preset-sheets-note/lib/index.css';
+import { UniverSheetsThreadCommentPreset } from '@univerjs/preset-sheets-thread-comment';
+import commentEnUS from '@univerjs/preset-sheets-thread-comment/locales/en-US';
+import '@univerjs/preset-sheets-thread-comment/lib/index.css';
+// Kertas's wording for the comments panel (plain English, as in Writer)
+// (locales merge one level deep only, so the rest of each part's wording is carried over)
+const COMMENT_WORDS = {
+  'thread-comment-ui': {
+    ...commentEnUS['thread-comment-ui'],
+    panel: { title: 'Comments', empty: 'No comments yet. Select a cell and choose New comment.', reset: 'Show all', addComment: 'New comment', solved: 'Resolved' },
+    editor: { placeholder: 'Write a comment or a reply', reply: 'Post', cancel: 'Cancel', save: 'Save' },
+    item: { markResolved: 'Resolve', markUnresolved: 'Reopen', edit: 'Edit', delete: 'Delete comment', more: 'More' },
+    filter: { sheet: { all: 'All sheets', current: 'This sheet' }, status: { all: 'All comments', resolved: 'Resolved', unsolved: 'Open', concernMe: 'Mentioning me' } },
+  },
+  'sheets-thread-comment-ui': {
+    ...commentEnUS['sheets-thread-comment-ui'],
+    panel: { title: 'Comments' },
+    permission: { commentErr: 'Comments are switched off in this workbook.' },
+    menu: { addComment: 'New comment', openComments: 'Show comments', commentManagement: 'Comments' },
+  },
+};
 import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
 import drawingEnUS from '@univerjs/preset-sheets-drawing/locales/en-US';
 import '@univerjs/preset-sheets-drawing/lib/index.css';
@@ -45,6 +66,19 @@ import { makeSparklines, SPARK_TYPES, sparkValues, DEFAULT_SPARK } from '../lib/
 import { createSparkLayer } from './sheet-sparklines.js';
 import { createSlicerLayer } from './sheet-slicers.js';
 import { openDialog } from '../lib/dialog.js';
+
+// Kertas's wording for the name box and the named ranges panel
+// (locales merge one level deep only, so the rest of sheets-ui's wording is carried over)
+const NAME_WORDS = {
+  'sheets-ui': { ...sheetsEnUS['sheets-ui'], definedName: {
+    managerTitle: 'Named ranges',
+    managerDescription: 'To name cells: select them, type a name in this box and press Enter. Names can be used in formulas instead of cell addresses.',
+    addButton: 'New name', featureTitle: 'Named ranges', ratioRange: 'Range', ratioFormula: 'Formula', confirm: 'Save', cancel: 'Cancel',
+    scopeWorkbook: 'Whole workbook', inputNamePlaceholder: 'Name (letters, numbers and underscores, no spaces)', inputCommentPlaceholder: 'Comment (optional)',
+    formulaOrRefStringInvalid: 'That is not a cell range or formula', defaultName: 'MyRange', updateButton: 'Save', deleteButton: 'Delete',
+    deleteConfirmText: 'Delete this name? Formulas that use it will show #NAME?.',
+  } },
+};
 import { parseA1 } from '../lib/xlsx-features.js';
 import { createChartLayer, renderChartPng } from './sheet-charts.js';
 import {
@@ -127,7 +161,7 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
   const { univer, univerAPI } = createUniver({
     locale: LocaleType.EN_US,
     darkMode: !!dark,
-    locales: { [LocaleType.EN_US]: mergeLocales(sheetsEnUS, filterEnUS, sortEnUS, cfEnUS, dvEnUS, findEnUS, linkEnUS, noteEnUS, drawingEnUS) },
+    locales: { [LocaleType.EN_US]: mergeLocales(sheetsEnUS, filterEnUS, sortEnUS, cfEnUS, dvEnUS, findEnUS, linkEnUS, noteEnUS, drawingEnUS, commentEnUS, COMMENT_WORDS, NAME_WORDS) },
     presets: [
       UniverSheetsCorePreset({
         container: host,
@@ -145,11 +179,21 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
       UniverSheetsFindReplacePreset(),
       UniverSheetsHyperLinkPreset(),
       UniverSheetsNotePreset(),
+      UniverSheetsThreadCommentPreset(),
       UniverSheetsDrawingPreset(),
     ],
   });
 
+  // Comments carry the name set in File > Options (the same as in Writer)
+  const setCommentUser = () => {
+    // only the name changes: the user's id is what gives permission to comment
+    try { const um = univer.__getInjector().get(UserManagerService); um.setCurrentUser({ ...um.getCurrentUser(), name: userName() || 'Me' }); } catch (e) { console.warn('comment user', e); }
+  };
+  setCommentUser();
+  window.addEventListener('kertas-user', setCommentUser);
+
   const workbook = univerAPI.createWorkbook(snapshot);
+  setCommentUser(); // the workbook sets up its own user; the name goes on again
 
   // Formulas are worked out in the background. Saving (or printing) waits for that to finish, so
   // the file never holds answers from before the last edit: Kertas and other apps show the
@@ -170,6 +214,20 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
     try { await univerAPI.getFormula().onCalculationResultApplied(5000); } catch { /* applied already */ }
   }
   const markDirty = () => setDirty(true);
+  // Comments made here carry the user's id only; the saved file gets the name from File > Options
+  function nameCommentAuthors(snap) {
+    const r = (snap.resources || []).find((x) => x.name === 'SHEET_UNIVER_THREAD_COMMENT_PLUGIN');
+    if (!r?.data) return snap;
+    let me = null;
+    try { me = univer.__getInjector().get(UserManagerService).getCurrentUser(); } catch { /* no user */ }
+    try {
+      const data = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+      const fill = (c) => { if (!c.authorName) c.authorName = c.personId && me && c.personId === me.userID ? (userName() || me.name || 'Me') : 'Someone'; (c.children || []).forEach(fill); };
+      Object.values(data || {}).forEach((list) => (list || []).forEach(fill));
+      r.data = JSON.stringify(data);
+    } catch (e) { console.warn('comment authors', e); }
+    return snap;
+  }
 
   // ---------------------------------------------------------------- helpers
   const ws = () => workbook.getActiveSheet();
@@ -596,6 +654,68 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
         : left < col ? rangeToA1({ startRow: row, startColumn: left, endRow: row, endColumn: col - 1 }) : '';
       r.setValue(`=${fn}(${ref})`);
     });
+  }
+
+  // ---------------------------------------------------------------- named ranges
+  const NAME_RE = /^[A-Za-z_\\][A-Za-z0-9_.\\]{0,254}$/;
+  const looksLikeCell = (n) => /^[A-Za-z]{1,3}\d{1,7}$/.test(n) || /^R\d*C\d*$/i.test(n);
+  async function defineName() {
+    const r = selection();
+    const sheetName = ws().getSheetName();
+    const quoted = /^[A-Za-z_][A-Za-z0-9_.]*$/.test(sheetName) ? sheetName : `'${sheetName.replace(/'/g, "''")}'`;
+    const ref = `${quoted}!${rangeToA1(bounds(r), true)}`;
+    // a label in the cell above or to the left is a good suggestion, as in Excel
+    const b = bounds(r);
+    const textAt = (row, col) => { const x = row >= 0 && col >= 0 ? ws().getRange(row, col).getValue() : ''; return typeof x === 'string' ? x : ''; };
+    const near = textAt(b.startRow - 1, b.startColumn) || textAt(b.startRow, b.startColumn - 1) || (b.endRow > b.startRow ? textAt(b.startRow, b.startColumn) : '');
+    const suggest = String(near || '').trim().replace(/[^A-Za-z0-9_.]+/g, '_').replace(/^(\d)/, '_$1').slice(0, 40);
+    const taken = new Set(workbook.getDefinedNames().map((d) => d.getName().toLowerCase()));
+    const res = await openDialog({
+      title: 'Define name',
+      description: 'A name for cells, to use in formulas, for example =SUM(Sales) instead of =SUM(B2:B20).',
+      width: 460,
+      fields: [
+        { id: 'name', label: 'Name', value: suggest && !looksLikeCell(suggest) ? suggest : '' },
+        { id: 'scope', label: 'Works in', type: 'select', value: 'workbook', options: [{ value: 'workbook', label: 'The whole workbook' }, { value: 'sheet', label: `Only the sheet "${sheetName}"` }] },
+        { id: 'ref', label: 'Refers to', value: `=${ref}` },
+        { id: 'comment', label: 'Comment (optional)', value: '' },
+      ],
+      validate: (v) => {
+        const n = v.name.trim();
+        if (!NAME_RE.test(n)) return 'Start with a letter or _, then letters, numbers, _ or . (no spaces)';
+        if (looksLikeCell(n) || /^(true|false)$/i.test(n)) return 'That looks like a cell address or a value; choose another name';
+        if (taken.has(n.toLowerCase())) return `"${n}" is already a name. Use Name manager to change it.`;
+        if (!v.ref.trim().replace(/^=/, '')) return 'Say which cells (or formula) the name stands for';
+        return null;
+      },
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Define', primary: true }],
+    });
+    if (!res) return;
+    const v = res.values;
+    busy('Define name', () => {
+      let bld = workbook.newDefinedNameBuilder().setName(v.name.trim()).setRef(v.ref.trim().replace(/^=/, ''));
+      if (v.comment.trim()) bld = bld.setComment(v.comment.trim());
+      bld = v.scope === 'sheet' ? bld.setScopeToWorksheet(ws()) : bld.setScopeToWorkbook();
+      workbook.insertDefinedNameBuilder(bld.build());
+      markDirty();
+      toast(`"${v.name.trim()}" now stands for ${v.ref.trim().replace(/^=/, '')}`);
+    });
+  }
+  /** Names to put into the selected cell's formula */
+  function useNameMenu() {
+    const names = workbook.getDefinedNames().filter((d) => !d.isHidden?.()).map((d) => d.getName()).sort((a, b) => a.localeCompare(b));
+    if (!names.length) return [{ label: 'No named ranges yet', icon: 'bookmark', disabled: true }, 'sep', { label: 'Define name...', icon: 'plus', action: () => defineName() }];
+    return [
+      ...names.map((n) => ({ label: n, icon: 'bookmark', action: () => busy('Use name', () => {
+        const r = selection(); const cell = ws().getRange(r.getRow(), r.getColumn());
+        const cur = String(cell.getFormula?.() || '');
+        // into the formula already there (at its end), or a new formula
+        cell.setValue(cur.startsWith('=') ? `${cur}${/[(,+\-*/^&=<>]$/.test(cur) ? '' : '+'}${n}` : `=${n}`);
+        markDirty();
+      }) })),
+      'sep',
+      { label: 'Define name...', icon: 'plus', action: () => defineName() },
+    ];
   }
 
   async function insertFunction(preset) {
@@ -1230,6 +1350,11 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
       },
       {
         id: 'formulas', label: 'Formulas', groups: [
+          { label: 'Named ranges', items: [
+            { id: 'name-define', kind: 'big', icon: 'bookmark', label: 'Define name', title: 'Name the selected cells, to use the name in formulas', action: () => defineName() },
+            { id: 'name-use', kind: 'menu', icon: 'function', label: 'Use in formula', items: () => useNameMenu() },
+            { id: 'name-manager', kind: 'big', icon: 'list', label: 'Name manager', title: 'All named ranges: change, rename or delete them', action: () => run('sidebar.operation.defined-name', { value: 'open' }) },
+          ] },
           { label: 'Function library', items: [
             { id: 'fx2', kind: 'big', icon: 'function', label: 'Insert function', action: () => insertFunction() },
             { id: 'autosum2', kind: 'menu', icon: 'sigma', label: 'AutoSum', items: sumMenu },
@@ -1278,6 +1403,10 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
       },
       {
         id: 'review', label: 'Review', groups: [
+          { label: 'Comments', items: [
+            { id: 'comment-new', kind: 'big', icon: 'messages', label: 'New comment', title: 'Start a conversation about the selected cell; others can reply', action: () => run('sheet.operation.show-comment-modal') },
+            { id: 'comment-panel', kind: 'big', icon: 'reply', label: 'Show comments', title: 'All comments in this workbook, with replies and resolved threads', action: () => run('sheet.operation.toggle-comment-panel') },
+          ] },
           { label: 'Notes', items: [
             { id: 'note2', kind: 'big', icon: 'note-add', label: 'New note', action: () => run('sheet.operation.add-note-popup') },
           ] },
@@ -1425,7 +1554,7 @@ export async function mount(el, { data, name, dark, setDirty, setStatus, toast, 
         // a CSV that was opened without a byte-order mark is saved without one; new ones get it, for Excel
         return new TextEncoder().encode(`${snap.custom?.csvBom === false ? '' : '\uFEFF'}${snapshotToCsv(snap, activeId)}`);
       }
-      return snapshotToXlsx(snap, { charts: models, extras: ex });
+      return snapshotToXlsx(nameCommentAuthors(snap), { charts: models, extras: ex });
     },
     async exportPdf() {
       try { await workbook.endEditingAsync?.(true); } catch { /* not editing */ }

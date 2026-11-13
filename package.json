@@ -21,7 +21,14 @@
     "release": "vite build && electron-builder --config electron-builder.config.cjs --publish always",
     "postinstall": "node scripts/patch-deps.cjs"
   },
-  "keywords": ["office-suite", "docx", "xlsx", "pdf-editor", "electron", "offline"],
+  "keywords": [
+    "office-suite",
+    "docx",
+    "xlsx",
+    "pdf-editor",
+    "electron",
+    "offline"
+  ],
   "bugs": {
     "url": "https://github.com/kertas-office/kertas-office/issues"
   },
@@ -30,6 +37,7 @@
   },
   "license": "AGPL-3.0-or-later",
   "dependencies": {
+    "@univerjs/preset-sheets-thread-comment": "^1.4.0",
     "electron-updater": "^6.8.11",
     "word-extractor": "^1.0.4"
   },
