@@ -96,7 +96,7 @@ Kertas Office stands on excellent open-source projects:
 
 Kertas started as a solo project and is now developed in the open by its community. Bug reports, ideas and pull requests are welcome; files that do not open correctly are especially helpful. Questions go to [Discussions](https://github.com/kertas-office/kertas-office/discussions), and security problems should be [reported privately](https://github.com/kertas-office/kertas-office/security/advisories/new).
 
-Pull requests go to the `develop` branch; `main` only receives tested releases. Please open an issue first for larger changes, run `npm test` before sending a pull request, and keep the interface wording plain and friendly.
+Pull requests go to the `develop` branch; `main` only receives tested releases. Please open an issue first for larger changes, run `npm test` before sending a pull request (and `npm run e2e` for changes to how the apps behave; on Linux run it under `xvfb-run -a`), and keep the interface wording plain and friendly.
 
 ## License
 
