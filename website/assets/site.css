@@ -61,7 +61,7 @@ p { margin: 0; }
 .site-header { position: sticky; top: 0; z-index: 5; background: rgba(255, 255, 255, .88); backdrop-filter: saturate(1.6) blur(14px); -webkit-backdrop-filter: saturate(1.6) blur(14px); border-bottom: 1px solid transparent; transition: border-color .2s; }
 .site-header.scrolled { border-bottom-color: var(--line); }
 .header-row { display: flex; align-items: center; gap: 32px; height: 76px; }
-.brand { white-space: nowrap; display: flex; align-items: center; gap: 10px; color: var(--text); font-family: var(--display); font-weight: 700; font-size: 18px; letter-spacing: -0.01em; }
+.brand { white-space: nowrap; display: flex; align-items: center; gap: 10px; color: var(--text); font-family: var(--display); font-weight: 800; font-size: 18px; letter-spacing: -0.01em; }
 .brand:hover { color: var(--text); }
 .brand img { width: 34px; height: 34px; }
 .nav { display: flex; gap: 28px; font-size: 15px; font-weight: 500; }
