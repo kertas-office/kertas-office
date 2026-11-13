@@ -1,5 +1,5 @@
 // Kertas Office - Electron main process
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol, net, session } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const os = require('os');
@@ -26,11 +26,29 @@ function registerAppProtocol() {
   protocol.handle('app', (req) => {
     const { pathname } = new URL(req.url);
     const target = path.normalize(path.join(DIST, decodeURIComponent(pathname)));
-    if (!target.startsWith(DIST)) return new Response('Not found', { status: 404 });
+    if (target !== DIST && !target.startsWith(DIST + path.sep)) return new Response('Not found', { status: 404 });
     return net.fetch(pathToFileURL(target).toString());
   });
 }
 const pendingOpen = []; // files requested before the window was ready
+
+// ---------- File access guard ----------
+// The renderer shows untrusted documents, so the main process never takes its word for which
+// files it may touch. It may read only document types, and write only to files the person
+// opened or picked in a Save dialog in this session (or that crash recovery restored), and
+// only as the formats Kertas saves. Even a compromised page could not read SSH keys or drop
+// a script into a startup folder.
+const granted = new Set();
+const norm = (p) => path.resolve(String(p));
+const grant = (p) => { if (typeof p === 'string' && p) granted.add(norm(p)); return p; };
+const WRITE_TYPES = /\.(docx|xlsx|csv|pdf)$/i;
+const SAVE_MANY_TYPES = /\.(docx|xlsx|pdf|png|jpe?g)$/i;
+function assertReadable(p) {
+  if (typeof p !== 'string' || !path.isAbsolute(p) || !RECENT_TYPES.test(p)) throw new Error('This file type cannot be opened');
+}
+function assertWritable(p) {
+  if (typeof p !== 'string' || !path.isAbsolute(p) || !WRITE_TYPES.test(p) || !granted.has(norm(p))) throw new Error('Kertas can only save to a file you opened or chose');
+}
 
 function filesFromArgv(argv) {
   return argv.slice(app.isPackaged ? 1 : 2)
@@ -73,7 +91,9 @@ async function pinRecent(filePath, pinned) {
 }
 
 async function loadFile(filePath) {
+  assertReadable(filePath);
   const data = await fs.readFile(filePath);
+  grant(filePath);
   await addRecent(filePath);
   return { path: filePath, name: path.basename(filePath), data: new Uint8Array(data) };
 }
@@ -104,6 +124,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      spellcheck: false, // Kertas has its own offline spell checker; Chromium's can download dictionaries
     },
   });
 
@@ -201,6 +223,9 @@ ipcMain.handle('kertas:preview-pdf', async (_e, { data, name }) => {
     width: 1000, height: 900, title: `Print preview - ${name}`, parent: mainWindow,
     autoHideMenuBar: true, webPreferences: { plugins: true, sandbox: true, contextIsolation: true },
   });
+  // The PDF may come from someone else: its links open in the browser, never in this window
+  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (e, url) => { if (url !== win.webContents.getURL()) e.preventDefault(); });
   win.loadURL(pathToFileURL(file).toString());
   win.on('closed', () => fs.unlink(file).catch(() => {}));
   return true;
@@ -241,10 +266,11 @@ ipcMain.handle('kertas:save-dialog', async (_e, { kind, defaultName }) => {
     defaultPath: defaultName,
     filters: FILTERS[kind] || FILTERS.all,
   });
-  return res.canceled ? null : res.filePath;
+  return res.canceled ? null : grant(res.filePath);
 });
 
 ipcMain.handle('kertas:write-file', async (_e, { path: filePath, data }) => {
+  assertWritable(filePath);
   // Write to a temp file first so a crash mid-save never corrupts the original
   const tmp = `${filePath}.kertas-tmp`;
   await fs.writeFile(tmp, Buffer.from(data));
@@ -259,9 +285,12 @@ ipcMain.handle('kertas:save-many', async (_e, files) => {
   if (res.canceled || !res.filePaths[0]) return null;
   const folder = res.filePaths[0];
   for (const f of files) {
-    const ext = path.extname(f.name);
-    const base = path.basename(f.name, ext);
-    let target = path.join(folder, f.name);
+    // a bare file name of a type Kertas makes, so nothing lands outside the chosen folder
+    const name = path.basename(String(f.name || '')).replace(/[<>:"|?*\x00-\x1f]/g, '_');
+    if (!name || !SAVE_MANY_TYPES.test(name)) throw new Error('Unexpected file type');
+    const ext = path.extname(name);
+    const base = path.basename(name, ext);
+    let target = path.join(folder, name);
     for (let n = 1; ; n++) {
       try { await fs.access(target); target = path.join(folder, `${base} (${n})${ext}`); } catch { break; }
     }
@@ -302,7 +331,11 @@ ipcMain.handle('kertas:recovery', async (_e, op, args = {}) => {
     const out = [];
     for (const f of await fs.readdir(dir)) {
       if (!f.endsWith('.json')) continue;
-      try { out.push(JSON.parse(await fs.readFile(path.join(dir, f), 'utf8'))); } catch { /* skip broken entries */ }
+      try {
+        const meta = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8'));
+        if (meta.path) grant(meta.path); // a recovered document can be saved back where it was
+        out.push(meta);
+      } catch { /* skip broken entries */ }
     }
     return out.sort((a, b) => b.savedAt - a.savedAt);
   }
@@ -353,7 +386,7 @@ ipcMain.handle('kertas:confirm', async (_e, { message, detail, buttons }) => {
   return res.response;
 });
 
-ipcMain.handle('kertas:show-in-folder', (_e, filePath) => shell.showItemInFolder(filePath));
+ipcMain.handle('kertas:show-in-folder', (_e, filePath) => { if (granted.has(norm(filePath))) shell.showItemInFolder(filePath); });
 
 // ---------- Lifecycle ----------
 if (!app.requestSingleInstanceLock()) {
@@ -361,7 +394,17 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', (_e, argv) => filesFromArgv(argv).forEach(sendOpen));
   app.on('open-file', (e, filePath) => { e.preventDefault(); sendOpen(filePath); }); // macOS
+  // No page gets camera, microphone, location, notifications or similar. The app's own
+  // pages may use the clipboard (Paste buttons); nothing else is ever granted.
+  const trusted = (url) => String(url || '').startsWith('app://kertas/') || (DEV_URL && String(url).startsWith(DEV_URL));
+  const CLIPBOARD = new Set(['clipboard-read', 'clipboard-sanitized-write']);
+  app.on('web-contents-created', (_e, contents) => {
+    contents.on('will-attach-webview', (ev) => ev.preventDefault());
+  });
   app.whenReady().then(() => {
+    session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => cb(CLIPBOARD.has(permission) && trusted(wc.getURL())));
+    session.defaultSession.setPermissionCheckHandler((wc, permission) => CLIPBOARD.has(permission) && trusted(wc?.getURL()));
+    session.defaultSession.setDevicePermissionHandler(() => false);
     registerAppProtocol();
     buildMenu();
     createWindow();
