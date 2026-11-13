@@ -11,6 +11,7 @@ const ACCEPT = {
   pdf: '.pdf',
   image: '.png,.jpg,.jpeg',
   cert: '.p12,.pfx',
+  any: '',
 };
 
 export function kindForName(name = '') {
@@ -37,7 +38,7 @@ export async function openFiles(kind = 'all', multi = true) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = ACCEPT[kind] || ACCEPT.all;
+    input.accept = kind in ACCEPT ? ACCEPT[kind] : ACCEPT.all;
     input.multiple = multi;
     input.onchange = async () => {
       const files = await Promise.all([...input.files].map(async (f) => ({
@@ -70,6 +71,17 @@ export async function saveFile({ data, path, name, kind, saveAs = false }) {
   const blob = new Blob([data]);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return { name, path: null };
+}
+
+/** Saves a file of any type where the person chooses (a PDF's attachment) */
+export async function saveAnyFile({ data, name }) {
+  if (native?.saveAttachment) return native.saveAttachment({ name, data });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([data]));
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);

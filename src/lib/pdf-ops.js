@@ -43,7 +43,7 @@ import { refFromId, createLayer, layerResourceName, beginLayer, endLayer, rewrit
 import {
   pushGraphicsState, popGraphicsState, setTextRenderingMode, TextRenderingMode, setCharacterSqueeze,
   PDFDocument, StandardFonts, rgb, degrees, LineCapStyle, PDFName, PDFHexString, PDFString,
-  PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, PDFOptionList, PDFNumber, PDFArray,
+  PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, PDFOptionList, PDFNumber, PDFArray, PDFDict,
 } from '@cantoo/pdf-lib';
 
 // ------------------------------------------------------------------ small helpers
@@ -614,6 +614,7 @@ export async function buildPdf(sources, pages, opts = {}) {
   }
   if (newFields.length) await addFormFields(out, newFields);
   if (opts.outline) writeOutline(out, opts.outline);
+  if (Array.isArray(opts.attachments)) await writeAttachments(out, opts.attachments);
   if (opts.compress) await compressDocument(out, opts.compress);
   if (opts.encrypt && (opts.encrypt.userPassword || opts.encrypt.ownerPassword)) {
     const { userPassword = '', ownerPassword, permissions } = opts.encrypt;
@@ -622,6 +623,20 @@ export async function buildPdf(sources, pages, opts = {}) {
     out.encrypt({ userPassword, ownerPassword: ownerPassword || userPassword, permissions: permissions || allowAll });
   }
   return out.save({ useObjectStreams: true });
+}
+
+// ------------------------------------------------------------------ attached files
+const MIME_BY_EXT = { pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', csv: 'text/csv', txt: 'text/plain', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', zip: 'application/zip', xml: 'application/xml', json: 'application/json' };
+/** Replaces the document's attached files with the list given ([{ name, data, description }]) */
+async function writeAttachments(doc, list) {
+  const names = doc.catalog.lookup(PDFName.of('Names'));
+  if (names instanceof PDFDict) names.delete(PDFName.of('EmbeddedFiles'));
+  doc.catalog.delete(PDFName.of('AF'));
+  for (const a of list) {
+    if (!a?.data || !a.name) continue;
+    const ext = String(a.name).split('.').pop().toLowerCase();
+    await doc.attach(a.data, a.name, { mimeType: MIME_BY_EXT[ext] || 'application/octet-stream', description: a.description || undefined, creationDate: a.created || new Date(), modificationDate: a.modified || new Date() });
+  }
 }
 
 // ------------------------------------------------------------------ new form fields

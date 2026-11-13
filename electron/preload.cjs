@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('kertasNative', {
   edit: (action) => ipcRenderer.invoke('kertas:edit', action),
   recovery: (op, args) => ipcRenderer.invoke('kertas:recovery', op, args),
   saveMany: (files) => ipcRenderer.invoke('kertas:save-many', files),
+  saveAttachment: (file) => ipcRenderer.invoke('kertas:save-attachment', file),
   previewPdf: (data, name) => ipcRenderer.invoke('kertas:preview-pdf', { data, name }),
   printToPdf: (options) => ipcRenderer.invoke('kertas:print-to-pdf', options),
   setTheme: (dark) => ipcRenderer.send('kertas:theme', dark),
