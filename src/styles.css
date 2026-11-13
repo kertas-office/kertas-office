@@ -1065,12 +1065,14 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 /* Home: pinned and recent files, with a pin button on each row */
 .recent-item { position: relative; border-bottom: 1px solid var(--line); }
 .recent-item:last-child { border-bottom: 0; }
-.recent-item .recent-row { border-bottom: 0; padding-right: 56px; }
-.pin-btn {
-  position: absolute; right: 12px; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; display: grid; place-items: center;
+.recent-item .recent-row { border-bottom: 0; padding-right: 92px; }
+.pin-btn, .rm-btn {
+  position: absolute; right: 46px; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; display: grid; place-items: center;
   border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .12s, background .12s;
 }
-.recent-item:hover .pin-btn, .pin-btn:focus-visible { opacity: 1; }
+.rm-btn { right: 12px; }
+.recent-item:hover .pin-btn, .pin-btn:focus-visible, .recent-item:hover .rm-btn, .rm-btn:focus-visible { opacity: 1; }
+.rm-btn:hover { background: var(--hover); color: var(--ink); }
 .pin-btn:hover { background: var(--accent-soft); color: var(--accent); }
 .recent-item.pinned .pin-btn { opacity: .55; }
 .recent-item.pinned:hover .pin-btn { opacity: 1; }
