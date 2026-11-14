@@ -162,3 +162,18 @@ test('two documents open: each gets what is typed into it (1.0.1 bug)', async ()
   assert.doesNotMatch(first, /typed in second/);
   assert.deepEqual(page.errors, []);
 });
+
+test('symbol fonts: Wingdings and Symbol characters are drawn, and saved unchanged', async () => {
+  await openFixture(page, 'writer', 'symbols.docx');
+  const shown = await page.locator('.view.active .superdoc-page').first().innerText();
+  for (const ch of ['✔', '✘', 'α', '☑', '☑', 'π', 'ρ']) assert.ok(shown.includes(ch), `${ch} is drawn`);
+  assert.ok(!/[-]/.test(shown), 'no private-use codes on screen');
+  // the tick typed as the letter u-umlaut in Wingdings shows as a tick, not as the letter
+  assert.match(shown, /✔ tick typed as a letter/);
+  const xml = await docXml(await saveBytes(page, 'docx'));
+  assert.equal((xml.match(/<w:sym /g) || []).length, 3, 'w:sym elements kept');
+  assert.match(xml, /w:font="Wingdings" w:char="F0FC"/);
+  assert.ok(xml.includes('') && xml.includes('ü'), 'symbol text saved with its original codes');
+  assert.match(xml, /p = 2r/);
+  assert.deepEqual(page.errors, []);
+});
