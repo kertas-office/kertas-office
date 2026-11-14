@@ -477,6 +477,20 @@ function handleTableNode(node, context) {
     replace: 'if (isInRegisteredSurface(event)) return null;$1if (![...this.#layoutSurfaces].some((s) => s?.isConnected && s.getClientRects().length)) return null; // kertas: hidden documents leave keys alone$1const originNode = event.target;',
     marker: 'kertas: hidden documents leave keys alone',
   },
+  {
+    // superdoc 1.47.2: diagonal cell borders (w:tl2br, w:tr2bl) were read but never drawn. They are
+    // now drawn behind the cell's text. The code is in scripts/patches/diagonal-borders.js.
+    dir: 'superdoc/dist/chunks',
+    find: /\nconst renderTableCell = \(deps\) => \{/,
+    replace: () => `\n${fs.readFileSync(path.join(__dirname, 'patches', 'diagonal-borders.js'), 'utf8')}\nconst renderTableCell = (deps) => {`,
+    marker: 'kertas: diagonal cell borders */',
+  },
+  {
+    dir: 'superdoc/dist/chunks',
+    find: /(\tif \(cell\?\.attrs\?\.background\) cellEl\.style\.backgroundColor = cell\.attrs\.background;)/,
+    replace: (m, line) => `${line}\n\tkertasCellDiagonals(doc$1, cellEl, cell, cellWidth ?? cellMeasure.width, rowHeight); // kertas: draw diagonals`,
+    marker: 'kertas: draw diagonals',
+  },
 ];
 
 for (const p of patches) {
