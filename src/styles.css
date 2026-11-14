@@ -253,6 +253,7 @@ kbd {
 .empty { padding: 36px 24px; color: var(--muted); text-align: center; }
 .empty .big-ic { width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; margin: 0 auto 12px; background: var(--accent-soft); color: var(--accent); }
 
+body.dragging.drop-into #views::after { display: none; }
 body.dragging #views::after {
   content: "Drop files to open"; position: absolute; inset: 14px; border: 2px dashed var(--accent); border-radius: var(--r-xl);
   display: grid; place-items: center; background: var(--accent-soft); backdrop-filter: blur(6px);
@@ -1132,6 +1133,7 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 
 /* PDF: files attached to the PDF, in the sidebar */
 .pdf-attach { flex: 1; overflow-y: auto; padding: 8px 8px 14px; }
+.pdf-attach.file-over { outline: 2px dashed var(--accent); outline-offset: -6px; border-radius: var(--r-md, 10px); background: var(--accent-soft); }
 .att-head { display: flex; justify-content: flex-start; padding: 2px 2px 8px; }
 .att-row { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 10px; }
 .att-row:hover { background: var(--hover); }
