@@ -162,3 +162,28 @@ test('two documents open: each gets what is typed into it (1.0.1 bug)', async ()
   assert.doesNotMatch(first, /typed in second/);
   assert.deepEqual(page.errors, []);
 });
+
+test('a merged cell taller than a page breaks across pages; a short one moves whole', async () => {
+  const pagesText = () => page.evaluate(() => [...document.querySelectorAll('.view.active .superdoc-page')].map((p) => p.innerText.replace(/\s+/g, ' ')));
+  // 60 rows joined by one merged cell: the table starts on page 1 and continues on page 2
+  await openFixture(page, 'writer', 'merged-tall.docx');
+  let pages = await pagesText();
+  assert.equal(pages.length, 2, 'two pages, not three');
+  assert.match(pages[0], /One merged cell Item 01/, 'the table starts on page 1');
+  assert.match(pages[1], /^Group Item Value Item \d\d/, 'page 2 repeats the header and goes on');
+  assert.match(pages[1], /Item 60 20/);
+  // the merged cell on page 1 ends with the table, not at the bottom of the page
+  const fit = await page.evaluate(() => {
+    const p1 = document.querySelector('.view.active .superdoc-page');
+    const table = p1.querySelector('.superdoc-table-fragment').getBoundingClientRect();
+    const cells = [...p1.querySelectorAll('.superdoc-table-fragment div')].filter((d) => d.innerText.trim() === 'One merged cell' && d.style.position === 'absolute');
+    return cells.length ? cells[0].getBoundingClientRect().bottom - table.bottom : null;
+  });
+  assert.ok(fit !== null && fit <= 1, `merged cell stays inside the table on page 1 (${fit})`);
+  // six rows joined by a merged cell near the end of a page move to the next page together
+  await openFixture(page, 'writer', 'merged-short.docx');
+  pages = await pagesText();
+  assert.match(pages[1], /Group Item Long merged text that must stay whole: [a-z ]+twelve Row 1 Row 2 Row 3 Row 4 Row 5 Row 6/);
+  assert.doesNotMatch(pages[0], /Row 1/);
+  assert.deepEqual(page.errors, []);
+});
