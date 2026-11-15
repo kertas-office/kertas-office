@@ -95,3 +95,21 @@ test('merge: another PDF is appended from the Organize tab', async () => {
   assert.deepEqual(page.errors, []);
 });
 
+
+test('compare: two versions open as a side-by-side report', async () => {
+  await openFixture(page, 'pdf', 'compare-revised.pdf');
+  await ribbon('home', 'h-compare');
+  await page.locator('.segmented [data-v="revised"]:visible').click();
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Choose the other PDF...' }).click();
+  await (await chooser).setFiles([fixture('compare-original.pdf')]);
+  const title = 'compare-original compared with compare-revised.pdf';
+  await page.waitForFunction((t) => [...window.__kertas.tabs.values()].some((x) => x.name?.endsWith(t) && x.instance), title, { timeout: 20000 });
+  await page.evaluate((t) => { window.__t = [...window.__kertas.tabs.values()].find((x) => x.name?.endsWith(t)); }, title);
+  const pages = await textOf(await saveBytes(page, 'pdf'));
+  assert.equal(pages.length, 4);
+  assert.match(pages[0], /4 changes: 1 replaced, 2 added, 1 removed/);
+  assert.match(pages[1], /Original, page 1.*Revised, page 1/);
+  assert.match(pages[2], /Original: no matching page/);
+  assert.deepEqual(page.errors, []);
+});

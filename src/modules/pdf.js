@@ -5,6 +5,7 @@ import { PDFDocument } from '@cantoo/pdf-lib';
 import { buildPdf, listFormFields, imagesToPdf } from '../lib/pdf-ops.js';
 import { openFiles, saveMany, saveFile, saveAnyFile } from '../lib/platform.js';
 import { extractPages as extractTextPages, pdfToDocx, pdfToSnapshot, fontInfo } from '../lib/pdf-convert.js';
+import { compareText, buildReport } from '../lib/pdf-compare.js';
 import { findFont, cssStack } from '../lib/font-catalog.js';
 import { snapshotToXlsx } from '../lib/xlsx-bridge.js';
 import { OCR_LANGUAGES, recognise, stopOcr } from '../lib/ocr.js';
@@ -115,6 +116,9 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
           { id: 'h-merge', kind: 'big', icon: 'merge', label: 'Merge', title: 'Append pages from other PDFs', action: () => mergeFiles() },
           { id: 'h-split', kind: 'big', icon: 'split', label: 'Split', title: 'Split into several files', action: () => extractPages('split') },
         ] },
+        { label: 'Review', items: [
+          { id: 'h-compare', kind: 'big', icon: 'compare', label: 'Compare', title: 'Compare this PDF with another version and see every change side by side', action: () => compareFiles() },
+        ] },
         { label: 'Zoom', items: [
           { id: 'h-zoom-out', kind: 'big', icon: 'zoom-out', label: 'Zoom out', action: () => zoomBy(1 / 1.2) },
           { id: 'zoom', kind: 'label', label: '100%', caption: 'Zoom' },
@@ -166,6 +170,9 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
         { label: 'Drawing', items: [toolSmall('highlight', 'highlight', 'Area'), toolSmall('rect', 'rect', 'Box'), toolSmall('ellipse', 'ellipse', 'Ellipse'), toolSmall('line', 'line', 'Line'), toolSmall('arrow', 'arrow', 'Arrow'), toolSmall('ink', 'ink', 'Pen')] },
         styleGroup(),
         { label: 'Edit', items: [toolBtn('edit-text', 'text-cursor', 'Edit text'), toolBtn('erase', 'erase', 'Erase'), { id: 'undo', kind: 'big', icon: 'undo', label: 'Undo', title: 'Undo (Ctrl+Z)', action: () => undo() }] },
+        { label: 'Review', items: [
+          { id: 'c-compare', kind: 'big', icon: 'compare', label: 'Compare', title: 'Compare this PDF with another version and see every change side by side', action: () => compareFiles() },
+        ] },
       ] },
       { id: 'fill-sign', label: 'Fill & Sign', groups: [
         { label: 'Fill in', items: [toolBtn('text', 'text', 'Text'), toolBtn('date', 'calendar', 'Date'), toolBtn('check', 'check', 'Tick'), toolBtn('cross', 'close', 'Cross')] },
@@ -1657,6 +1664,51 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     } catch (err) {
       console.error(err);
       toast(`Could not convert: ${err.message || err}`, true);
+    }
+  }
+
+  // ---------------------------------------------------------------- compare
+  async function compareFiles() {
+    const res = await openDialog({
+      title: 'Compare two PDFs',
+      description: 'Choose the other version. You get a report with both versions side by side: removed text boxed in red on the original, added text in green on the revised copy, and a list of every change at the front.',
+      fields: [{ id: 'role', type: 'segmented', label: 'This PDF is the', value: 'original', options: [{ value: 'original', label: 'Original' }, { value: 'revised', label: 'Revised version' }] }],
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Choose the other PDF...', primary: true }],
+    });
+    if (!res || res.action !== 'ok') return;
+    const [other] = await openFiles('pdf', false);
+    if (!other) return;
+    const read = async (bytes) => {
+      const task = pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false, fontExtraProperties: true });
+      try { return await extractTextPages(await task.promise, { Util: pdfjsLib.Util }); } finally { task.destroy(); }
+    };
+    try {
+      setStatus('Reading both PDFs...');
+      const mine = { name, bytes: await buildOutput(pages) };
+      const theirs = { name: other.name, bytes: other.data };
+      mine.pages = await read(mine.bytes);
+      try { theirs.pages = await read(theirs.bytes); } catch (err) {
+        if (err?.name === 'PasswordException') { toast(`${other.name} is locked with a password. Open it, remove the password, then compare again.`, true); return; }
+        throw err;
+      }
+      const [a, b] = res.values.role === 'revised' ? [theirs, mine] : [mine, theirs];
+      const noText = [a, b].find((d) => !d.pages.some((p) => p.items.some((it) => it.str.trim())));
+      if (noText) { toast(`${noText.name} has no text layer, so it looks like a scan. Open it, run Recognise text, save, then compare.`, true); return; }
+      setStatus('Comparing...');
+      const result = compareText(a.pages, b.pages);
+      if (!result.changes.length) { toast('The two PDFs have the same text.'); return; }
+      setStatus('Building the report...');
+      const base = (s) => s.replace(/\.pdf$/i, '');
+      const title = `${base(a.name)} compared with ${base(b.name)}`;
+      const data = await buildReport(a, b, result, { title });
+      await openDocument('pdf', { name: `${title}.pdf`, data });
+      const n = result.changes.length;
+      toast(`Found ${n} change${n === 1 ? '' : 's'}. The first page lists them; click one to jump to it.`);
+    } catch (err) {
+      console.error(err);
+      toast(`Could not compare: ${err.message || err}`, true);
+    } finally {
+      setStatus('');
     }
   }
 
