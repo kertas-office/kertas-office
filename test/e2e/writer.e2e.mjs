@@ -225,6 +225,23 @@ test('bookmarks: add one around selected text, refer to it, go to it and delete 
   assert.deepEqual(page.errors, []);
 });
 
+test('cross-references saved by Word are left as they are on open; heading numbers are never replaced', async () => {
+  // REF \r (the heading's number, 1.1) and a REF whose saved text is out of date. (The PAGEREF in
+  // the fixture opens as the editor's own page reference, which this code does not touch.)
+  await openFixture(page, 'writer', 'references-word.docx');
+  await sleep(1500);
+  assert.deepEqual(await crossRefs(), [['REF _Ref \\r \\h', '1.1'], ['REF _Ref \\h \\* MERGEFORMAT', 'Old title']], 'opening the document changes nothing');
+  // once the user edits, the ones Kertas can work out follow the document; the heading number stays
+  await caretAtDocEnd();
+  await page.keyboard.type(' x');
+  await page.waitForFunction(() => { const t = []; window.__kertasOoxml.editor().state.doc.descendants((n) => { if (n.type.name === 'crossReference') t.push(n.attrs.resolvedText); return true; }); return t[1] === 'Results'; }, null, { timeout: 5000 });
+  assert.deepEqual(await crossRefs(), [['REF _Ref \\r \\h', '1.1'], ['REF _Ref \\h \\* MERGEFORMAT', 'Results']]);
+  const xml = await docXml(await saveBytes(page, 'docx'));
+  assert.match(xml, /REF _Ref100 \\r \\h/);
+  assert.match(xml, /<w:t[^>]*>1\.1<\/w:t>/, 'the heading number is saved as Word had it');
+  assert.deepEqual(page.errors, []);
+});
+
 test('a merged cell taller than a page breaks across pages; a short one moves whole', async () => {
   const pagesText = () => page.evaluate(() => [...document.querySelectorAll('.view.active .superdoc-page')].map((p) => p.innerText.replace(/\s+/g, ' ')));
   // 60 rows joined by one merged cell: the table starts on page 1 and continues on page 2

@@ -1323,9 +1323,14 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     }
     return nearest?.page ?? null;
   }
-  // cross-references follow their targets: after edits settle (and pages are laid out) their text is redone
+  // cross-references follow their targets: after edits settle (and pages are laid out) their text is redone.
+  // Only once the user has changed something: opening a document leaves the saved field results as
+  // they are, so a file is not changed (or marked unsaved) just by being opened.
   let refTimer = null;
+  let refsLive = false;
+  const armRefs = () => { refsLive = true; };
   function scheduleRefRefresh() {
+    if (!refsLive) return;
     clearTimeout(refTimer);
     refTimer = setTimeout(() => {
       const ed = editor();
@@ -1363,9 +1368,10 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     if (!res) return;
     const e2 = editor();
     if (res.action === 'goto') { refs.goToBookmark(e2, res.values.existing); return; }
-    if (res.action === 'delete') { refs.removeBookmark(e2, res.values.existing); setDirty(true); toast(`Bookmark ${res.values.existing} deleted`); scheduleRefRefresh(); return; }
+    if (res.action === 'delete') { refs.removeBookmark(e2, res.values.existing); setDirty(true); toast(`Bookmark ${res.values.existing} deleted`); armRefs(); scheduleRefRefresh(); return; }
     const name = String(res.values.name).trim();
     refs.addBookmark(e2, name, from, to);
+    armRefs();
     setDirty(true);
     toast(`Bookmark ${name} added`);
   }
@@ -1406,6 +1412,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     try {
       const bookmark = target.kind === 'bookmark' ? target.name : refs.bookmarkForParagraph(editor(), target.pos);
       refs.insertCrossReference(editor(), { bookmark, show: v.show, link: v.link !== false }, pageOf);
+      armRefs();
       setDirty(true);
       superdoc?.focus?.();
     } catch (err) { toast(`Could not insert the cross-reference: ${err.message}`, true); }
@@ -1781,7 +1788,14 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     const ed = editor();
     try { ed.on?.('selectionUpdate', updateTableTab); ed.on?.('transaction', updateTableTab); } catch { /* older editor */ }
     try { ed.on?.('transaction', ({ transaction } = {}) => { if (!transaction || transaction.docChanged) scheduleRefRefresh(); }); } catch { /* older editor */ }
-    scheduleRefRefresh();
+    // the first thing the user types, pastes, cuts or drops turns live cross-references on
+    // (the editor's input element can sit outside the page view, so both are watched)
+    for (const target of new Set([body, ed.view?.dom].filter(Boolean))) {
+      if (target.dataset.refsArm) continue;
+      target.dataset.refsArm = '1';
+      for (const type of ['beforeinput', 'paste', 'cut', 'drop']) target.addEventListener(type, armRefs, true);
+      target.addEventListener('keydown', (e) => { if ((!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) || e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Delete') armRefs(); }, true);
+    }
     syncZoom();
     // page-width zoom changes with the window
     window.addEventListener('resize', () => setTimeout(syncZoom, 250));
@@ -2303,7 +2317,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         try { const r = api().fields.rebuild({ target }); if (failed(r)) failedCount++; else done++; } catch { failedCount++; }
       }
       try { for (const t of api().toc.list({}).items || []) { const target = t.address || t.target; if (target) { api().toc.update({ target }); done++; } } } catch { /* no table of contents */ }
-      try { const r = refs.refreshCrossReferences(editor(), pageOf); done += r.total - r.missing; failedCount += r.missing; } catch (e) { console.warn('cross-references', e); }
+      try { armRefs(); const r = refs.refreshCrossReferences(editor(), pageOf); done += r.total - r.missing - r.kept; failedCount += r.missing + r.kept; } catch (e) { console.warn('cross-references', e); }
       return { success: true };
     });
     toast(done ? `Updated ${done} field${done === 1 ? '' : 's'}` : failedCount ? 'These fields cannot be updated here' : 'There are no fields to update');

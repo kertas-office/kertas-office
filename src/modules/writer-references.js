@@ -131,33 +131,72 @@ export function insertCrossReference(ed, { bookmark, show = 'text', link = true 
   ed.view.dispatch(ed.state.tr.replaceSelectionWith(type.create(attrs, null, ed.state.storedMarks || ed.state.selection.$from.marks()), false).scrollIntoView());
 }
 
-/** What a cross-reference shows now, or null when its bookmark cannot be found */
+/**
+ * Reads a REF or PAGEREF instruction: { field, name, switches }. Switch arguments (the
+ * MERGEFORMAT after \*, say) are skipped, and quoted bookmark names lose their quotes.
+ */
+export function parseInstruction(instruction, fallbackField = 'REF') {
+  const tokens = String(instruction || '').match(/"[^"]*"|\S+/g) || [];
+  const field = (tokens[0] || fallbackField).toUpperCase();
+  let name = '';
+  const switches = [];
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.startsWith('\\')) {
+      const sw = t.toLowerCase();
+      switches.push(sw);
+      // general format switches (\* and \#, \@) take an argument
+      if ((sw === '\\*' || sw === '\\#' || sw === '\\@') && i + 1 < tokens.length) i++;
+    } else if (!name) name = t.replace(/^"(.*)"$/, '$1');
+  }
+  return { field, name, switches };
+}
+
+// The switches Kertas can work a result out for. Anything else, such as \r, \n or \w (the heading's
+// number, "3.2"), \f or \d, is left showing the text Word saved, so opening a document never
+// replaces a heading number with the heading's text.
+const SUPPORTED_SWITCHES = new Set(['\\h', '\\p', '\\*']);
+
+/** Whether Kertas can work out this cross-reference's text itself */
+export function canResolve(attrs) {
+  const { field, switches } = parseInstruction(attrs.instruction, attrs.fieldType);
+  if (field !== 'REF' && field !== 'PAGEREF') return false;
+  // PAGEREF \p reads "on page 3" or "above" depending on the layout; not worked out here
+  if (field === 'PAGEREF' && switches.includes('\\p')) return false;
+  return switches.every((s) => SUPPORTED_SWITCHES.has(s));
+}
+
+/**
+ * What a cross-reference shows now; null when its bookmark cannot be found, undefined when it
+ * uses a switch Kertas does not work out (its saved text should then be kept as it is)
+ */
 export function crossReferenceText(doc, attrs, at, pageOf) {
-  const instruction = String(attrs.instruction || '');
-  const parts = instruction.trim().split(/\s+/);
-  const field = (parts[0] || attrs.fieldType || 'REF').toUpperCase();
-  const name = (attrs.target || parts[1] || '').replace(/^"(.*)"$/, '$1');
-  if (field !== 'REF' && field !== 'PAGEREF') return null;
+  if (!canResolve(attrs)) return undefined;
+  const { field, name: parsed, switches } = parseInstruction(attrs.instruction, attrs.fieldType);
+  const name = String(attrs.target || parsed || '').replace(/^"(.*)"$/, '$1');
   const b = listBookmarks(doc).find((x) => x.name === name);
   if (!b) return null;
+  if (switches.includes('\\p')) return b.from < at ? 'above' : 'below';
   if (field === 'PAGEREF') { const page = pageOf?.(b.from); return page ? String(page) : null; }
-  if (/\\p\b/.test(instruction)) return b.from < at ? 'above' : 'below';
   return b.text || null;
 }
 
 /**
  * Brings every cross-reference's text up to date. Returns how many changed; cross-references whose
- * bookmark has gone are left as they are and counted in missing.
+ * bookmark has gone are left as they are and counted in missing, and ones Kertas cannot work out
+ * (see canResolve) are left as they are and counted in kept.
  */
 export function refreshCrossReferences(ed, pageOf) {
   const doc = ed.state.doc;
   const changes = [];
   let missing = 0;
+  let kept = 0;
   let total = 0;
   doc.descendants((n, pos) => {
     if (n.type.name !== 'crossReference') return true;
     total++;
     const text = crossReferenceText(doc, n.attrs, pos, pageOf);
+    if (text === undefined) { kept++; return false; }
     if (text == null) { missing++; return false; }
     if (text !== n.attrs.resolvedText) changes.push({ pos, attrs: { ...n.attrs, resolvedText: text, fieldResultContent: null } });
     return false;
@@ -167,7 +206,7 @@ export function refreshCrossReferences(ed, pageOf) {
     for (const c of changes) tr.setNodeMarkup(c.pos, null, c.attrs);
     ed.view.dispatch(tr.setMeta('skipTrackChanges', true).setMeta('addToHistory', false));
   }
-  return { changed: changes.length, missing, total };
+  return { changed: changes.length, missing, kept, total };
 }
 
 /** Whether the document has any cross-references (cheap enough to call after every change) */
