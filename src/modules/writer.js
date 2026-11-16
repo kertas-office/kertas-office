@@ -23,6 +23,7 @@ import { createFormatTools } from './writer-format.js';
 import { createForms } from './writer-forms.js';
 import { fieldsToCitations, citationsToFields } from '../lib/docx-citations.js';
 import { repairDocx } from '../lib/docx-repair.js';
+import * as refs from './writer-references.js';
 import { readDocxParagraphs, editorParagraphs, planChanges, applyChanges } from './writer-compare.js';
 import { prepareDocx } from '../lib/docx-prepare.js';
 import { userName, setUserName, editorUser } from '../lib/user.js';
@@ -552,7 +553,12 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           big('hr', 'minus', 'Line', () => horizontalLine(), 'Horizontal line'),
         ] },
         { label: 'Maths', items: [big('equation', 'equation', 'Equation', () => extras.insertEquation(), 'Fractions, roots, sums and more (LaTeX)')] },
-        { label: 'Links', items: [big('link', 'link', 'Link', () => insertLink()), big('comment', 'note', 'Comment', () => newComment())] },
+        { label: 'Links', items: [
+          big('link', 'link', 'Link', () => insertLink()),
+          big('bookmark', 'bookmark', 'Bookmark', () => bookmarkDialog(), 'Name a place in the document to link or refer to'),
+          big('xref', 'crossref', 'Cross-reference', () => crossReferenceDialog(), 'Refer to a heading, bookmark or caption; kept up to date'),
+          big('comment', 'note', 'Comment', () => newComment()),
+        ] },
         { label: 'Header & Footer', items: [
           big('header', 'header', 'Header', () => editFurniture('header'), 'Edit the page header'),
           big('footer', 'footer', 'Footer', () => editFurniture('footer'), 'Edit the page footer'),
@@ -647,7 +653,10 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           big('sources', 'book', 'Sources', () => extras.manageSources(), 'Add, edit or remove sources and pick the style'),
           menu('bib', 'bibliography', 'Bibliography', () => extras.bibliographyMenu(), 'Insert the reference list'),
         ] },
-        { label: 'Captions', items: [big('caption', 'caption', 'Insert caption', () => insertCaption())] },
+        { label: 'Captions', items: [
+          big('caption', 'caption', 'Insert caption', () => insertCaption()),
+          big('xref-r', 'crossref', 'Cross-reference', () => crossReferenceDialog(), 'Refer to a heading, bookmark or caption; kept up to date'),
+        ] },
         { label: 'Fields', items: [big('fields-update', 'refresh', 'Update fields', () => updateFields(), 'Refresh cross-references, dates and other fields (F9)')] },
       ] },
       { id: 'mailings', label: 'Mailings', groups: [
@@ -1300,6 +1309,108 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       return { success: true };
     });
   }
+  // ---------------------------------------------------------------- Bookmarks and cross-references
+  /** The page (1, 2, ...) a document position is drawn on, from the laid-out pages */
+  function pageOf(pos) {
+    const pages = el.querySelectorAll('.superdoc-page');
+    let nearest = null;
+    for (let i = 0; i < pages.length; i++) {
+      for (const span of pages[i].querySelectorAll('[data-pm-start]')) {
+        const a = Number(span.dataset.pmStart); const b = Number(span.dataset.pmEnd || a);
+        if (pos >= a && pos <= b) return i + 1;
+        if (a >= pos && (nearest === null || a < nearest.a)) nearest = { a, page: i + 1 };
+      }
+    }
+    return nearest?.page ?? null;
+  }
+  // cross-references follow their targets: after edits settle (and pages are laid out) their text is redone
+  let refTimer = null;
+  function scheduleRefRefresh() {
+    clearTimeout(refTimer);
+    refTimer = setTimeout(() => {
+      const ed = editor();
+      if (!ed || !refs.hasCrossReferences(ed.state.doc)) return;
+      try { refs.refreshCrossReferences(ed, pageOf); } catch (e) { console.warn('cross-references', e); }
+    }, 700);
+  }
+  async function bookmarkDialog() {
+    const ed = editor();
+    if (!ed) return;
+    const marks = refs.listBookmarks(ed.state.doc).filter((b) => !b.hidden);
+    const { from, to } = ed.state.selection;
+    const selected = ed.state.doc.textBetween(from, to, ' ').trim();
+    const suggestion = selected.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^[^A-Za-z]+/, '').replace(/_+$/, '').slice(0, 40);
+    const res = await openDialog({
+      title: 'Bookmark',
+      description: selected ? 'Names the selected text so links and cross-references can point to it.' : 'Names this place in the document so links and cross-references can point to it. Select text first to bookmark the text itself.',
+      fields: [
+        { id: 'name', label: 'Bookmark name', value: suggestion, placeholder: 'Budget_table', hint: 'Starts with a letter; letters, numbers and _ only, no spaces.' },
+        ...(marks.length ? [{ id: 'existing', label: 'Bookmarks in this document', type: 'select', value: marks[0].name, options: marks.map((b) => ({ value: b.name, label: b.text ? `${b.name}  (${b.text.slice(0, 40)})` : b.name })) }] : []),
+      ],
+      actions: [
+        ...(marks.length ? [{ id: 'delete', label: 'Delete', danger: true }, { id: 'goto', label: 'Go to' }] : []),
+        { id: 'cancel', label: 'Cancel' },
+        { id: 'ok', label: 'Add', primary: true },
+      ],
+      validate: (v, action) => {
+        if (action !== 'ok') return null;
+        const name = String(v.name || '').trim();
+        if (!refs.BOOKMARK_NAME.test(name)) return 'Bookmark names start with a letter and use only letters, numbers and _ (up to 40)';
+        if (refs.listBookmarks(editor().state.doc).some((b) => b.name.toLowerCase() === name.toLowerCase())) return `There is already a bookmark called ${name}`;
+        return null;
+      },
+    });
+    if (!res) return;
+    const e2 = editor();
+    if (res.action === 'goto') { refs.goToBookmark(e2, res.values.existing); return; }
+    if (res.action === 'delete') { refs.removeBookmark(e2, res.values.existing); setDirty(true); toast(`Bookmark ${res.values.existing} deleted`); scheduleRefRefresh(); return; }
+    const name = String(res.values.name).trim();
+    refs.addBookmark(e2, name, from, to);
+    setDirty(true);
+    toast(`Bookmark ${name} added`);
+  }
+  async function crossReferenceDialog() {
+    const ed = editor();
+    if (!ed) return;
+    const t = refs.referenceTargets(ed.state.doc);
+    const kinds = [{ value: 'heading', label: 'Heading' }, { value: 'bookmark', label: 'Bookmark' }, { value: 'caption', label: 'Caption' }];
+    const first = kinds.find((k) => t[k.value].length)?.value || 'heading';
+    const list = (kind) => t[kind].map((x, i) => ({
+      value: String(i),
+      label: kind === 'heading' ? `${'   '.repeat(Math.max(0, (x.level || 1) - 1))}${x.label.slice(0, 70)}`
+        : kind === 'bookmark' && x.text ? `${x.label}  (${x.text.slice(0, 40)})` : x.label.slice(0, 70),
+    }));
+    const which = { heading: 'Which heading', bookmark: 'Which bookmark', caption: 'Which caption' };
+    const none = {
+      heading: 'There are no headings yet. Use the Heading styles on the Home tab.',
+      bookmark: 'There are no bookmarks yet. Add one from Insert > Bookmark.',
+      caption: 'There are no captions yet. Add one from References > Insert caption.',
+    };
+    const res = await openDialog({
+      title: 'Cross-reference',
+      description: 'Refers to another part of the document. The reference updates when that text or its page changes.',
+      fields: [
+        { id: 'kind', label: 'Refer to', type: 'segmented', value: first, options: kinds },
+        ...kinds.map((k) => (t[k.value].length
+          ? { id: `item-${k.value}`, label: which[k.value], type: 'select', value: '0', options: list(k.value), show: (v) => v.kind === k.value }
+          : { id: `none-${k.value}`, type: 'info', label: none[k.value], show: (v) => v.kind === k.value })),
+        { id: 'show', label: 'Show', type: 'select', value: 'text', options: [{ value: 'text', label: 'Its text' }, { value: 'page', label: 'Its page number' }, { value: 'aboveBelow', label: 'Above or below' }] },
+        { id: 'link', type: 'checkbox', label: 'Make it a link to the place it refers to', value: true },
+      ],
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Insert', primary: true }],
+      validate: (v) => (t[v.kind].length ? null : 'There is nothing of that kind to refer to yet'),
+    });
+    if (!res) return;
+    const v = res.values;
+    const target = t[v.kind][Number(v[`item-${v.kind}`] || 0)];
+    try {
+      const bookmark = target.kind === 'bookmark' ? target.name : refs.bookmarkForParagraph(editor(), target.pos);
+      refs.insertCrossReference(editor(), { bookmark, show: v.show, link: v.link !== false }, pageOf);
+      setDirty(true);
+      superdoc?.focus?.();
+    } catch (err) { toast(`Could not insert the cross-reference: ${err.message}`, true); }
+  }
+
   async function insertLink() {
     const s = await selection().catch(() => null);
     if (!s?.target) { toast('Click in the document first'); return; }
@@ -1669,6 +1780,8 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     if (!body.dataset.picDrag) { body.dataset.picDrag = '1'; enablePictureDrag(body, { editor, api, toast: (m, err) => toast(m, err), onMoved: (id) => setTimeout(() => { reselectPicture(id); updateTableTab(); }, 150) }); }
     const ed = editor();
     try { ed.on?.('selectionUpdate', updateTableTab); ed.on?.('transaction', updateTableTab); } catch { /* older editor */ }
+    try { ed.on?.('transaction', ({ transaction } = {}) => { if (!transaction || transaction.docChanged) scheduleRefRefresh(); }); } catch { /* older editor */ }
+    scheduleRefRefresh();
     syncZoom();
     // page-width zoom changes with the window
     window.addEventListener('resize', () => setTimeout(syncZoom, 250));
@@ -2190,6 +2303,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         try { const r = api().fields.rebuild({ target }); if (failed(r)) failedCount++; else done++; } catch { failedCount++; }
       }
       try { for (const t of api().toc.list({}).items || []) { const target = t.address || t.target; if (target) { api().toc.update({ target }); done++; } } } catch { /* no table of contents */ }
+      try { const r = refs.refreshCrossReferences(editor(), pageOf); done += r.total - r.missing; failedCount += r.missing; } catch (e) { console.warn('cross-references', e); }
       return { success: true };
     });
     toast(done ? `Updated ${done} field${done === 1 ? '' : 's'}` : failedCount ? 'These fields cannot be updated here' : 'There are no fields to update');

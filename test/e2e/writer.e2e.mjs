@@ -163,6 +163,68 @@ test('two documents open: each gets what is typed into it (1.0.1 bug)', async ()
   assert.deepEqual(page.errors, []);
 });
 
+// Bookmarks and cross-references
+const rb = async (tab, id) => { await page.locator(`.rb-tab[data-tab="${tab}"]:visible`).click(); await page.locator(`[data-id="${id}"]:visible`).click(); };
+const caretAtDocEnd = () => page.evaluate(() => { const ed = window.__kertasOoxml.editor(); let last = null; ed.state.doc.descendants((n, p) => { if (n.isTextblock) last = p + n.nodeSize - 1; return !n.isTextblock; }); ed.commands.setTextSelection({ from: last, to: last }); ed.view.focus(); });
+const crossRefs = () => page.evaluate(() => { const out = []; window.__kertasOoxml.editor().state.doc.descendants((n) => { if (n.type.name === 'crossReference') out.push([n.attrs.instruction.replace(/_Ref\d+/, '_Ref'), n.attrs.resolvedText]); return true; }); return out; });
+async function insertCrossRef(kind, item, show) {
+  await caretAtDocEnd();
+  await rb('insert', 'xref');
+  await page.locator(`.modal.dialog [data-f="kind"] [data-v="${kind}"]`).click();
+  await page.locator(`.modal.dialog select[data-f="item-${kind}"]`).selectOption({ label: item });
+  await page.locator('.modal.dialog select[data-f="show"]').selectOption(show);
+  await page.locator('.modal.dialog button.primary').click();
+  await sleep(300);
+  await page.keyboard.type(' / ');
+}
+
+test('cross-references show a heading, its page and where it is, follow edits, and save as Word fields', async () => {
+  await openFixture(page, 'writer', 'references.docx');
+  await insertCrossRef('heading', 'Results', 'text');
+  await insertCrossRef('heading', 'Results', 'page');
+  await insertCrossRef('heading', '   Funding sources', 'aboveBelow');
+  await insertCrossRef('caption', 'Table 1: Spending by department', 'text');
+  assert.deepEqual(await crossRefs(), [
+    ['REF _Ref \\h', 'Results'], ['PAGEREF _Ref \\h', '2'], ['REF _Ref \\p \\h', 'above'], ['REF _Ref \\h', 'Table 1: Spending by department'],
+  ]);
+  // renaming the heading updates the reference by itself
+  await page.evaluate(() => { const ed = window.__kertasOoxml.editor(); let at = null; ed.state.doc.descendants((n, p) => { if (n.isText && n.text === 'Results') at = p; return true; }); ed.view.dispatch(ed.state.tr.insertText('Final results', at, at + 7)); });
+  await page.waitForFunction(() => { let t = ''; window.__kertasOoxml.editor().state.doc.descendants((n) => { if (n.type.name === 'crossReference' && !t) t = n.attrs.resolvedText; return true; }); return t === 'Final results'; }, null, { timeout: 5000 });
+  assert.match(await page.locator('.view.active .superdoc-page').nth(1).innerText(), /See also: Final results \/ 2 \/ above \/ Table 1: Spending by department/);
+  const xml = await docXml(await saveBytes(page, 'docx'));
+  const fields = [...xml.matchAll(/<w:instrText[^>]*>([^<]*)</g)].map((m) => m[1].trim().replace(/_Ref\d+/, '_Ref'));
+  assert.deepEqual(fields, ['REF _Ref \\h', 'PAGEREF _Ref \\h', 'REF _Ref \\p \\h', 'REF _Ref \\h']);
+  assert.equal((xml.match(/<w:bookmarkStart [^>]*w:name="_Ref\d+"/g) || []).length, 3, 'one hidden bookmark per heading or caption referred to');
+  assert.deepEqual(page.errors, []);
+});
+
+test('bookmarks: add one around selected text, refer to it, go to it and delete it', async () => {
+  await openFixture(page, 'writer', 'references.docx');
+  // select "city council"
+  await page.evaluate(() => { const ed = window.__kertasOoxml.editor(); let at = null; ed.state.doc.descendants((n, p) => { if (n.isText && n.text.includes('city council')) at = p + n.text.indexOf('city council'); return true; }); ed.commands.setTextSelection({ from: at, to: at + 12 }); ed.view.focus(); });
+  await rb('insert', 'bookmark');
+  assert.equal(await page.locator('.modal.dialog [data-f="name"]').inputValue(), 'city_council', 'name suggested from the selection');
+  await page.locator('.modal.dialog [data-f="name"]').fill('Council 1');
+  await page.locator('.modal.dialog button.primary').click();
+  assert.match(await page.locator('.modal.dialog .dlg-error').innerText(), /letters, numbers and _/, 'spaces are refused');
+  await page.locator('.modal.dialog [data-f="name"]').fill('Council');
+  await page.locator('.modal.dialog button.primary').click();
+  await insertCrossRef('bookmark', 'Council  (city council)', 'text');
+  assert.deepEqual(await crossRefs(), [['REF Council \\h', 'city council']]);
+  // Go to selects the bookmarked text
+  await caretAtDocEnd();
+  await rb('insert', 'bookmark');
+  await page.locator('.modal.dialog button[data-a="goto"]').click();
+  assert.equal(await page.evaluate(() => { const ed = window.__kertasOoxml.editor(); const { from, to } = ed.state.selection; return ed.state.doc.textBetween(from, to); }), 'city council');
+  // deleting the bookmark keeps the text and the reference's last value
+  await rb('insert', 'bookmark');
+  await page.locator('.modal.dialog button[data-a="delete"]').click();
+  await sleep(300);
+  assert.equal(await page.evaluate(() => { let n = 0; window.__kertasOoxml.editor().state.doc.descendants((x) => { if (x.type.name === 'bookmarkStart' && !x.attrs.name.startsWith('_')) n++; return true; }); return n; }), 0);
+  assert.match(await page.locator('.view.active .superdoc-page').first().innerText(), /Most money comes from the city council\./);
+  assert.deepEqual(page.errors, []);
+});
+
 test('a merged cell taller than a page breaks across pages; a short one moves whole', async () => {
   const pagesText = () => page.evaluate(() => [...document.querySelectorAll('.view.active .superdoc-page')].map((p) => p.innerText.replace(/\s+/g, ' ')));
   // 60 rows joined by one merged cell: the table starts on page 1 and continues on page 2
