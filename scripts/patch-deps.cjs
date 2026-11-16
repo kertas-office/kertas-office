@@ -478,6 +478,41 @@ function handleTableNode(node, context) {
     marker: 'kertas: hidden documents leave keys alone',
   },
   {
+    // superdoc 1.47.2: a table whose rows are joined by a vertically merged cell never broke a page
+    // inside that group. When the group did not fit, everything from the merged cell on moved to the
+    // next page; when the group was taller than a page, that left a page with nothing but the rows
+    // before it (often the header row alone) and the group overflowed anyway. Word breaks between
+    // rows and continues the merged cell on the next page (SuperDoc 2.x too, docx-editor 9cdc42ff).
+    // Groups that fit on one page still move together, because 1.x cannot carry a merged cell's
+    // text over to the next page; groups taller than a page now break where the page ends.
+    dir: 'superdoc/dist/chunks',
+    find: /if \(maxRowspanEnd > lastFitRow && lastCleanFitRow > startRow\) return \{/g,
+    replace: 'if ((!fullPageHeight || sumRowHeights(measure.rows, lastCleanFitRow, maxRowspanEnd) <= fullPageHeight) /* kertas: page breaks inside merged rows */ && maxRowspanEnd > lastFitRow && lastCleanFitRow > startRow) return {',
+    marker: 'kertas: page breaks inside merged rows',
+  },
+  {
+    // With the page now breaking inside merged rows, the part of a merged cell on the first page was
+    // still drawn at the cell's full height, so its side borders ran down past the table to the
+    // bottom of the page. It now stops at the last row on its page and closes with a bottom border,
+    // as in Word; the part on the next page was already drawn this way.
+    dir: 'superdoc/dist/chunks',
+    find: /(for \(let i = 0; i < rowSpan && startRowIndex \+ i < allRowHeights\.length)(; i\+\+\) totalHeight \+= allRowHeights\[startRowIndex \+ i\];)/,
+    replace: (m, a, b) => `${a} && startRowIndex + i < (deps.kertasEndRow ?? Infinity) /* kertas: merged cell stops at the page */${b}`,
+    marker: 'kertas: merged cell stops at the page',
+  },
+  {
+    dir: 'superdoc/dist/chunks',
+    find: /(\t\t\tpartialRow: partialRowData,\n)/,
+    replace: (m, a) => `${a}\t\t\tkertasEndRow: fragment.toRow, // kertas: page end for merged cells\n`,
+    marker: 'kertas: page end for merged cells',
+  },
+  {
+    dir: 'superdoc/dist/chunks',
+    find: /bottom: cellGridBounds\.touchesBottomEdge \|\| continuesOnNext === true \?/,
+    replace: () => 'bottom: cellGridBounds.touchesBottomEdge || continuesOnNext === true || (rowSpan > 1 && deps.kertasEndRow != null && rowIndex + rowSpan > deps.kertasEndRow) /* kertas: merged cell closes at the page */ ?',
+    marker: 'kertas: merged cell closes at the page',
+  },
+  {
     // superdoc 1.47.2: diagonal cell borders (w:tl2br, w:tr2bl) were read but never drawn. They are
     // now drawn behind the cell's text. The code is in scripts/patches/diagonal-borders.js.
     dir: 'superdoc/dist/chunks',
