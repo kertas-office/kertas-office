@@ -188,6 +188,20 @@ test('a merged cell taller than a page breaks across pages; a short one moves wh
   assert.deepEqual(page.errors, []);
 });
 
+test('diagonal cell borders are drawn in their colours, and saved unchanged', async () => {
+  await openFixture(page, 'writer', 'diagonal.docx');
+  const lines = await page.evaluate(() => [...document.querySelectorAll('.view.active svg[data-kertas-diagonal] line')]
+    .map((l) => ({ stroke: l.getAttribute('stroke'), down: Number(l.getAttribute('y2')) > Number(l.getAttribute('y1')), right: Number(l.getAttribute('x2')) > Number(l.getAttribute('x1')) })));
+  assert.deepEqual(lines, [
+    { stroke: '#C00000', down: true, right: true },  // top left to bottom right
+    { stroke: '#0070C0', down: true, right: false }, // top right to bottom left
+  ]);
+  const xml = await docXml(await saveBytes(page, 'docx'));
+  assert.match(xml, /<w:tl2br [^>]*w:color="C00000"/);
+  assert.match(xml, /<w:tr2bl [^>]*w:color="0070C0"/);
+  assert.deepEqual(page.errors, []);
+});
+
 test('symbol fonts: Wingdings and Symbol characters are drawn, and saved unchanged', async () => {
   await openFixture(page, 'writer', 'symbols.docx');
   const shown = await page.locator('.view.active .superdoc-page').first().innerText();
