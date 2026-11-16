@@ -177,3 +177,69 @@ test('symbol fonts: Wingdings and Symbol characters are drawn, and saved unchang
   assert.match(xml, /p = 2r/);
   assert.deepEqual(page.errors, []);
 });
+
+// Compare documents: Review > Compare, then pick the other version
+async function compareWith(role, otherFixture) {
+  await page.locator('.rb-tab[data-tab="review"]:visible').click();
+  await page.locator('[data-id="compare"]:visible').click();
+  if (role === 'revised') await page.locator('.modal.dialog [data-f="role"] [data-v="revised"]').click();
+  const chooser = page.waitForEvent('filechooser');
+  await page.locator('.modal.dialog button.primary').click();
+  await (await chooser).setFiles(fixture(otherFixture));
+  await page.waitForFunction(() => /differences? found/.test(document.body.innerText), null, { timeout: 30000 });
+  await sleep(500);
+  // the comparison is the tab the helpers save from now on
+  await page.evaluate(() => { window.__t = [...window.__kertas.tabs.values()].find((t) => / compared with /.test(t.name)); });
+}
+const textBlocks = () => page.evaluate(() => { const out = []; window.__kertasOoxml.editor().state.doc.descendants((n) => { if (n.isTextblock) { out.push(n.textContent); return false; } return true; }); return out; });
+const trackedTexts = () => page.evaluate(() => { const out = []; window.__kertasOoxml.editor().state.doc.descendants((n) => { if (n.isText) for (const m of n.marks) if (m.type.name === 'trackInsert' || m.type.name === 'trackDelete') out.push(`${m.type.name === 'trackInsert' ? '+' : '-'}${n.text}`); }); return out; });
+
+test('compare documents: differences open as tracked changes; accepting them all gives the revised text', async () => {
+  await openFixture(page, 'writer', 'compare-revised.docx');
+  const revised = await textBlocks();
+  await openFixture(page, 'writer', 'compare-original.docx');
+  const original = await textBlocks();
+  await compareWith('original', 'compare-revised.docx');
+  assert.match(await page.locator('#tabs .tab.active, #tabs .tab[aria-selected="true"]').first().innerText(), /compare-original compared with compare-revised/);
+  assert.deepEqual(await trackedTexts(), [
+    '+Draft for the board.', '-two', '+three', '-fourteen', '+eighteen',
+    '-This paragraph will be removed in the revised version.', '+A new paragraph added in the middle.',
+    '-stayed level', '+grew', '-at', '+to', '-two', '+five', '-361,500', '+412,300',
+  ]);
+  // credited to the revised version, styled like it
+  const info = await page.evaluate(() => {
+    const ed = window.__kertasOoxml.editor(); const authors = new Set(); let draftStyle;
+    ed.state.doc.descendants((n) => { if (n.isTextblock && n.textContent === 'Draft for the board.') draftStyle = n.attrs.paragraphProperties?.styleId ?? null; for (const m of n.marks) if (m.attrs.author) authors.add(m.attrs.author); return true; });
+    return { authors: [...authors], draftStyle };
+  });
+  assert.deepEqual(info, { authors: ['compare-revised'], draftStyle: null });
+  // saved as Word tracked changes
+  const xml = await docXml(await saveBytes(page, 'docx'));
+  assert.match(xml, /<w:ins [^>]*w:author="compare-revised"/);
+  assert.match(xml, /<w:del [^>]*w:author="compare-revised"/);
+  // accepting one whole-paragraph deletion takes its paragraph with it
+  await page.locator('.writer-side:visible .tc', { hasText: 'This paragraph will be removed' }).locator('[data-a="accept"]').click();
+  await sleep(500);
+  assert.ok(!(await textBlocks()).includes(''), 'no empty paragraph left behind');
+  // accept the rest: exactly the revised document
+  await page.locator('.rb-tab[data-tab="review"]:visible').click();
+  await page.locator('[data-id="acc-all"]:visible').click();
+  await sleep(500);
+  assert.deepEqual(await textBlocks(), revised);
+  assert.equal(original.length, 10);
+  assert.deepEqual(page.errors, []);
+});
+
+test('compare documents: from the revised version, rejecting every change gives the original text', async () => {
+  await openFixture(page, 'writer', 'compare-original.docx');
+  const original = await textBlocks();
+  await openFixture(page, 'writer', 'compare-revised.docx');
+  await compareWith('revised', 'compare-original.docx');
+  const tracked = await trackedTexts();
+  assert.ok(tracked.includes('+eighteen'), tracked.join(' '));
+  await page.locator('.rb-tab[data-tab="review"]:visible').click();
+  await page.locator('[data-id="rej-all"]:visible').click();
+  await sleep(500);
+  assert.deepEqual(await textBlocks(), original);
+  assert.deepEqual(page.errors, []);
+});
