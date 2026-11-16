@@ -618,15 +618,26 @@ let dragDepth = 0;
 // so the "Drop files to open" cover stays away for them
 const picturesIntoWriter = (dt) => active()?.kind === 'writer' && dt?.items?.length
   && [...dt.items].every((i) => i.kind === 'file' && i.type.startsWith('image/'));
-const endDrag = () => { dragDepth = 0; document.body.classList.remove('dragging'); };
+const endDrag = () => { dragDepth = 0; document.body.classList.remove('dragging', 'drop-into'); };
 window.addEventListener('dragenter', (e) => {
   if (!e.dataTransfer?.types.includes('Files') || picturesIntoWriter(e.dataTransfer)) return;
   dragDepth++;
   document.body.classList.add('dragging');
 });
 window.addEventListener('dragend', endDrag, true);
-window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
-window.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+window.addEventListener('dragleave', () => { if (--dragDepth <= 0) endDrag(); });
+window.addEventListener('dragover', (e) => {
+  if (!e.dataTransfer?.types.includes('Files')) return;
+  e.preventDefault();
+  // a panel that takes files itself (the PDF Files tab, the page thumbnails) shows its own
+  // highlight, so the "Drop files to open" cover steps aside while the pointer is over it
+  document.body.classList.toggle('drop-into', !!fileDropTarget(e.target));
+});
+/** The nearest element in the open tab that handles dropped files itself, if any */
+function fileDropTarget(node) {
+  const t = node?.closest?.('[data-file-drop]');
+  return t && typeof t.kertasFileDrop === 'function' && t.getClientRects().length ? t : null;
+}
 // Handled on the way down, before the editors: they would otherwise take (and stop)
 // any drop on a page. Only pictures dropped on a Writer document go on to the editor.
 window.addEventListener('drop', async (e) => {
@@ -640,9 +651,11 @@ window.addEventListener('drop', async (e) => {
   }
   e.preventDefault();
   e.stopPropagation();
+  const target = fileDropTarget(e.target);
   const records = await Promise.all([...e.dataTransfer.files].map(async (f) => ({
     name: f.name, path: window.kertasNative?.pathForFile?.(f) || null, data: new Uint8Array(await f.arrayBuffer()),
   })));
+  if (target) { await target.kertasFileDrop(records, e); return; }
   await openFileRecords(records);
 }, true);
 

@@ -5,6 +5,7 @@ import { PDFDocument } from '@cantoo/pdf-lib';
 import { buildPdf, listFormFields, imagesToPdf } from '../lib/pdf-ops.js';
 import { openFiles, saveMany, saveFile, saveAnyFile } from '../lib/platform.js';
 import { extractPages as extractTextPages, pdfToDocx, pdfToSnapshot, fontInfo } from '../lib/pdf-convert.js';
+import { compareText, buildReport } from '../lib/pdf-compare.js';
 import { findFont, cssStack } from '../lib/font-catalog.js';
 import { snapshotToXlsx } from '../lib/xlsx-bridge.js';
 import { OCR_LANGUAGES, recognise, stopOcr } from '../lib/ocr.js';
@@ -115,6 +116,9 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
           { id: 'h-merge', kind: 'big', icon: 'merge', label: 'Merge', title: 'Append pages from other PDFs', action: () => mergeFiles() },
           { id: 'h-split', kind: 'big', icon: 'split', label: 'Split', title: 'Split into several files', action: () => extractPages('split') },
         ] },
+        { label: 'Review', items: [
+          { id: 'h-compare', kind: 'big', icon: 'compare', label: 'Compare', title: 'Compare this PDF with another version and see every change side by side', action: () => compareFiles() },
+        ] },
         { label: 'Zoom', items: [
           { id: 'h-zoom-out', kind: 'big', icon: 'zoom-out', label: 'Zoom out', action: () => zoomBy(1 / 1.2) },
           { id: 'zoom', kind: 'label', label: '100%', caption: 'Zoom' },
@@ -166,6 +170,9 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
         { label: 'Drawing', items: [toolSmall('highlight', 'highlight', 'Area'), toolSmall('rect', 'rect', 'Box'), toolSmall('ellipse', 'ellipse', 'Ellipse'), toolSmall('line', 'line', 'Line'), toolSmall('arrow', 'arrow', 'Arrow'), toolSmall('ink', 'ink', 'Pen')] },
         styleGroup(),
         { label: 'Edit', items: [toolBtn('edit-text', 'text-cursor', 'Edit text'), toolBtn('erase', 'erase', 'Erase'), { id: 'undo', kind: 'big', icon: 'undo', label: 'Undo', title: 'Undo (Ctrl+Z)', action: () => undo() }] },
+        { label: 'Review', items: [
+          { id: 'c-compare', kind: 'big', icon: 'compare', label: 'Compare', title: 'Compare this PDF with another version and see every change side by side', action: () => compareFiles() },
+        ] },
       ] },
       { id: 'fill-sign', label: 'Fill & Sign', groups: [
         { label: 'Fill in', items: [toolBtn('text', 'text', 'Text'), toolBtn('date', 'calendar', 'Date'), toolBtn('check', 'check', 'Tick'), toolBtn('cross', 'close', 'Cross')] },
@@ -1371,6 +1378,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   let dragKey = null;
   thumbsEl.addEventListener('dragstart', (e) => { dragKey = e.target.closest('.thumb')?.dataset.key; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'page'); });
   thumbsEl.addEventListener('dragover', (e) => {
+    if (!dragKey && e.dataTransfer?.types.includes('Files')) { markFileDrop(e); return; }
     if (!dragKey) return;
     e.preventDefault();
     e.stopPropagation();
@@ -1398,7 +1406,39 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     await layout();
     await renderThumbs();
   });
-  thumbsEl.addEventListener('dragend', () => { dragKey = null; thumbsEl.querySelectorAll('.thumb').forEach((t) => t.classList.remove('drop-before', 'drop-after')); });
+  thumbsEl.addEventListener('dragend', () => { dragKey = null; clearDropMarks(); });
+
+  // Drop PDFs or pictures between the thumbnails to insert their pages there
+  const clearDropMarks = () => thumbsEl.querySelectorAll('.thumb').forEach((t) => t.classList.remove('drop-before', 'drop-after'));
+  function markFileDrop(e) {
+    const thumbs = [...thumbsEl.querySelectorAll('.thumb')];
+    if (!thumbs.length) return;
+    // the thumbnail under the pointer, or the last one when below them all
+    const over = e.target.closest('.thumb') || thumbs.find((t) => e.clientY < t.getBoundingClientRect().bottom) || thumbs[thumbs.length - 1];
+    const r = over.getBoundingClientRect();
+    const before = e.clientY < r.top + r.height / 2;
+    if (over.classList.contains(before ? 'drop-before' : 'drop-after')) return;
+    clearDropMarks();
+    over.classList.add(before ? 'drop-before' : 'drop-after');
+  }
+  thumbsEl.addEventListener('dragleave', (e) => { if (!thumbsEl.contains(e.relatedTarget)) clearDropMarks(); });
+  thumbsEl.dataset.fileDrop = '';
+  thumbsEl.kertasFileDrop = async (files) => {
+    const mark = thumbsEl.querySelector('.drop-before, .drop-after');
+    let at = pages.length;
+    if (mark) {
+      at = pages.findIndex((p) => p.key === mark.dataset.key);
+      if (mark.classList.contains('drop-after')) at += 1;
+    }
+    clearDropMarks();
+    await insertFiles(files, at);
+  };
+
+  // Drop any files on the Files tab to attach them
+  attachEl.dataset.fileDrop = '';
+  attachEl.kertasFileDrop = async (files) => { attachEl.classList.remove('file-over'); await addAttachments(files); };
+  attachEl.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) attachEl.classList.add('file-over'); });
+  attachEl.addEventListener('dragleave', (e) => { if (!attachEl.contains(e.relatedTarget)) attachEl.classList.remove('file-over'); });
 
   function renderOutline() {
     const items = (list, depth) => list.map((it, i) => `
@@ -1449,7 +1489,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
             <button data-att="save" title="Save a copy">${icon('save', 14)}</button>
             <button data-att="del" title="Remove from the PDF">${icon('trash', 14)}</button>
           </div>
-        </div>`).join('') : `<div class="empty small">${icon('attach', 22)}<br>No attached files.<br>Attach spreadsheets, documents or pictures to send them inside this PDF.</div>`}`;
+        </div>`).join('') : `<div class="empty small">${icon('attach', 22)}<br>No attached files.<br>Drop files here, or use Attach file, to send spreadsheets, documents or pictures inside this PDF.</div>`}`;
   }
   attachEl.addEventListener('click', async (e) => {
     if (e.target.closest('[data-att-add]')) { attachFiles(); return; }
@@ -1461,8 +1501,8 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     if (op === 'save') { const r = await saveAnyFile({ data: a.data, name: a.name }).catch((err) => { toast(String(err.message || err), true); return null; }); if (r) toast(`Saved ${r.name}`); }
     if (op === 'del') { attachments.splice(i, 1); changed(); renderAttachments(); toast(`${a.name} will be removed when you save`); }
   });
-  async function attachFiles() {
-    const files = await openFiles('any', true);
+  async function attachFiles() { await addAttachments(await openFiles('any', true)); }
+  async function addAttachments(files) {
     if (!files?.length) return;
     const big = files.find((f) => f.data.length > 100 * 1048576);
     if (big) { toast(`${big.name} is over 100 MB; attach a smaller file`, true); return; }
@@ -1527,22 +1567,39 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     toast('Blank page inserted');
   }
 
-  async function appendFiles(files) {
+  /** Adds the pages of PDFs (and pictures, one page each) at position at, by default the end */
+  async function insertFiles(files, at = pages.length) {
+    if (!files?.length) return;
+    const isPdf = (f) => /\.pdf$/i.test(f.name);
+    const isPicture = (f) => /\.(png|jpe?g)$/i.test(f.name);
+    const skipped = files.filter((f) => !isPdf(f) && !isPicture(f));
     let added = 0;
+    let used = 0;
+    const first = at;
     for (const f of files) {
+      if (!isPdf(f) && !isPicture(f)) continue;
       try {
-        const { id, doc } = await addSource(f.data, f.name);
+        const data = isPdf(f) ? f.data : await imagesToPdf([{ bytes: f.data, fmt: /\.png$/i.test(f.name) ? 'png' : 'jpg' }]);
+        const { id, doc } = await addSource(data, f.name);
         await objects.loadSource(id);
-        for (let i = 0; i < doc.numPages; i++) pages.push({ src: id, index: i, rotate: 0, annots: [], key: newKey(id, i) });
-        added += doc.numPages;
+        const added1 = [];
+        for (let i = 0; i < doc.numPages; i++) added1.push({ src: id, index: i, rotate: 0, annots: [], key: newKey(id, i) });
+        pages.splice(at, 0, ...added1);
+        at += added1.length;
+        added += added1.length;
+        used++;
       } catch (err) { toast(`Could not read ${f.name}: ${err.message}`, true); }
     }
+    if (skipped.length) toast(`Only PDFs and pictures (PNG, JPG) can be added as pages; ${skipped.map((f) => f.name).join(', ')} left out`, true);
     if (added) {
-      toast(`Added ${added} page${added === 1 ? '' : 's'} from ${files.length} file${files.length === 1 ? '' : 's'}`);
-      changed(); await layout(); await renderThumbs();
+      undoStack.length = 0;
+      toast(`Added ${added} page${added === 1 ? '' : 's'} from ${used} file${used === 1 ? '' : 's'}`);
+      changed(); pickedPage = first; await layout(); await renderThumbs();
+      pagesEl.querySelectorAll('.pdf-page')[first]?.scrollIntoView({ block: 'start' });
+      updatePageInfo();
     }
   }
-  async function mergeFiles() { await appendFiles(await openFiles('pdf', true)); }
+  async function mergeFiles() { await insertFiles(await openFiles('pdf', true)); }
 
   // ---------------------------------------------------------------- OCR
   // Recognised words per source page, '<src>:<index>' -> { items (pdf-layout format), words (PDF space) }
@@ -1657,6 +1714,51 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     } catch (err) {
       console.error(err);
       toast(`Could not convert: ${err.message || err}`, true);
+    }
+  }
+
+  // ---------------------------------------------------------------- compare
+  async function compareFiles() {
+    const res = await openDialog({
+      title: 'Compare two PDFs',
+      description: 'Choose the other version. You get a report with both versions side by side: removed text boxed in red on the original, added text in green on the revised copy, and a list of every change at the front.',
+      fields: [{ id: 'role', type: 'segmented', label: 'This PDF is the', value: 'original', options: [{ value: 'original', label: 'Original' }, { value: 'revised', label: 'Revised version' }] }],
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Choose the other PDF...', primary: true }],
+    });
+    if (!res || res.action !== 'ok') return;
+    const [other] = await openFiles('pdf', false);
+    if (!other) return;
+    const read = async (bytes) => {
+      const task = pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false, fontExtraProperties: true });
+      try { return await extractTextPages(await task.promise, { Util: pdfjsLib.Util }); } finally { task.destroy(); }
+    };
+    try {
+      setStatus('Reading both PDFs...');
+      const mine = { name, bytes: await buildOutput(pages) };
+      const theirs = { name: other.name, bytes: other.data };
+      mine.pages = await read(mine.bytes);
+      try { theirs.pages = await read(theirs.bytes); } catch (err) {
+        if (err?.name === 'PasswordException') { toast(`${other.name} is locked with a password. Open it, remove the password, then compare again.`, true); return; }
+        throw err;
+      }
+      const [a, b] = res.values.role === 'revised' ? [theirs, mine] : [mine, theirs];
+      const noText = [a, b].find((d) => !d.pages.some((p) => p.items.some((it) => it.str.trim())));
+      if (noText) { toast(`${noText.name} has no text layer, so it looks like a scan. Open it, run Recognise text, save, then compare.`, true); return; }
+      setStatus('Comparing...');
+      const result = compareText(a.pages, b.pages);
+      if (!result.changes.length) { toast('The two PDFs have the same text.'); return; }
+      setStatus('Building the report...');
+      const base = (s) => s.replace(/\.pdf$/i, '');
+      const title = `${base(a.name)} compared with ${base(b.name)}`;
+      const data = await buildReport(a, b, result, { title });
+      await openDocument('pdf', { name: `${title}.pdf`, data });
+      const n = result.changes.length;
+      toast(`Found ${n} change${n === 1 ? '' : 's'}. The first page lists them; click one to jump to it.`);
+    } catch (err) {
+      console.error(err);
+      toast(`Could not compare: ${err.message || err}`, true);
+    } finally {
+      setStatus('');
     }
   }
 
@@ -1969,7 +2071,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     async save() { return buildOutput(pages); },
     /** Export and print use the same output as save */
     async exportPdf() { return buildOutput(pages); },
-    appendFiles,
+    appendFiles: (files) => insertFiles(files),
     startSignature() { setTool('sign'); },
     markSaved() {
       setDirty(false);
