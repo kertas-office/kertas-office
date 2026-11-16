@@ -10,35 +10,35 @@
 
 <section class="section-sm wrap" id="new" style="padding-top:56px">
   <div>
-    <div class="eyebrow">New in version 1.1</div>
+    <div class="eyebrow">New in version 1.2</div>
     <h2 class="h2">What's new</h2>
     <p class="lead" style="max-width:640px">A free update for everyone. Kertas checks for it on its own, or you can <a href="/download">download it here</a>.</p>
   </div>
   <div class="grid-3 new-grid">
     <article class="new-card w">
-      <figure class="shot new-shot"><img src="/img/new-writer.webp" width="1200" height="750" alt="Writer's right-click menu with a formatting bar above it, showing font, size, bold, colours, alignment and lists" loading="lazy"></figure>
+      <figure class="shot new-shot"><img src="/img/new-compare.webp" width="1200" height="750" alt="Writer showing an annual report compared with its revised version: changed figures appear as tracked changes, listed in the Changes pane" loading="lazy"></figure>
       <span class="new-tag"><span class="badge">W</span>Writer</span>
-      <h3>Format from the right-click menu</h3>
-      <p>A formatting bar sits above the menu, with Font and Paragraph one click away. Tables get borders, shading, row height and cell alignment, and pictures rotate, flip and crop.</p>
-    </article>
-    <article class="new-card s">
-      <figure class="shot new-shot"><img src="/img/new-sheets.webp" width="1200" height="750" alt="Sheets with the Comments pane open, showing a conversation on cell D6" loading="lazy"></figure>
-      <span class="new-tag"><span class="badge">S</span>Sheets</span>
-      <h3>Talk it through on the cell</h3>
-      <p>Threaded comments with replies and resolve, saved so Excel, LibreOffice and WPS can read them. Named ranges make formulas read like plain words.</p>
+      <h3>Compare two versions</h3>
+      <p>Pick the other version and every difference opens as a tracked change, word by word. Accept or reject them one at a time or all at once.</p>
     </article>
     <article class="new-card p">
-      <figure class="shot new-shot"><img src="/img/new-pdf.webp" width="1200" height="750" alt="The PDF editor's Files tab listing a spreadsheet, a PDF and a photo attached to the document" loading="lazy"></figure>
+      <figure class="shot new-shot"><img src="/img/new-pdf-compare.webp" width="1200" height="750" alt="A PDF comparison report showing the original and revised pages side by side, with removed words boxed in red and added words in green" loading="lazy"></figure>
       <span class="new-tag"><span class="badge">P</span>PDF</span>
-      <h3>Keep the files with the PDF</h3>
-      <p>Attach a spreadsheet, a photo or any other file to a PDF, so everything travels together. Open, save or remove them from the Files tab.</p>
+      <h3>See what changed in a PDF</h3>
+      <p>Both versions side by side, removed words boxed in red and added words in green, with a list of every change at the front. Click one to jump to it.</p>
+    </article>
+    <article class="new-card w">
+      <figure class="shot new-shot"><img src="/img/new-xref.webp" width="1200" height="750" alt="Writer's Cross-reference dialog, referring to a heading and showing its text as a link" loading="lazy"></figure>
+      <span class="new-tag"><span class="badge">W</span>Writer</span>
+      <h3>Bookmarks and cross-references</h3>
+      <p>Refer to a heading, caption or bookmark by its text or page number. References stay up to date as the document changes, and open in Word as fields.</p>
     </article>
   </div>
   <ul class="new-more" style="justify-content:flex-start; margin-left:0">
-    <li>Form fields: tick box, dropdown, date</li>
-    <li>Multilevel lists and custom numbering</li>
-    <li>Different first, odd and even page headers</li>
-    <li>Drag pictures straight onto the page</li>
+    <li>Wingdings and Symbol ticks drawn correctly</li>
+    <li>Diagonal lines in table cells</li>
+    <li>Tall merged cells break across pages</li>
+    <li>Drop files on a PDF to attach or insert them</li>
   </ul>
 </section>
 
@@ -50,17 +50,11 @@
       <div class="lane-head" style="--dot:var(--brand-2)"><i></i>Now</div>
       <ul data-lane="now">
         <li>Signed Windows installers</li>
-        <li>Ticks, check boxes and symbols from Wingdings and Symbol fonts show on every computer</li>
-        <li>Diagonal borders in table cells</li>
-        <li>Tables with a tall merged cell break across pages</li>
-        <li>PDF: drag files onto the Files tab or between page thumbnails</li>
       </ul>
     </div>
     <div class="lane">
       <div class="lane-head" style="--dot:var(--writer)"><i></i>Next</div>
       <ul data-lane="next">
-        <li>Compare two documents</li>
-        <li>Bookmarks and cross-references</li>
         <li>Previous and Next buttons for tracked changes</li>
         <li>Paste options</li>
         <li>Find previous, and replace one match at a time</li>
@@ -68,7 +62,6 @@
         <li>Insert document fields</li>
         <li>Ctrl+click a table of contents entry to jump to it</li>
         <li>Faster on long documents</li>
-        <li>PDF: compare two PDFs</li>
         <li>Sheets: larger formula editor</li>
         <li>Sheets: highlight the row and column of the selected cell</li>
         <li>More interface languages</li>
@@ -104,8 +97,30 @@
   <div data-releases>
     <article class="release">
       <div class="when">
-        <span class="vbadge">v1.1</span>
+        <span class="vbadge">v1.2</span>
         <div class="small" style="margin-top:10px">Latest</div>
+      </div>
+      <div class="notes">
+        <div class="title">Kertas Office 1.2</div>
+        <p>Compare versions of documents and PDFs, and refer to other parts of a document. Every change is listed on <a href="https://github.com/kertas-office/kertas-office/releases">GitHub Releases</a>.</p>
+        <h3><span class="group-ic" style="background:var(--writer)">W</span>Writer</h3>
+        <ul>
+          <li>Compare two versions of a document: the differences open as tracked changes</li>
+          <li>Bookmarks, and cross-references to headings, captions and bookmarks that stay up to date</li>
+          <li>Ticks, boxes and arrows set in Wingdings and Symbol fonts are drawn correctly</li>
+          <li>Diagonal lines in table cells are drawn</li>
+          <li>A merged table cell taller than a page breaks across pages</li>
+        </ul>
+        <h3><span class="group-ic" style="background:var(--pdf)">P</span>PDF</h3>
+        <ul>
+          <li>Compare two PDFs side by side, with every change listed and boxed</li>
+          <li>Drop files on the Files tab to attach them, or between page thumbnails to insert their pages</li>
+        </ul>
+      </div>
+    </article>
+    <article class="release">
+      <div class="when">
+        <span class="vbadge">v1.1</span>
       </div>
       <div class="notes">
         <div class="title">Kertas Office 1.1</div>
