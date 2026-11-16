@@ -477,6 +477,28 @@ function handleTableNode(node, context) {
     replace: 'if (isInRegisteredSurface(event)) return null;$1if (![...this.#layoutSurfaces].some((s) => s?.isConnected && s.getClientRects().length)) return null; // kertas: hidden documents leave keys alone$1const originNode = event.target;',
     marker: 'kertas: hidden documents leave keys alone',
   },
+  {
+    // superdoc 1.47.2: ticks, check boxes, arrows and Greek letters set in the Symbol, Wingdings or
+    // Wingdings 2 fonts showed as empty boxes (or wrong letters) where those fonts are missing, and
+    // <w:sym> characters were not drawn at all. They are now drawn as the matching Unicode
+    // characters; the document itself is unchanged. The code is in scripts/patches/symbol-fonts.js.
+    dir: 'superdoc/dist/chunks',
+    find: /\nfunction textNodeToRun\(/,
+    replace: () => `\n${fs.readFileSync(path.join(__dirname, 'patches', 'symbol-fonts.js'), 'utf8')}\nfunction textNodeToRun(`,
+    marker: 'kertas: symbol fonts */',
+  },
+  {
+    dir: 'superdoc/dist/chunks',
+    find: /(function textNodeToRun\([^)]*\) \{[\s\S]*?run\$1 = applyInlineRunProperties\(run\$1, runProperties, converterContext, inlineRunProperties\);)(\s*return run\$1;)/,
+    replace: (m, body, ret) => `${body}\n\trun$1 = kertasSymbolRun(run$1); // kertas: symbol font text${ret}`,
+    marker: 'kertas: symbol font text',
+  },
+  {
+    dir: 'superdoc/dist/chunks',
+    find: /noBreakHyphen: \{ inlineConverter: noBreakHyphenNodeToRun \},/,
+    replace: () => 'noBreakHyphen: { inlineConverter: noBreakHyphenNodeToRun },\n\tpassthroughInline: { inlineConverter: kertasSymNodeToRun }, // kertas: draw w:sym',
+    marker: 'kertas: draw w:sym',
+  },
 ];
 
 for (const p of patches) {
