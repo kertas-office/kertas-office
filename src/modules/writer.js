@@ -24,6 +24,7 @@ import { createForms } from './writer-forms.js';
 import { fieldsToCitations, citationsToFields } from '../lib/docx-citations.js';
 import { repairDocx } from '../lib/docx-repair.js';
 import * as refs from './writer-references.js';
+import { readDocxParagraphs, editorParagraphs, planChanges, applyChanges } from './writer-compare.js';
 import { prepareDocx } from '../lib/docx-prepare.js';
 import { userName, setUserName, editorUser } from '../lib/user.js';
 import {
@@ -689,6 +690,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           big('acc-all', 'check', 'Accept all', () => decideAll('accept')),
           big('rej-all', 'close', 'Reject all', () => decideAll('reject')),
         ] },
+        { label: 'Compare', items: [big('compare', 'compare', 'Compare', () => compareDocuments(), 'Compare two versions of a document. The differences open in a new document as tracked changes.')] },
         { label: 'Protect', items: [big('restrict', 'lock', 'Restrict editing', () => restrictEditing())] },
       ] },
       { id: 'table', label: 'Table', contextual: true, groups: [
@@ -1713,6 +1715,58 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     ribbon.setOn('track', on);
     toast(on ? 'Track changes is on. Your edits are recorded as suggestions.' : 'Track changes is off');
   }
+  /** Review > Compare: opens a copy of the original with the revised version's differences tracked */
+  async function compareDocuments() {
+    const res = await openDialog({
+      title: 'Compare documents',
+      description: 'Find what changed between two versions of a document. The differences open in a new document as tracked changes, which you can go through and accept or reject. Text is compared; formatting-only changes are not shown.',
+      fields: [{ id: 'role', label: 'This document is the', type: 'segmented', value: 'original', options: [{ value: 'original', label: 'Original' }, { value: 'revised', label: 'Revised version' }] }],
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Choose the other version', primary: true }],
+    });
+    if (!res) return;
+    const [other] = await openFiles('writer', false);
+    if (!other) return;
+    if (!/\.docx$/i.test(other.name)) { toast('Compare works with Word documents (.docx). Open the other version and save it as .docx first.', true); return; }
+    const mine = await docxBytes();
+    const thisName = name || 'This document';
+    const [orig, rev] = res.values.role === 'original'
+      ? [{ name: thisName, data: mine }, { name: other.name, data: other.data }]
+      : [{ name: other.name, data: other.data }, { name: thisName, data: mine }];
+    const base = (n) => String(n).replace(/\.docx$/i, '');
+    let revParas;
+    try { revParas = await readDocxParagraphs(rev.data); } catch (err) { toast(`Could not read ${rev.name}: ${err.message}`, true); return; }
+    const tab = await openDocument('writer', { name: `${base(orig.name)} compared with ${base(rev.name)}.docx`, data: orig.data });
+    for (let i = 0; i < 200 && !tab?.instance?.runComparison; i++) await new Promise((r) => setTimeout(r, 50));
+    if (!tab?.instance?.runComparison) { toast('Could not open the comparison', true); return; }
+    await tab.instance.runComparison(revParas, base(rev.name));
+  }
+  /** Turns this document into the revised text with every edit tracked; used on the copy Compare opens */
+  async function runComparison(revParas, label) {
+    for (let i = 0; i < 200 && !superdoc?.activeEditor; i++) await new Promise((r) => setTimeout(r, 50));
+    const ed = () => superdoc.activeEditor;
+    const plan = planChanges(editorParagraphs(ed().state.doc), revParas);
+    if (!plan.length) { toast('No differences in the text: the two versions read the same'); return 0; }
+    setStatus?.('Comparing');
+    // the changes are credited to the revised version, not to you
+    const user = ed().options.user;
+    ed().options.user = { name: label, email: '' };
+    applyMode('suggesting');
+    await new Promise((r) => setTimeout(r, 300));
+    let count = 0;
+    try {
+      count = applyChanges(ed, plan, editorParagraphs(ed().state.doc));
+    } catch (err) {
+      console.error('compare', err);
+      toast(`Comparison stopped part way: ${err.message}`, true);
+    } finally {
+      ed().options.user = user;
+      applyMode(tracking ? 'suggesting' : 'editing');
+      setStatus?.('');
+    }
+    showSide('changes');
+    toast(`${count} difference${count === 1 ? '' : 's'} found, shown as tracked changes`);
+    return count;
+  }
   function markupView(mode) {
     superdoc.setTrackedChangesPreferences({ mode });
     toast({ review: 'Showing all markup', final: 'Showing the document as if every change were accepted', original: 'Showing the original document' }[mode]);
@@ -2315,8 +2369,56 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
   async function decideAll(decision) {
     const total = (await api().trackChanges.list()).total || 0;
     if (!total) { toast('There are no tracked changes'); return; }
+    const emptied = wholeTrackedBlocks(decision);
     await act(decision === 'accept' ? 'Accept all' : 'Reject all', () => api().trackChanges.decide({ decision, target: { kind: 'all' } }),
       `${decision === 'accept' ? 'Accepted' : 'Rejected'} ${total} change${total === 1 ? '' : 's'}`);
+    dropEmptiedBlocks(emptied);
+  }
+  // A paragraph break cannot be tracked here, so a paragraph deleted (or added) as a tracked change
+  // would stay behind as an empty line once the deletion is accepted (or the addition rejected).
+  // These two remove such a paragraph along with its text.
+  /** Places, among the document's text blocks, of paragraphs made up entirely of one tracked change that the decision removes */
+  function wholeTrackedBlocks(decision, id = null) {
+    const vanish = decision === 'accept' ? 'trackDelete' : 'trackInsert';
+    const out = [];
+    let idx = -1;
+    editor()?.state.doc.descendants((n) => {
+      if (!n.isTextblock) return true;
+      idx++;
+      let any = false;
+      let all = true;
+      n.descendants((c) => {
+        if (c.isText) {
+          if (c.marks.some((m) => m.type.name === vanish && (id == null || m.attrs?.id === id))) any = true;
+          else if (c.text.trim()) all = false;
+        } else if (c.isLeaf) all = false;
+        return true;
+      });
+      if (any && all) out.push(idx);
+      return false;
+    });
+    return out;
+  }
+  /** Removes the paragraphs at those places if the decision left them empty (never a table cell's last paragraph) */
+  function dropEmptiedBlocks(places) {
+    const ed = editor();
+    if (!places.length || !ed) return;
+    const want = new Set(places);
+    const drop = [];
+    let idx = -1;
+    ed.state.doc.descendants((n, pos, parent) => {
+      if (!n.isTextblock) return true;
+      idx++;
+      if (!want.has(idx) || parent.childCount < 2) return false;
+      let empty = true;
+      n.descendants((c) => { if ((c.isText && c.text.length) || (c.isLeaf && !c.isText)) empty = false; return true; });
+      if (empty) drop.push({ from: pos, to: pos + n.nodeSize });
+      return false;
+    });
+    if (!drop.length) return;
+    const tr = ed.state.tr;
+    for (const d of drop.reverse()) tr.delete(d.from, d.to);
+    ed.view.dispatch(tr.setMeta('skipTrackChanges', true));
   }
   async function restrictEditing() {
     const v = await restrictDialog();
@@ -2509,7 +2611,9 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
       const a = e.target.closest('[data-a]')?.dataset.a;
       const tid = n.dataset.id;
       if (!a) { try { await superdoc.navigateTo({ kind: 'entity', entityType: 'trackedChange', entityId: tid }); } catch { /* noop */ } return; }
+      const emptied = wholeTrackedBlocks(a, tid);
       await act(a === 'accept' ? 'Accept' : 'Reject', () => api().trackChanges.decide({ decision: a, target: { kind: 'id', id: tid } }));
+      dropEmptiedBlocks(emptied);
       renderChanges();
     }));
   }
@@ -2543,15 +2647,20 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
 
   setStatus(data ? name : 'New document');
 
+  async function docxBytes() {
+    const blob = await superdoc.export({ exportType: ['docx'], commentsType: 'external', triggerDownload: false });
+    let bytes = new Uint8Array(await blob.arrayBuffer());
+    try { bytes = await citationsToFields(bytes); } catch (e) { console.warn('citation fields', e); }
+    try { bytes = await repairDocx(bytes, openedBytes); } catch (e) { console.warn('repair', e); }
+    return bytes;
+  }
+
   return {
     async save(ext) {
       if (ext !== 'docx') throw new Error(`Writer can only save .docx (asked for .${ext})`);
-      const blob = await superdoc.export({ exportType: ['docx'], commentsType: 'external', triggerDownload: false });
-      let bytes = new Uint8Array(await blob.arrayBuffer());
-      try { bytes = await citationsToFields(bytes); } catch (e) { console.warn('citation fields', e); }
-      try { bytes = await repairDocx(bytes, openedBytes); } catch (e) { console.warn('repair', e); }
-      return bytes;
+      return docxBytes();
     },
+    runComparison,
 
     /** Prints the paginated layout to PDF using the window's print stylesheet */
     async exportPdf() {
