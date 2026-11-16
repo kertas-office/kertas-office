@@ -478,6 +478,20 @@ function handleTableNode(node, context) {
     marker: 'kertas: hidden documents leave keys alone',
   },
   {
+    // superdoc 1.47.2: diagonal cell borders (w:tl2br, w:tr2bl) were read but never drawn. They are
+    // now drawn behind the cell's text. The code is in scripts/patches/diagonal-borders.js.
+    dir: 'superdoc/dist/chunks',
+    find: /\nconst renderTableCell = \(deps\) => \{/,
+    replace: () => `\n${fs.readFileSync(path.join(__dirname, 'patches', 'diagonal-borders.js'), 'utf8')}\nconst renderTableCell = (deps) => {`,
+    marker: 'kertas: diagonal cell borders */',
+  },
+  {
+    dir: 'superdoc/dist/chunks',
+    find: /(\tif \(cell\?\.attrs\?\.background\) cellEl\.style\.backgroundColor = cell\.attrs\.background;)/,
+    replace: (m, line) => `${line}\n\tkertasCellDiagonals(doc$1, cellEl, cell, cellWidth ?? cellMeasure.width, rowHeight); // kertas: draw diagonals`,
+    marker: 'kertas: draw diagonals',
+  },
+  {
     // superdoc 1.47.2: ticks, check boxes, arrows and Greek letters set in the Symbol, Wingdings or
     // Wingdings 2 fonts showed as empty boxes (or wrong letters) where those fonts are missing, and
     // <w:sym> characters were not drawn at all. They are now drawn as the matching Unicode
