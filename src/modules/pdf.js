@@ -8,7 +8,7 @@ import { extractPages as extractTextPages, pdfToDocx, pdfToSnapshot, fontInfo } 
 import { compareText, buildReport } from '../lib/pdf-compare.js';
 import { findFont, cssStack } from '../lib/font-catalog.js';
 import { snapshotToXlsx } from '../lib/xlsx-bridge.js';
-import { OCR_LANGUAGES, recognise, stopOcr } from '../lib/ocr.js';
+import { OCR_LANGUAGES, recogniseMany, ocrScale, ocrWorkerCount, stopOcr } from '../lib/ocr.js';
 import { openDialog } from '../lib/dialog.js';
 import { readCertificate, signPdf } from '../lib/pdf-sign.js';
 import { createRibbon } from '../lib/ribbon.js';
@@ -210,7 +210,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
           ] },
         ] },
         { label: 'Scanned documents', items: [
-          { id: 'c-ocr', kind: 'big', icon: 'scan-text', label: 'Recognise text', title: 'Read the text in scanned pages (OCR) so it can be searched, copied and converted', action: () => runOcr() },
+          { id: 'c-ocr', kind: 'big', icon: 'scan-text', label: 'Recognise text', title: 'Read the text in scanned pages (OCR) so it can be searched, copied and converted', action: () => (ocrRun ? stopOcrRun() : runOcr()) },
         ] },
       ] },
       { id: 'view', label: 'View', groups: [
@@ -1604,6 +1604,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   // ---------------------------------------------------------------- OCR
   // Recognised words per source page, '<src>:<index>' -> { items (pdf-layout format), words (PDF space) }
   const ocrText = new Map();
+  let ocrRun = null; // { stop } while text recognition runs
   async function pageHasText(p) {
     const page = await sources[p.src].doc.getPage(p.index + 1);
     const tc = await page.getTextContent();
@@ -1634,39 +1635,71 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     }
     let done = 0;
     let words = 0;
+    const run = { stop: false };
+    ocrRun = run;
+    ribbon.setLabel('c-ocr', 'Stop');
+    const workers = ocrWorkerCount(targets.length);
+    const t0 = performance.now();
+    const say = () => {
+      const left = done ? ((performance.now() - t0) / done) * (targets.length - done) / 1000 : null;
+      const eta = left == null ? '' : left > 90 ? `, about ${Math.round(left / 60)} min left` : `, about ${Math.max(5, Math.round(left / 5) * 5)} s left`;
+      setStatus(`Recognising text: ${done} of ${targets.length} pages${eta}. Click Stop on the Convert tab to stop.`);
+    };
+    say();
     try {
-      for (const p of targets) {
-        const label = `Recognising page ${pages.indexOf(p) + 1} (${done + 1} of ${targets.length})`;
-        setStatus(`${label}...`);
+      await recogniseMany(targets.length, async (i) => {
+        const p = targets[i];
         const pdfPage = await sources[p.src].doc.getPage(p.index + 1);
-        const SCALE = 300 / 72;
-        const vp = pdfPage.getViewport({ scale: SCALE, rotation: pdfPage.rotate });
+        const base = pdfPage.getViewport({ scale: 1, rotation: pdfPage.rotate });
+        const vp = pdfPage.getViewport({ scale: ocrScale(base.width, base.height), rotation: pdfPage.rotate });
         const canvas = document.createElement('canvas');
         canvas.width = Math.floor(vp.width); canvas.height = Math.floor(vp.height);
         const ctx = canvas.getContext('2d');
         ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
         await pdfPage.render({ canvas, viewport: vp }).promise;
-        const found = await recognise(canvas, langs, (f) => setStatus(`${label}: ${Math.round(f * 100)}%`));
-        const items = found.map((w) => ({ str: w.str, x: w.x0 / SCALE, y: w.base / SCALE, w: (w.x1 - w.x0) / SCALE, size: Math.max(4, ((w.y1 - w.y0) / SCALE) * 0.95), bold: false, italic: false, font: null }))
-          // Words on the same line become one line of text, with spaces between them
-          .flatMap((it, i, arr) => (i && Math.abs(arr[i - 1].y - it.y) < it.size * 0.4 ? [{ ...it, str: ` ${it.str}` }] : [it]));
-        const pdfWords = found.map((w) => {
-          const [ax, ay] = vp.convertToPdfPoint(w.x0, w.base);
-          const [bx, by] = vp.convertToPdfPoint(w.x1, w.base);
-          return { str: w.str, x: ax, y: ay, w: Math.hypot(bx - ax, by - ay), size: Math.max(4, ((w.y1 - w.y0) / SCALE) * 0.9), rot: (Math.atan2(by - ay, bx - ax) * 180) / Math.PI };
-        });
-        ocrText.set(`${p.src}:${p.index}`, { items, words: pdfWords });
-        words += found.length;
-        done += 1;
-      }
-      changed();
+        p.ocrViewport = vp;
+        return canvas;
+      }, langs, {
+        shouldStop: () => run.stop,
+        onPage: (i, found) => {
+          const p = targets[i];
+          const vp = p.ocrViewport;
+          delete p.ocrViewport;
+          const scale = vp.scale;
+          const items = found.map((w) => ({ str: w.str, x: w.x0 / scale, y: w.base / scale, w: (w.x1 - w.x0) / scale, size: Math.max(4, ((w.y1 - w.y0) / scale) * 0.95), bold: false, italic: false, font: null }))
+            // Words on the same line become one line of text, with spaces between them
+            .flatMap((it, k, arr) => (k && Math.abs(arr[k - 1].y - it.y) < it.size * 0.4 ? [{ ...it, str: ` ${it.str}` }] : [it]));
+          const pdfWords = found.map((w) => {
+            const [ax, ay] = vp.convertToPdfPoint(w.x0, w.base);
+            const [bx, by] = vp.convertToPdfPoint(w.x1, w.base);
+            return { str: w.str, x: ax, y: ay, w: Math.hypot(bx - ax, by - ay), size: Math.max(4, ((w.y1 - w.y0) / scale) * 0.9), rot: (Math.atan2(by - ay, bx - ax) * 180) / Math.PI };
+          });
+          ocrText.set(`${p.src}:${p.index}`, { items, words: pdfWords });
+          words += found.length;
+          done += 1;
+          say();
+        },
+      });
+      if (done) changed();
       setStatus('');
-      toast(`Recognised ${words.toLocaleString()} words on ${done} page${done === 1 ? '' : 's'}. Save to keep the text, or use Convert to Word or Excel.`);
+      const secs = Math.round((performance.now() - t0) / 1000);
+      console.info(`OCR: ${done} pages in ${secs} s with ${workers} worker${workers === 1 ? '' : 's'}`);
+      if (run.stop) toast(`Stopped. Text was recognised on ${done} of ${targets.length} pages.`);
+      else toast(`Recognised ${words.toLocaleString()} words on ${done} page${done === 1 ? '' : 's'}. Save to keep the text, or use Convert to Word or Excel.`);
+      if (findQuery) find(findQuery);
     } catch (err) {
       console.error(err);
       setStatus('');
       toast(`Text recognition stopped: ${err.message || err}`, true);
+    } finally {
+      ocrRun = null;
+      ribbon.setLabel('c-ocr', 'Recognise text');
     }
+  }
+  function stopOcrRun() {
+    if (!ocrRun) return;
+    ocrRun.stop = true;
+    setStatus('Stopping after the pages being read now...');
   }
 
   // ---------------------------------------------------------------- convert
@@ -1910,33 +1943,65 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
   }
 
   // ---------------------------------------------------------------- find
+  // Text to search on a page, in PDF space: the page's own text, or the words OCR found on it
+  // (until the file is saved, recognised words live only in ocrText). OCR words on one line
+  // are joined, so a search for several words finds them.
+  async function searchItems(p) {
+    const tc = await (await pdfPageFor(p)).getTextContent();
+    const items = [];
+    for (const it of tc.items) {
+      if (!it.str) continue;
+      const [, , , , x, y] = it.transform;
+      items.push({ str: it.str, x, y, w: it.width, h: it.height || Math.hypot(it.transform[2], it.transform[3]) });
+    }
+    if (items.some((it) => it.str.trim())) return items;
+    const ocr = ocrText.get(`${p.src}:${p.index}`);
+    if (!ocr) return items;
+    const lines = [];
+    for (const w of ocr.words) {
+      const last = lines[lines.length - 1];
+      if (last && Math.abs(last.y - w.y) < w.size * 0.4 && w.x >= last.x) {
+        last.str += ` ${w.str}`;
+        last.w = Math.max(last.w, w.x + w.w - last.x);
+        last.h = Math.max(last.h, w.size);
+      } else lines.push({ str: w.str, x: w.x, y: w.y, w: w.w, h: w.size });
+    }
+    return lines;
+  }
+
+  let findRun = 0;
   async function find(q) {
+    const run = ++findRun; // a newer search makes this one stop
     findQuery = q.trim().toLowerCase();
     pagesEl.querySelectorAll('.search-hit').forEach((n) => n.remove());
     if (!findQuery) { setStatus(''); return; }
     let total = 0;
     let firstKey = null;
     for (const p of pages) {
-      const tc = await (await pdfPageFor(p)).getTextContent();
-      const n = tc.items.filter((it) => it.str?.toLowerCase().includes(findQuery)).length;
+      const items = await searchItems(p);
+      if (run !== findRun) return;
+      const n = items.filter((it) => it.str.toLowerCase().includes(findQuery)).length;
       if (n && !firstKey) firstKey = p.key;
       total += n;
       const entry = rendered.get(p.key);
-      if (entry?.viewport) highlightMatches(p, entry, tc);
+      if (entry?.viewport) drawHits(entry, items);
     }
     setStatus(total ? `${total} match${total === 1 ? '' : 'es'}` : 'No matches');
     if (firstKey) pagesEl.querySelector(`.pdf-page[data-key="${firstKey}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  async function highlightMatches(p, entry, tc) {
+  async function highlightMatches(p, entry) {
     if (!findQuery) return;
-    tc ||= await (await pdfPageFor(p)).getTextContent();
-    for (const it of tc.items) {
-      if (!it.str?.toLowerCase().includes(findQuery)) continue;
-      const [, , , , x, y] = it.transform;
-      const h = it.height || Math.hypot(it.transform[2], it.transform[3]);
-      const [x1, y1] = entry.viewport.convertToViewportPoint(x, y);
-      const [x2, y2] = entry.viewport.convertToViewportPoint(x + it.width, y + h);
+    const q = findQuery;
+    const items = await searchItems(p);
+    if (q === findQuery) drawHits(entry, items);
+  }
+  function drawHits(entry, items) {
+    entry.el.querySelectorAll('.search-hit').forEach((n) => n.remove());
+    for (const it of items) {
+      if (!it.str.toLowerCase().includes(findQuery)) continue;
+      const [x1, y1] = entry.viewport.convertToViewportPoint(it.x, it.y);
+      const [x2, y2] = entry.viewport.convertToViewportPoint(it.x + it.w, it.y + it.h);
       const hit = document.createElement('div');
       hit.className = 'search-hit';
       hit.style.cssText = `left:${Math.min(x1, x2)}px;top:${Math.min(y1, y2)}px;width:${Math.abs(x2 - x1)}px;height:${Math.abs(y2 - y1)}px`;

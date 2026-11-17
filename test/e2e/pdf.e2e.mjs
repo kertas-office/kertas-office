@@ -169,3 +169,17 @@ test('drag and drop: files dropped on the Files tab are attached, not opened', a
   assert.deepEqual(names, ['extra.pdf', 'sample.xlsx']);
   assert.deepEqual(page.errors, []);
 });
+
+test('OCR: a scan saved at photo size is read quickly and can be searched before saving', async () => {
+  // a "page" of 2481 x 3508 points, as phone and scanner apps save them: at 300 DPI
+  // that used to be a 150 megapixel image that took minutes to read
+  await openFixture(page, 'pdf', 'scan-phone.pdf');
+  await ribbon('convert', 'c-ocr');
+  await page.locator('.modal').getByRole('button', { name: 'Recognise' }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Recognised \d+ words on 1 page/.test(t.textContent)), null, { timeout: 60000 });
+  await page.locator('.rb-tab[data-tab="home"]:visible').click();
+  await page.locator('[data-id="find"]:visible input, input[data-id="find"]:visible').first().fill('library network');
+  await page.waitForFunction(() => /\d+ match/.test(document.querySelector('.statusbar, .status')?.textContent || ''), null, { timeout: 10000 });
+  assert.ok(await page.locator('.view.active .search-hit').count() >= 1);
+  assert.deepEqual(page.errors, []);
+});
