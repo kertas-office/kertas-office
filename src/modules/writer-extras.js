@@ -205,7 +205,7 @@ export function createExtras(ctx) {
   function equationDialog({ title, tex, okLabel }) {
     return openDialog({
       title,
-      description: 'Type the equation in LaTeX, or start from an example. It is saved as a real equation, so Writer and Word can both edit it.',
+      description: 'Type the equation in LaTeX, or start from an example.',
       width: 600,
       fields: [
         { id: 'preset', label: 'Examples', type: 'select', value: '', options: [{ value: '', label: 'Choose an example...' }, ...EQUATION_PRESETS.map((p, i) => ({ value: String(i), label: p.label }))] },

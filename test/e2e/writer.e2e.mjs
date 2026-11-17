@@ -369,7 +369,7 @@ test('equations: insert, double-click to edit, right-click to edit, save', async
   const rb = async (tab, id) => { await page.locator(`.rb-tab[data-tab="${tab}"]:visible`).click(); await page.locator(`[data-id="${id}"]:visible`).first().click(); };
   await rb('insert', 'equation');
   const tex = page.locator('.modal [data-f="tex"]');
-  assert.match(await page.locator('.modal').innerText(), /Writer and Word can both edit it/);
+  assert.doesNotMatch(await page.locator('.modal').innerText(), /Word/);
   await tex.fill('a^2+b^2=c^2');
   await page.locator('.modal').getByRole('button', { name: 'Insert', exact: true }).click();
   await page.locator('.view.active .sd-math').first().waitFor();
