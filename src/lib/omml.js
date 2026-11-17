@@ -186,3 +186,225 @@ export const EQUATION_PRESETS = [
   { label: 'Compound interest', tex: 'A=P\\left(1+\\frac{r}{n}\\right)^{nt}' },
   { label: 'Standard deviation', tex: '\\sigma=\\sqrt{\\frac{1}{N}\\sum_{i=1}^{N}(x_i-\\mu)^2}' },
 ];
+
+// ------------------------------------------------------------------ OMML -> LaTeX
+// Reads an equation back as LaTeX, so it can be edited again: ours (written above)
+// and ones made in Word. Takes the element tree SuperDoc keeps ({ name, attributes,
+// elements } with prefixed names) or the parseXml tree.
+
+const SYM = {
+  'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon', 'ϵ': 'epsilon', 'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ϑ': 'vartheta',
+  'ι': 'iota', 'κ': 'kappa', 'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'π': 'pi', 'ϖ': 'varpi', 'ρ': 'rho', 'ϱ': 'varrho', 'σ': 'sigma',
+  'ς': 'varsigma', 'τ': 'tau', 'υ': 'upsilon', 'φ': 'phi', 'ϕ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
+  'Γ': 'Gamma', 'Δ': 'Delta', 'Θ': 'Theta', 'Λ': 'Lambda', 'Ξ': 'Xi', 'Π': 'Pi', 'Σ': 'Sigma', 'Υ': 'Upsilon', 'Φ': 'Phi', 'Ψ': 'Psi', 'Ω': 'Omega',
+  '±': 'pm', '∓': 'mp', '×': 'times', '÷': 'div', '·': 'cdot', '⋅': 'cdot', '∘': 'circ', '∙': 'bullet',
+  '≤': 'leq', '≥': 'geq', '≠': 'neq', '≈': 'approx', '≡': 'equiv', '∼': 'sim', '≃': 'simeq', '≅': 'cong', '∝': 'propto', '≪': 'll', '≫': 'gg',
+  '∞': 'infty', '∂': 'partial', '∇': 'nabla', '∀': 'forall', '∃': 'exists', '∅': 'emptyset', '¬': 'neg', '∧': 'land', '∨': 'lor',
+  '∈': 'in', '∉': 'notin', '∋': 'ni', '⊂': 'subset', '⊃': 'supset', '⊆': 'subseteq', '⊇': 'supseteq', '∪': 'cup', '∩': 'cap', '∖': 'setminus',
+  '→': 'to', '←': 'leftarrow', '↔': 'leftrightarrow', '⇒': 'Rightarrow', '⇐': 'Leftarrow', '⇔': 'Leftrightarrow', '↦': 'mapsto', '↑': 'uparrow', '↓': 'downarrow',
+  '…': 'ldots', '⋯': 'cdots', '⋮': 'vdots', '⋱': 'ddots', '∠': 'angle', '⊥': 'perp', '∥': 'parallel', '′': "'", '″': "''",
+  'ℏ': 'hbar', 'ℓ': 'ell', 'ℜ': 'Re', 'ℑ': 'Im', 'ℵ': 'aleph', '⊕': 'oplus', '⊗': 'otimes', '†': 'dagger', '°': 'circ',
+};
+const BB = { 'ℝ': 'R', 'ℕ': 'N', 'ℤ': 'Z', 'ℚ': 'Q', 'ℂ': 'C', 'ℙ': 'P' };
+const NARY_TEX = { '∑': 'sum', '∏': 'prod', '∐': 'coprod', '∫': 'int', '∬': 'iint', '∭': 'iiint', '∮': 'oint', '⋃': 'bigcup', '⋂': 'bigcap', '⋁': 'bigvee', '⋀': 'bigwedge', '⨁': 'bigoplus', '⨂': 'bigotimes', '⨀': 'bigodot' };
+const ACC_TEX = { '̂': 'hat', '^': 'hat', '̃': 'tilde', '~': 'tilde', '̄': 'bar', '¯': 'bar', '⃗': 'vec', '→': 'vec', '̇': 'dot', '̈': 'ddot', '̌': 'check', '́': 'acute', '̀': 'grave', '̆': 'breve', '̊': 'mathring' };
+const FUNCS = new Set(['sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh', 'coth', 'log', 'ln', 'lg', 'exp', 'lim', 'liminf', 'limsup', 'max', 'min', 'sup', 'inf', 'det', 'dim', 'ker', 'deg', 'gcd', 'arg', 'Pr', 'hom']);
+const DELIM = { '(': '(', ')': ')', '[': '[', ']': ']', '{': '\\{', '}': '\\}', '|': '|', '‖': '\\|', '⟨': '\\langle', '⟩': '\\rangle', '〈': '\\langle', '〉': '\\rangle', '⌊': '\\lfloor', '⌋': '\\rfloor', '⌈': '\\lceil', '⌉': '\\rceil', '': '.' };
+
+// Both tree shapes -> { name (no prefix), attrs, children }
+function tidy(n) {
+  if (!n) return null;
+  if (n.type === 'text' || n.name === '#text') return { name: '#text', text: n.text ?? '' };
+  if (n.type && n.type !== 'element') return null;
+  const children = (n.elements ?? n.children ?? []).map(tidy).filter(Boolean);
+  return { name: String(n.name || '').replace(/^\w+:/, ''), attrs: n.attributes ?? n.attrs ?? {}, children };
+}
+const el = (n, name) => n?.children.find((c) => c.name === name);
+const els = (n, name) => (n ? n.children.filter((c) => c.name === name) : []);
+const prop = (n, pr, key) => { const p = el(el(n, pr), key); return p ? (p.attrs['m:val'] ?? p.attrs.val ?? '') : undefined; };
+const on = (v) => v !== undefined && v !== '0' && v !== 'off' && v !== 'false';
+const plainText = (n) => (n.name === '#text' ? n.text : n.children.map(plainText).join(''));
+
+// Mathematical italic and bold letters back to plain ones (Word sometimes saves them)
+function plainLetter(ch) {
+  const cp = ch.codePointAt(0);
+  if (cp === 0x210e) return 'h';
+  if (cp >= 0x1d400 && cp <= 0x1d6a3) { const k = (cp - 0x1d400) % 52; return String.fromCharCode(k < 26 ? 65 + k : 71 + k); }
+  if (cp >= 0x1d6a8 && cp <= 0x1d7c9) {
+    // Greek in five styles, 58 letters each: capitals (with theta symbol), nabla, small letters, partial and variants
+    const k = (cp - 0x1d6a8) % 58;
+    if (k < 25) return k === 17 ? 'ϴ' : String.fromCharCode(0x391 + k);
+    if (k === 25) return '∇';
+    if (k < 51) return String.fromCharCode(0x3b1 + k - 26);
+    return ['∂', 'ϵ', 'ϑ', 'ϰ', 'ϕ', 'ϱ', 'ϖ'][k - 51];
+  }
+  if (cp >= 0x1d7ce && cp <= 0x1d7ff) return String((cp - 0x1d7ce) % 10);
+  return ch;
+}
+
+function texText(s, plain) {
+  let out = '';
+  const word = s.trim();
+  if (plain && FUNCS.has(word)) return `\\${word} `;
+  if (plain && /^[A-Za-z]{2,}$/.test(word)) return `\\mathrm{${word}}`;
+  for (const raw of s) {
+    const ch = plainLetter(raw);
+    if (SYM[ch]) out += SYM[ch].startsWith("'") ? SYM[ch] : `\\${SYM[ch]} `;
+    else if (BB[ch]) out += `\\mathbb{${BB[ch]}}`;
+    else if (ch === '−') out += '-';
+    else if (ch === '∗') out += '*';
+    else if (ch === ' ' || ch === ' ') out += '\\,';
+    else if (ch === ' ' || ch === ' ') out += '\\:';
+    else if (ch === ' ' || ch === ' ') out += '\;';
+    else if (ch === ' ') out += '\\quad ';
+    else if (ch === ' ' || ch === ' ') out += plain ? '\\ ' : ' ';
+    else if ('#$%&_'.includes(ch)) out += `\\${ch}`;
+    else if (ch === '{' || ch === '}') out += `\\${ch}`;
+    else out += ch;
+  }
+  return out;
+}
+
+const grp = (s) => { const t = s.trim(); return t.length === 1 || /^\\[a-zA-Z]+\s*$/.test(t) ? t : `{${t}}`; };
+
+function tex(n) {
+  if (!n) return '';
+  switch (n.name) {
+    case '#text': return '';
+    case 'oMathPara': return els(n, 'oMath').map(tex).join(' \\\\ ');
+    case 'oMath': case 'e': case 'num': case 'den': case 'sub': case 'sup': case 'deg': case 'fName': case 'lim':
+    case 'box': case 'borderBox': case 'phant':
+      return n.children.map(tex).join('');
+    case 'r': {
+      const t = els(n, 't').map(plainText).join('');
+      const plain = prop(n, 'rPr', 'sty') === 'p' || on(prop(n, 'rPr', 'nor'));
+      return texText(t, plain);
+    }
+    case 'f': {
+      const num = tex(el(n, 'num'));
+      const den = tex(el(n, 'den'));
+      const type = prop(n, 'fPr', 'type');
+      if (type === 'noBar') return `\\binom{${num}}{${den}}`;
+      if (type === 'lin') return `${grp(num)}/${grp(den)}`;
+      return `\\frac{${num}}{${den}}`;
+    }
+    case 'sSup': return `${base(n)}^${grp(tex(el(n, 'sup')))}`;
+    case 'sSub': return `${base(n)}_${grp(tex(el(n, 'sub')))}`;
+    case 'sSubSup': return `${base(n)}_${grp(tex(el(n, 'sub')))}^${grp(tex(el(n, 'sup')))}`;
+    case 'sPre': return `{}_${grp(tex(el(n, 'sub')))}^${grp(tex(el(n, 'sup')))}${grp(tex(el(n, 'e')))}`;
+    case 'rad': {
+      const deg = tex(el(n, 'deg')).trim();
+      const body = tex(el(n, 'e'));
+      return deg && !on(prop(n, 'radPr', 'degHide')) ? `\\sqrt[${deg}]{${body}}` : `\\sqrt{${body}}`;
+    }
+    case 'nary': {
+      const chr = prop(n, 'naryPr', 'chr') || '∫';
+      let out = NARY_TEX[chr] ? `\\${NARY_TEX[chr]}` : texText(chr);
+      const sub = on(prop(n, 'naryPr', 'subHide')) ? '' : tex(el(n, 'sub')).trim();
+      const sup = on(prop(n, 'naryPr', 'supHide')) ? '' : tex(el(n, 'sup')).trim();
+      if (sub) out += `_${grp(sub)}`;
+      if (sup) out += `^${grp(sup)}`;
+      return `${out} ${tex(el(n, 'e'))}`;
+    }
+    case 'd': {
+      const beg = prop(n, 'dPr', 'begChr') ?? '(';
+      const end = prop(n, 'dPr', 'endChr') ?? ')';
+      const sep = prop(n, 'dPr', 'sepChr') ?? '|';
+      const parts = els(n, 'e');
+      // a matrix or a binomial in brackets is written the LaTeX way
+      const only = parts.length === 1 ? parts[0].children.filter((c) => c.name !== 'ctrlPr') : [];
+      if (only.length === 1 && only[0].name === 'm') {
+        const env = { '()': 'pmatrix', '[]': 'bmatrix', '{}': 'Bmatrix', '||': 'vmatrix', '‖‖': 'Vmatrix' }[beg + end];
+        if (env) return matrix(only[0], env);
+      }
+      if (only.length === 1 && only[0].name === 'f' && prop(only[0], 'fPr', 'type') === 'noBar' && beg === '(' && end === ')') return tex(only[0]);
+      const inner = parts.map(tex).join(sep === '|' ? ' \\mid ' : texText(sep));
+      if ((beg === '(' && end === ')') || (beg === '[' && end === ']')) return `${beg}${inner}${end}`;
+      return `\\left${DELIM[beg] ?? texText(beg)}${inner}\\right${DELIM[end] ?? texText(end)}`;
+    }
+    case 'm': return matrix(n, 'matrix');
+    case 'eqArr': return `\\begin{aligned}${els(n, 'e').map(tex).join(' \\\\ ')}\\end{aligned}`;
+    case 'func': {
+      const name = tex(el(n, 'fName')).trim();
+      return `${name}${/\\[a-z]+$/.test(name) ? ' ' : ''}${tex(el(n, 'e'))}`;
+    }
+    case 'limLow': case 'limUpp': {
+      const base = tex(el(n, 'e')).trim();
+      const lim = tex(el(n, 'lim'));
+      if (n.name === 'limLow' && /^\\(lim|max|min|sup|inf|liminf|limsup)$/.test(base)) return `${base}_{${lim}}`;
+      return n.name === 'limLow' ? `\\underset{${lim}}{${base}}` : `\\overset{${lim}}{${base}}`;
+    }
+    case 'acc': {
+      const chr = prop(n, 'accPr', 'chr') ?? '̂';
+      return `\\${ACC_TEX[chr] || 'hat'}{${tex(el(n, 'e'))}}`;
+    }
+    case 'bar': return `\\${prop(n, 'barPr', 'pos') === 'top' ? 'overline' : 'underline'}{${tex(el(n, 'e'))}}`;
+    case 'groupChr': {
+      const chr = prop(n, 'groupChrPr', 'chr') ?? '⏟';
+      const top = prop(n, 'groupChrPr', 'pos') === 'top' || chr === '⏞';
+      return `\\${top ? 'overbrace' : 'underbrace'}{${tex(el(n, 'e'))}}`;
+    }
+    case 'r_': return '';
+    default:
+      // properties and anything unknown: skip the settings, keep the content
+      if (/Pr$/.test(n.name)) return '';
+      return n.children.map(tex).join('');
+  }
+}
+
+// The base of a script: a bracket or a single letter needs no braces
+function base(n) {
+  const e = el(n, 'e');
+  const only = e ? e.children.filter((c) => c.name !== 'ctrlPr') : [];
+  const t = tex(e);
+  return only.length === 1 && only[0].name === 'd' && /^[([]/.test(t) ? t : grp(t);
+}
+
+function matrix(m, env) {
+  const rows = els(m, 'mr').map((r) => els(r, 'e').map((c) => tex(c).trim()).join(' & '));
+  return `\\begin{${env}}${rows.join(' \\\\ ')}\\end{${env}}`;
+}
+
+/** OMML (<m:oMathPara> or <m:oMath>, as a tree or an XML string) -> LaTeX */
+export function ommlToLatex(omml) {
+  let root = typeof omml === 'string' ? parseXml(omml) : omml;
+  root = tidy(root);
+  if (root?.name === '#root') root = root.children.find((c) => c.name === 'oMathPara' || c.name === 'oMath') || root;
+  return tex(root)
+    // the thin space temml puts after lim, sin and the like is LaTeX's own spacing
+    .replace(/(\\(?:lim|max|min|sup|inf|sin|cos|tan|log|ln|exp|det|arcsin|arccos|arctan|sinh|cosh|tanh)(?:_\{[^{}]*\})?)\s*\\,/g, '$1 ')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([_^}\])=+,;])/g, '$1')
+    .replace(/([({[])\s+/g, '$1')
+    .trim();
+}
+
+/** An XML string -> the element tree SuperDoc keeps for equations ({ type, name, attributes, elements }) */
+export function xmlToElements(src) {
+  const root = { type: 'element', name: '#root', elements: [] };
+  const stack = [root];
+  const re = /<!--[\s\S]*?-->|<\/([\w:.-]+)\s*>|<([\w:.-]+)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const top = stack.at(-1);
+    if (m[1]) { if (stack.length > 1) stack.pop(); continue; }
+    if (m[2]) {
+      const node = { type: 'element', name: m[2] };
+      const attrs = {};
+      for (const a of m[3].matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[a[1]] = decode(a[2] ?? a[3]);
+      if (Object.keys(attrs).length) node.attributes = attrs;
+      (top.elements ||= []).push(node);
+      if (!m[4]) stack.push(node);
+      continue;
+    }
+    // text keeps its spaces inside <m:t> and <w:t>; layout whitespace elsewhere is dropped
+    if (m[5] !== undefined && (m[5].trim() !== '' || /:t$/.test(top.name))) (top.elements ||= []).push({ type: 'text', text: decode(m[5]) });
+  }
+  return root.elements?.[0] ?? null;
+}
+
+/** The plain text of an equation, as SuperDoc keeps it beside the tree */
+export function equationText(tree) {
+  const walk = (n) => (!n ? '' : n.type === 'text' ? n.text : n.name === 'm:t' || n.name === 'w:t' ? (n.elements || []).map(walk).join('') : (n.elements || []).map(walk).join(''));
+  return walk(tree);
+}
