@@ -351,6 +351,23 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     { label: 'Right', icon: 'align-right', action: () => alignPicture('right') },
   ];
   // Right-click on a picture: the same wrapping choices
+  // The equation drawn under a point on the page, as its document position
+  function equationUnder(x, y) {
+    if (x == null) return null;
+    const hit = document.elementsFromPoint(x, y).find((n) => n.closest?.('.sd-math'));
+    const m = hit?.closest('.sd-math');
+    const pos = m ? Number(m.dataset.pmStart) : NaN;
+    return Number.isFinite(pos) ? pos : null;
+  }
+  function equationMenuItems() {
+    const target = (ed, c) => (c?.node && /^math(Block|Inline)$/.test(c.node.type?.name) ? extras.equationOf(ed, c.node) : null)
+      ?? extras.equationAt(ed, equationUnder(lastMenuAt?.x, lastMenuAt?.y)) ?? extras.equationAt(ed);
+    return [{ id: 'kertas-equation', items: [{
+      id: 'k-eq-edit', label: 'Edit equation...', icon: icon('equation', 16),
+      showWhen: (c) => c.trigger === 'click' && !!target(editor(), c),
+      action: (ed, c) => { const t = target(ed, c); setTimeout(() => extras.editEquation(t), 30); },
+    }] }];
+  }
   function pictureMenuItems() {
     const onPicture = (ctx) => ctx.trigger === 'click' && (ctx.node?.type?.name === 'image' || ctx.currentNodeType === 'image');
     // the picture that was right-clicked, whatever is selected
@@ -552,7 +569,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
           menu('textbox', 'text-box', 'Text box', () => extras.textBoxMenu(), 'Text beside the main text, or a pull quote'),
           big('hr', 'minus', 'Line', () => horizontalLine(), 'Horizontal line'),
         ] },
-        { label: 'Maths', items: [big('equation', 'equation', 'Equation', () => extras.insertEquation(), 'Fractions, roots, sums and more (LaTeX)')] },
+        { label: 'Maths', items: [big('equation', 'equation', 'Equation', () => extras.insertEquation(), 'Fractions, roots, sums and more (LaTeX). Double-click an equation to edit it')] },
         { label: 'Links', items: [
           big('link', 'link', 'Link', () => insertLink()),
           big('bookmark', 'bookmark', 'Bookmark', () => bookmarkDialog(), 'Name a place in the document to link or refer to'),
@@ -859,7 +876,7 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         toolbar: `#${id}-toolbar`,
         modules: {
           toolbar: { selector: `#${id}-toolbar`, excludeItems: ['documentMode', 'zoom', 'search', 'ruler', 'measurementUnit'], fonts: kFonts.options },
-          contextMenu: { includeDefaultItems: true, noSlash: true, customItems: [...textMenuItems(), ...tableMenuItems(), ...pictureMenuItems()] }, // "/" opens Kertas's own menu
+          contextMenu: { includeDefaultItems: true, noSlash: true, customItems: [...textMenuItems(), ...tableMenuItems(), ...pictureMenuItems(), ...equationMenuItems()] }, // "/" opens Kertas's own menu
         },
         fonts: { families: kFonts.families },
         proofing: {
@@ -1829,6 +1846,14 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
         // picking a menu item also puts the bar away
         menuEl?.addEventListener('click', () => ft.hideBar(), { once: true });
       }, 80);
+    }, true);
+    // Double-click an equation to edit it as LaTeX
+    // (the editor captures the pointer, so the event's target is its viewport: go by where it landed)
+    body.addEventListener('dblclick', (e) => {
+      const pos = equationUnder(e.clientX, e.clientY);
+      if (pos == null || !extras.equationAt(editor(), pos)) return;
+      e.preventDefault(); e.stopPropagation();
+      extras.editEquation(pos);
     }, true);
     // Form fields: a click opens a dropdown's choices or a date picker, or ticks a box
     // (on pointer up: the editor redraws a locked field on pointer down, so no click event follows)
