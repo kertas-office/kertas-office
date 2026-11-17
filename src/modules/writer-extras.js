@@ -6,7 +6,7 @@ import { icon } from '../lib/icons.js';
 import { openFiles, saveFile, saveMany } from '../lib/platform.js';
 import { SHAPES, SHAPE_COLORS, shapeIcon, shapePng } from '../lib/shapes.js';
 export { SHAPES };
-import { latexToOmml, EQUATION_PRESETS } from '../lib/omml.js';
+import { latexToOmml, ommlToLatex, xmlToElements, equationText, EQUATION_PRESETS } from '../lib/omml.js';
 import temml from 'temml';
 import { CITATION_STYLES, SOURCE_TYPES, parseAuthors, formatAuthors, inText, numbering, bibliographyXml, entryText, ordered } from '../lib/citations.js';
 import { readRecipients, fieldName, mergeSingle, mergeSeparate, recordLabel } from '../lib/mailmerge.js';
@@ -180,15 +180,36 @@ export function createExtras(ctx) {
   }
 
   // ---------------------------------------------------------------- equations
-  async function insertEquation(preset) {
-    const last = store.get('kertas-eq', EQUATION_PRESETS[0].tex);
-    const res = await openDialog({
-      title: 'Insert equation',
-      description: 'Type the equation in LaTeX, or start from an example. Word opens it as a real, editable equation.',
+  const MATH = new Set(['mathBlock', 'mathInline']);
+  /** The equation at a document position (or the one selected): { node, pos } */
+  function equationAt(ed, pos) {
+    const doc = ed?.state?.doc;
+    if (!doc) return null;
+    const sel = ed.state.selection;
+    if (pos == null && sel?.node && MATH.has(sel.node.type.name)) return { node: sel.node, pos: sel.from };
+    if (pos == null) return null;
+    for (const p of [pos, pos - 1, pos + 1]) {
+      if (p < 0 || p > doc.content.size) continue;
+      const n = doc.nodeAt(p);
+      if (n && MATH.has(n.type.name)) return { node: n, pos: p };
+    }
+    return null;
+  }
+  /** Finds where a node sits in the document (the right-click menu hands over the node itself) */
+  function equationOf(ed, node) {
+    let found = null;
+    ed?.state?.doc?.descendants((n, p) => { if (found) return false; if (n === node) { found = { node: n, pos: p }; return false; } return true; });
+    return found;
+  }
+
+  function equationDialog({ title, tex, okLabel }) {
+    return openDialog({
+      title,
+      description: 'Type the equation in LaTeX, or start from an example. It is saved as a real equation, so Writer and Word can both edit it.',
       width: 600,
       fields: [
         { id: 'preset', label: 'Examples', type: 'select', value: '', options: [{ value: '', label: 'Choose an example...' }, ...EQUATION_PRESETS.map((p, i) => ({ value: String(i), label: p.label }))] },
-        { id: 'tex', label: 'LaTeX', type: 'textarea', rows: 3, value: preset?.tex || last },
+        { id: 'tex', label: 'LaTeX', type: 'textarea', rows: 3, value: tex },
         { id: 'preview', type: 'info', html: '' },
         { id: 'help', type: 'info', html: '<span class="muted">\\frac{a}{b} fraction, x^2 power, x_i subscript, \\sqrt{x} root, \\sum_{i=1}^{n} sum, \\int_a^b integral, \\alpha \\beta \\pi Greek, \\left( \\right) brackets</span>' },
       ],
@@ -204,12 +225,47 @@ export function createExtras(ctx) {
         box.classList.add('eq-preview');
         try { box.innerHTML = temml.renderToString(v.tex, { displayMode: true, throwOnError: true }); } catch (e) { box.innerHTML = `<span class="muted">${esc(String(e.message).replace(/^Temml parse error:\s*/i, ''))}</span>`; }
       },
-      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Insert', primary: true }],
+      actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: okLabel, primary: true }],
     });
+  }
+
+  /** Insert > Equation, or edits the equation that is selected */
+  async function insertEquation(preset) {
+    const found = preset ? null : equationAt(ctx.editor?.());
+    if (found) return editEquation(found);
+    const last = store.get('kertas-eq', EQUATION_PRESETS[0].tex);
+    const res = await equationDialog({ title: 'Insert equation', tex: preset?.tex || last, okLabel: 'Insert' });
     if (!res) return;
     store.set('kertas-eq', res.values.tex);
     const { paragraph } = latexToOmml(res.values.tex);
     await act('Equation', () => insertParagraphsXml(paragraph));
+  }
+
+  /** Opens an equation in the dialog as LaTeX and puts the new version in its place */
+  async function editEquation(target) {
+    const ed = ctx.editor?.();
+    let found = target?.node ? target : equationAt(ed, target);
+    if (!found) return;
+    let tex = '';
+    try { tex = ommlToLatex(found.node.attrs.originalXml); } catch (e) { console.warn('equation', e); }
+    const res = await equationDialog({ title: 'Edit equation', tex, okLabel: 'Update' });
+    if (!res) return;
+    store.set('kertas-eq', res.values.tex);
+    await act('Equation', () => {
+      const e2 = ctx.editor?.();
+      // the document may have moved on while the dialog was open
+      found = equationOf(e2, found.node) || equationAt(e2, found.pos);
+      if (!found) throw new Error('The equation is no longer there');
+      const block = found.node.type.name === 'mathBlock';
+      const { omath } = latexToOmml(res.values.tex, { display: block });
+      const tree = xmlToElements(block ? `<m:oMathPara>${omath}</m:oMathPara>` : omath);
+      // a block keeps its alignment (m:oMathParaPr) from before
+      const old = found.node.attrs.originalXml;
+      const pr = block ? (old?.elements || []).find((x) => x.name === 'm:oMathParaPr') : null;
+      if (pr) tree.elements.unshift(pr);
+      const tr = e2.state.tr.setNodeMarkup(found.pos, null, { ...found.node.attrs, originalXml: tree, textContent: equationText(tree) });
+      e2.view.dispatch(tr);
+    });
   }
 
   // ---------------------------------------------------------------- citations
@@ -559,7 +615,7 @@ export function createExtras(ctx) {
   }
 
   return {
-    shapeMenu, insertShape, textBoxMenu, insertTextBox, insertEquation, promptMergeField,
+    shapeMenu, insertShape, textBoxMenu, insertTextBox, insertEquation, editEquation, equationAt, equationOf, promptMergeField,
     insertCitation, manageSources, bibliographyMenu, insertBibliography, updateCitations,
     /** Registers citations that came in as Word citation fields (now plain text) */
     async registerCitations(found) {

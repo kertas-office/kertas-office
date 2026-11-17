@@ -361,3 +361,67 @@ test('compare documents: from the revised version, rejecting every change gives 
   assert.deepEqual(await textBlocks(), original);
   assert.deepEqual(page.errors, []);
 });
+
+test('equations: insert, double-click to edit, right-click to edit, save', async () => {
+  const t = await page.evaluate(async () => { const t = await window.__kertas.openTab('writer', { name: 'Equations.docx' }); while (!t.instance) await new Promise((r) => setTimeout(r, 100)); window.__t = t; return t.id; });
+  assert.ok(t);
+  await sleep(2500);
+  const rb = async (tab, id) => { await page.locator(`.rb-tab[data-tab="${tab}"]:visible`).click(); await page.locator(`[data-id="${id}"]:visible`).first().click(); };
+  await rb('insert', 'equation');
+  const tex = page.locator('.modal [data-f="tex"]');
+  assert.match(await page.locator('.modal').innerText(), /Writer and Word can both edit it/);
+  await tex.fill('a^2+b^2=c^2');
+  await page.locator('.modal').getByRole('button', { name: 'Insert', exact: true }).click();
+  await page.locator('.view.active .sd-math').first().waitFor();
+  await sleep(500);
+  // double-click opens it as LaTeX
+  await page.locator('.view.active .sd-math').first().dblclick();
+  await page.locator('.modal').waitFor();
+  assert.match(await page.locator('.modal').innerText(), /Edit equation/);
+  assert.equal(await tex.inputValue(), 'a^2+b^2=c^2');
+  await tex.fill('x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}');
+  await page.locator('.modal').getByRole('button', { name: 'Update', exact: true }).click();
+  await sleep(800);
+  // right-click > Edit equation
+  await page.locator('.view.active .sd-math').first().click({ button: 'right' });
+  await page.getByText('Edit equation...').click();
+  await page.locator('.modal').waitFor();
+  assert.equal(await tex.inputValue(), 'x=\\frac{-b\\pm \\sqrt{b^2-4ac}}{2a}');
+  await tex.fill('E=mc^2');
+  await page.locator('.modal').getByRole('button', { name: 'Update', exact: true }).click();
+  await sleep(800);
+  const xml = await docXml(await saveBytes(page, 'docx'));
+  assert.equal(xml.match(/<m:oMathPara/g)?.length, 1);
+  const text = [...xml.matchAll(/<m:t[^>]*>([^<]*)<\/m:t>/g)].map((m) => m[1]).join('');
+  assert.equal(text, 'E=mc2');
+  assert.deepEqual(page.errors, []);
+});
+
+test('equations from Word: one on its own line and one in a sentence can both be edited', async () => {
+  await openFixture(page, 'writer', 'equations.docx');
+  await sleep(1000);
+  const tex = page.locator('.modal [data-f="tex"]');
+  const eqs = page.locator('.view.active .sd-math');
+  assert.equal(await eqs.count(), 2);
+  await eqs.nth(0).dblclick();
+  await page.locator('.modal').waitFor();
+  assert.equal(await tex.inputValue(), 'A=\\pi r^2');
+  await tex.fill('A=\\pi r^2+1');
+  await page.locator('.modal').getByRole('button', { name: 'Update', exact: true }).click();
+  await sleep(800);
+  await page.locator('.view.active .sd-math').nth(1).dblclick();
+  await page.locator('.modal').waitFor();
+  assert.equal(await tex.inputValue(), '\\sqrt{2}');
+  await tex.fill('\\sqrt{3}');
+  await page.locator('.modal').getByRole('button', { name: 'Update', exact: true }).click();
+  await sleep(800);
+  const xml = await docXml(await saveBytes(page, 'docx'));
+  assert.equal(xml.match(/<m:oMathPara/g)?.length, 1);
+  assert.match(xml, /Each side has length/);
+  assert.match(xml, /metres\./);
+  const text = [...xml.matchAll(/<m:t[^>]*>([^<]*)<\/m:t>/g)].map((m) => m[1]).join('|');
+  assert.match(text, /A\|=\|π\|r\|2\|\+\|1/);
+  assert.match(text, /3/);
+  assert.doesNotMatch(text, /\|2\|.*\|2$/);
+  assert.deepEqual(page.errors, []);
+});

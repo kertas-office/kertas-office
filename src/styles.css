@@ -1164,3 +1164,7 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 .fbar-btn.on { background: var(--accent-soft); color: var(--accent); }
 .fbar-sw i { position: absolute; left: 7px; right: 7px; bottom: 4px; height: 3px; border-radius: 2px; }
 .fbar-sep { width: 1px; height: 20px; background: var(--line); margin: 0 3px; }
+
+/* Equations: double-click to edit */
+.writer-body .sd-math { cursor: pointer; border-radius: 4px; transition: box-shadow .12s; }
+.writer-body .sd-math:hover { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #7c3aed) 45%, transparent); }
