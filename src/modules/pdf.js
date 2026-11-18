@@ -4,7 +4,7 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFDocument } from '@cantoo/pdf-lib';
 import { buildPdf, listFormFields, imagesToPdf } from '../lib/pdf-ops.js';
 import { openFiles, saveMany, saveFile, saveAnyFile } from '../lib/platform.js';
-import { extractPages as extractTextPages, pdfToDocx, pdfToSnapshot, fontInfo } from '../lib/pdf-convert.js';
+import { extractPages as extractTextPages, pdfToDocx, pdfToSnapshot, fontInfo, textLooksGarbled } from '../lib/pdf-convert.js';
 import { compareText, buildReport } from '../lib/pdf-compare.js';
 import { findFont, cssStack } from '../lib/font-catalog.js';
 import { snapshotToXlsx } from '../lib/xlsx-bridge.js';
@@ -1633,6 +1633,16 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
       targets = keep;
       if (!targets.length) { toast('Every page already has text. Choose All pages to read them again.'); return; }
     }
+    await ocrPages(targets, langs);
+  }
+
+  /**
+   * Reads the given pages with OCR. Returns the number of pages read.
+   * On a page that has its own text, the recognised text replaces it for search and conversion.
+   */
+  async function ocrPages(targets, langs, { quiet = false } = {}) {
+    const hadText = new Map();
+    for (const p of targets) hadText.set(p, await pageHasText(p));
     let done = 0;
     let words = 0;
     const run = { stop: false };
@@ -1666,15 +1676,15 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
           const vp = p.ocrViewport;
           delete p.ocrViewport;
           const scale = vp.scale;
-          const items = found.map((w) => ({ str: w.str, x: w.x0 / scale, y: w.base / scale, w: (w.x1 - w.x0) / scale, size: Math.max(4, ((w.y1 - w.y0) / scale) * 0.95), bold: false, italic: false, font: null }))
+          const items = found.map((w) => ({ str: w.str, x: w.x0 / scale, y: w.base / scale, w: (w.x1 - w.x0) / scale, size: Math.max(4, w.lineH / scale), bold: false, italic: false, font: null, ocr: true }))
             // Words on the same line become one line of text, with spaces between them
             .flatMap((it, k, arr) => (k && Math.abs(arr[k - 1].y - it.y) < it.size * 0.4 ? [{ ...it, str: ` ${it.str}` }] : [it]));
           const pdfWords = found.map((w) => {
             const [ax, ay] = vp.convertToPdfPoint(w.x0, w.base);
             const [bx, by] = vp.convertToPdfPoint(w.x1, w.base);
-            return { str: w.str, x: ax, y: ay, w: Math.hypot(bx - ax, by - ay), size: Math.max(4, ((w.y1 - w.y0) / scale) * 0.9), rot: (Math.atan2(by - ay, bx - ax) * 180) / Math.PI };
+            return { str: w.str, x: ax, y: ay, w: Math.hypot(bx - ax, by - ay), size: Math.max(4, (w.lineH / scale) * 0.9), rot: (Math.atan2(by - ay, bx - ax) * 180) / Math.PI };
           });
-          ocrText.set(`${p.src}:${p.index}`, { items, words: pdfWords });
+          ocrText.set(`${p.src}:${p.index}`, { items, words: pdfWords, replace: !!hadText.get(p) });
           words += found.length;
           done += 1;
           say();
@@ -1685,12 +1695,14 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
       const secs = Math.round((performance.now() - t0) / 1000);
       console.info(`OCR: ${done} pages in ${secs} s with ${workers} worker${workers === 1 ? '' : 's'}`);
       if (run.stop) toast(`Stopped. Text was recognised on ${done} of ${targets.length} pages.`);
-      else toast(`Recognised ${words.toLocaleString()} words on ${done} page${done === 1 ? '' : 's'}. Save to keep the text, or use Convert to Word or Excel.`);
+      else if (!quiet) toast(`Recognised ${words.toLocaleString()} words on ${done} page${done === 1 ? '' : 's'}. Save to keep the text, or use Convert to Word or Excel.`);
       if (findQuery) find(findQuery);
+      return run.stop ? 0 : done;
     } catch (err) {
       console.error(err);
       setStatus('');
       toast(`Text recognition stopped: ${err.message || err}`, true);
+      return 0;
     } finally {
       ocrRun = null;
       ribbon.setLabel('c-ocr', 'Recognise text');
@@ -1713,9 +1725,11 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
       const [pg] = await extractTextPages(sources[p.src].doc, { Util: pdfjsLib.Util, pages: [p.index] });
       if (!pg) continue;
       // Words recognised by OCR count as text too
+      // ... and stand in for the page's own text when that was unreadable
       const ocr = ocrText.get(`${p.src}:${p.index}`);
-      if (ocr && !pg.items.some((it) => it.str.trim())) pg.items = ocr.items;
-      out.push({ ...pg, index: n - 1 });
+      const fromOcr = !!ocr && (ocr.replace || !pg.items.some((it) => it.str.trim()));
+      if (fromOcr) pg.items = ocr.items;
+      out.push({ ...pg, index: n - 1, page: p, fromOcr });
       onProgress?.(n, pages.length);
     }
     return out;
@@ -1725,7 +1739,32 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     const base = name.replace(/\.pdf$/i, '');
     try {
       setStatus('Reading the PDF...');
-      const text = await currentText((n, t) => setStatus(`Reading page ${n} of ${t}...`));
+      let text = await currentText((n, t) => setStatus(`Reading page ${n} of ${t}...`));
+      // Some PDFs draw the right shapes but store other characters: converting that gives gibberish
+      const bad = text.filter((p) => !p.fromOcr && textLooksGarbled(p.items).garbled);
+      if (bad.length) {
+        setStatus('');
+        const some = bad.length === text.length ? (text.length === 1 ? 'this page' : `all ${text.length} pages`) : `${bad.length} of ${text.length} pages`;
+        const res = await openDialog({
+          title: 'The text in this PDF cannot be read',
+          description: `The text stored in ${some} is not real text. The page looks right, but the letters behind it are other characters, so it would convert to gibberish (copying from it gives the same). Kertas can read ${bad.length === 1 ? 'that page' : 'those pages'} as pictures instead.`,
+          width: 520,
+          fields: [
+            { id: 'info', type: 'info', html: '<b>Languages in the document</b>' },
+            ...OCR_LANGUAGES.map((l) => ({ id: `lang-${l.id}`, type: 'checkbox', label: l.label, value: l.id === 'eng' })),
+          ],
+          validate: (v, action) => (action === 'asis' || OCR_LANGUAGES.some((l) => v[`lang-${l.id}`]) ? null : 'Pick at least one language'),
+          actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'asis', label: 'Convert as it is' }, { id: 'ok', label: 'Recognise text and convert', primary: true, icon: 'scan-text' }],
+        });
+        if (!res || res.action === 'cancel') return;
+        if (res.action === 'ok') {
+          const langs = OCR_LANGUAGES.filter((l) => res.values[`lang-${l.id}`]).map((l) => l.id);
+          const read = await ocrPages(bad.map((p) => p.page), langs, { quiet: true });
+          if (!read) return;
+          setStatus('Reading the PDF...');
+          text = await currentText();
+        }
+      }
       const blankPages = text.filter((p) => !p.items.some((it) => it.str.trim())).length;
       if (blankPages && blankPages === text.length) {
         toast('This PDF has no text layer, so it looks like a scan. Run Recognise text first, then convert.', true);
@@ -1954,9 +1993,8 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
       const [, , , , x, y] = it.transform;
       items.push({ str: it.str, x, y, w: it.width, h: it.height || Math.hypot(it.transform[2], it.transform[3]) });
     }
-    if (items.some((it) => it.str.trim())) return items;
     const ocr = ocrText.get(`${p.src}:${p.index}`);
-    if (!ocr) return items;
+    if (!ocr || (!ocr.replace && items.some((it) => it.str.trim()))) return items;
     const lines = [];
     for (const w of ocr.words) {
       const last = lines[lines.length - 1];

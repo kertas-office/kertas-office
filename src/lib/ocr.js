@@ -59,11 +59,14 @@ function wordsOf(data) {
     for (const para of block.paragraphs || []) {
       for (const line of para.lines || []) {
         const base = line.baseline ? (line.baseline.y0 + line.baseline.y1) / 2 : null;
+        // The height of the line's type (ascender to descender). A word's own box is only as
+        // tall as its letters ("are" is shorter than "They"), so sizes come from the line.
+        const lineH = line.rowAttributes?.rowHeight || (line.bbox ? line.bbox.y1 - line.bbox.y0 : 0);
         for (const word of line.words || []) {
           const text = (word.text || '').trim();
           if (!text || word.confidence < 25) continue;
           const b = word.bbox;
-          words.push({ str: text, x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, base: base ?? b.y1, conf: word.confidence });
+          words.push({ str: text, x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, base: base ?? b.y1, conf: word.confidence, lineH: lineH || b.y1 - b.y0 });
         }
       }
     }

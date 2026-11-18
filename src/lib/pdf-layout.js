@@ -154,7 +154,10 @@ export function pageBlocks(page, { bodySize, level }) {
       const n = lines[i];
       const gap = n.y - prev.y;
       const sameSize = Math.abs(n.size - prev.size) <= prev.size * 0.12;
-      const continues = sameSize && n.segments.length === 1 && gap < prev.size * 1.75 && !level(n.size)
+      // A line that runs to the right edge without ending a sentence carries on below, even
+      // with generous line spacing (1.5 or double)
+      const fullLine = prev.x1 > right - prev.size * 5 && !/[.!?:]["')\]]?$/.test(prev.text);
+      const continues = sameSize && n.segments.length === 1 && gap < prev.size * (fullLine ? 2.4 : 1.75) && !level(n.size)
         && Math.abs(n.x0 - left) < prev.size * 3 + (align === 'center' ? 1e3 : 0)
         && !n.text.match(BULLET) && !n.text.match(NUMBERED)
         // A short line that ends a sentence usually ends the paragraph
@@ -205,13 +208,89 @@ function alignOf(l, left, right, centre) {
   return 'left';
 }
 
+// ------------------------------------------------------------- font sizes
+// A PDF's text carries a size on every piece, and they often differ by a hair where
+// the eye sees one size: recognised (OCR) text is measured word by word or line by
+// line, and scanners' own text layers do the same. Left alone, a converted paragraph
+// changes size from word to word. Sizes are settled in three steps: one size per
+// line, near-equal sizes across the document become one, and (in uniformRuns) one
+// size per paragraph.
+
+const weightOf = (it) => Math.max(1, it.str.trim().length);
+function weightedMedian(pairs) {
+  const s = [...pairs].sort((a, b) => a[0] - b[0]);
+  const half = s.reduce((n, p) => n + p[1], 0) / 2;
+  let acc = 0;
+  for (const [v, w] of s) { acc += w; if (acc >= half) return v; }
+  return s.length ? s.at(-1)[0] : 0;
+}
+const half = (v) => Math.round(v * 2) / 2;
+
+/** Returns the pages with font sizes settled (items are copied, not changed) */
+export function settleSizes(pages) {
+  const out = pages.map((p) => ({ ...p, items: p.items.map((it) => ({ ...it })) }));
+  const lineSizes = []; // [size, weight]
+  for (const p of out) {
+    for (const l of buildLines(p)) {
+      const dom = weightedMedian(l.items.map((it) => [it.size, weightOf(it)]));
+      // a superscript or a drop cap keeps its own size; a few percent either way is noise
+      for (const it of l.items) if (it.size >= dom * 0.82 && it.size <= dom * 1.2) it.size = dom;
+      lineSizes.push([dom, l.items.reduce((n, it) => n + weightOf(it), 0)]);
+    }
+  }
+  if (!lineSizes.length) return out;
+  // How finely the document's sizes are spread: measured text (OCR) scatters around each
+  // real size, typeset text does not
+  const body = weightedMedian(lineSizes);
+  const total = lineSizes.reduce((n, p) => n + p[1], 0);
+  const near = new Map();
+  for (const [v, w] of lineSizes) if (v >= body * 0.8 && v <= body * 1.25) near.set(half(v), (near.get(half(v)) || 0) + w);
+  const noisy = out.some((p) => p.items.some((it) => it.ocr)) || [...near.values()].filter((w) => w >= total * 0.04).length >= 4;
+  const tol = noisy ? 0.13 : 0.04;
+  // Sizes within the tolerance of each other become the commonest one of the group
+  const bySize = new Map();
+  for (const p of out) for (const it of p.items) if (it.size > 0 && it.str.trim()) bySize.set(it.size, (bySize.get(it.size) || 0) + weightOf(it));
+  const sizes = [...bySize.keys()].sort((a, b) => a - b);
+  const settle = new Map();
+  for (let i = 0; i < sizes.length;) {
+    let j = i;
+    while (j + 1 < sizes.length && sizes[j + 1] <= sizes[i] * (1 + tol)) j++;
+    const group = sizes.slice(i, j + 1);
+    // the commonest half-point size of the group, by amount of text
+    const votes = new Map();
+    for (const v of group) votes.set(half(v), (votes.get(half(v)) || 0) + bySize.get(v));
+    const rep = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
+    for (const v of group) settle.set(v, rep);
+    i = j + 1;
+  }
+  for (const p of out) for (const it of p.items) if (settle.has(it.size)) it.size = settle.get(it.size);
+  return out;
+}
+
+/** One size per paragraph: runs close to the paragraph's main size take it */
+export function uniformRuns(runs) {
+  const sized = runs.filter((r) => r.text.trim());
+  if (sized.length < 2) return runs;
+  const dom = weightedMedian(sized.map((r) => [r.size, r.text.trim().length]));
+  const out = [];
+  for (const r of runs) {
+    const size = r.size >= dom * 0.82 && r.size <= dom * 1.2 ? dom : r.size;
+    const prev = out.at(-1);
+    if (prev && prev.bold === r.bold && prev.italic === r.italic && prev.size === size && prev.font === r.font) prev.text += r.text;
+    else out.push({ ...r, size });
+  }
+  return out;
+}
+
 /** Whole-document analysis: body size, heading levels, blocks per page */
-export function analyse(pages) {
+export function analyse(input) {
+  const pages = settleSizes(input);
   const all = pages.flatMap((p) => buildLines(p));
   const weighted = all.flatMap((l) => Array(Math.min(50, Math.ceil(l.text.length / 10))).fill(l.size));
   const bodySize = median(weighted) || 11;
   const level = headingLevels(all, bodySize);
-  return { bodySize, pages: pages.map((p) => ({ width: p.width, height: p.height, blocks: pageBlocks(p, { bodySize, level }), empty: !p.items.some((it) => it.str.trim()) })) };
+  const tidy = (b) => (b.runs ? { ...b, runs: uniformRuns(b.runs) } : b.items ? { ...b, items: b.items.map(uniformRuns) } : b);
+  return { bodySize, pages: pages.map((p) => ({ width: p.width, height: p.height, blocks: pageBlocks(p, { bodySize, level }).map(tidy), empty: !p.items.some((it) => it.str.trim()) })) };
 }
 
 // ---------------------------------------------------------------- spreadsheet
