@@ -183,3 +183,26 @@ test('OCR: a scan saved at photo size is read quickly and can be searched before
   assert.ok(await page.locator('.view.active .search-hit').count() >= 1);
   assert.deepEqual(page.errors, []);
 });
+
+test('convert: a PDF whose stored text is gibberish is read with text recognition instead', async () => {
+  // garbled.pdf looks normal, but its fonts have no character table: copying from it gives junk
+  await openFixture(page, 'pdf', 'garbled.pdf');
+  await ribbon('convert', 'c-word');
+  const dlg = page.locator('.modal');
+  await dlg.waitFor();
+  assert.match(await dlg.innerText(), /The text in this PDF cannot be read/);
+  await dlg.getByRole('button', { name: 'Recognise text and convert' }).click();
+  await page.waitForFunction(() => [...window.__kertas.tabs.values()].some((t) => t.name === 'garbled.docx' && t.instance), null, { timeout: 90000 });
+  await sleep(2500);
+  const text = await page.evaluate(() => { const d = window.__kertasOoxml.editor().state.doc; return d.textBetween(0, d.content.size, '\n'); });
+  assert.match(text, /Customer Self-Service Portal/);
+  assert.match(text, /track orders, change deliveries and get answers/);
+  // real words, not the junk the PDF stores
+  const junk = [...text].filter((c) => c.codePointAt(0) < 0x20 && c !== '\n').length;
+  assert.equal(junk, 0);
+  // and one size per paragraph
+  const sizes = await page.evaluate(() => { const out = []; window.__kertasOoxml.editor().state.doc.descendants((n) => { if (n.type.name !== 'paragraph') return true; const s = new Set(); n.descendants((c) => { if (c.isText && c.text.trim()) s.add(JSON.stringify(c.marks.map((m) => m.attrs?.fontSize).filter(Boolean))); }); if (s.size) out.push(s.size); return false; }); return out; });
+  assert.ok(sizes.length > 5);
+  assert.ok(sizes.every((n) => n === 1), `paragraphs with mixed sizes: ${sizes.filter((n) => n > 1).length}`);
+  assert.deepEqual(page.errors, []);
+});
