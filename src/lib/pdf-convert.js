@@ -26,6 +26,48 @@ export function fontInfo(raw = '') {
   return { family, bold, italic };
 }
 
+// ------------------------------------------------------------ garbled text
+// A PDF page can look right and still hold the wrong characters: the shapes are drawn
+// from the font, while the characters behind them (what copy, search and conversion
+// read) come from a table that may be missing or belong to an old non-Unicode font.
+
+// Fonts that put another script's letters on Latin key codes (pre-Unicode Indian fonts)
+const LEGACY_FONT = /^(?:[A-Z]{6}\+)?(?:ML[-_ ]?(?:TT|KV|NILA)|FML[-_ ]?|MLW[-_ ]?TT|MLB[-_ ]?TT|Kruti[-_ ]?Dev|DevLys|Chanakya|Walkman[-_ ]?Chanakya|Bamini|TAM[-_ ]|TAB[-_ ]|TSC[-_ ]|SutonnyMJ|Bijoy|Baraha(?:Dev|Kan|Tel|Mal|Tam)|Nudi[-_ ]?\d|Akruti|APS[-_ ]|ISFOC|Vakil[-_ ]?\d|Shivaji\d)/i;
+// Symbols that ordinary prose hardly uses inside words; legacy fonts use them as letters
+const SYMBOLS = /[\u00a1-\u00bf\u00d7\u00f7~^|\\{}<>\[\]@#$*+=_`]/;
+
+/**
+ * Does this page's text look like it stores the wrong characters?
+ * items: [{ str, fontName? }]. Returns { garbled, reason: 'unmapped'|'legacy-font'|'symbols'|null }
+ */
+export function textLooksGarbled(items) {
+  let n = 0;
+  let unmapped = 0;
+  let legacy = 0;
+  let inWords = 0;
+  let symbols = 0;
+  for (const it of items) {
+    const str = it.str || '';
+    const old = it.fontName && LEGACY_FONT.test(it.fontName);
+    for (const tok of str.split(/\s+/)) {
+      if (!tok) continue;
+      const wordy = /\p{L}/u.test(tok) && !/^[\p{P}\p{S}]*\p{N}/u.test(tok);
+      for (const ch of tok) {
+        const cp = ch.codePointAt(0);
+        n += 1;
+        if (old) legacy += 1;
+        if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || (cp >= 0xe000 && cp <= 0xf8ff) || (cp >= 0xfff0 && cp <= 0xffff) || cp >= 0xf0000) unmapped += 1;
+        if (wordy) { inWords += 1; if (SYMBOLS.test(ch)) symbols += 1; }
+      }
+    }
+  }
+  if (n < 40) return { garbled: false, reason: null };
+  if (unmapped / n >= 0.08) return { garbled: true, reason: 'unmapped' };
+  if (legacy / n >= 0.3) return { garbled: true, reason: 'legacy-font' };
+  if (inWords >= 40 && symbols / inWords >= 0.07) return { garbled: true, reason: 'symbols' };
+  return { garbled: false, reason: null };
+}
+
 /**
  * Reads positioned text from an open pdf.js document.
  * Returns [{ width, height, items }] in the format pdf-layout.js expects.
@@ -43,10 +85,10 @@ export async function extractPages(pdf, { Util, onProgress, pages: only } = {}) 
     const fonts = new Map();
     const fontOf = (id) => {
       if (!fonts.has(id)) {
-        let info = { family: null, bold: false, italic: false };
+        let info = { family: null, bold: false, italic: false, raw: '' };
         try {
           const f = page.commonObjs.get(id);
-          info = fontInfo(f?.name || f?.loadedName || '');
+          info = { ...fontInfo(f?.name || f?.loadedName || ''), raw: f?.name || '' };
           if (f?.bold || f?.black) info.bold = true;
           if (f?.italic) info.italic = true;
         } catch { /* not loaded */ }
@@ -62,7 +104,7 @@ export async function extractPages(pdf, { Util, onProgress, pages: only } = {}) 
       const size = Math.hypot(t[2], t[3]);
       if (!size || Math.abs(t[1]) > Math.abs(t[0])) continue; // skip vertical text
       const f = fontOf(it.fontName);
-      items.push({ str: it.str, x: t[4], y: t[5], w: it.width * vp.scale, size, bold: f.bold, italic: f.italic, font: f.family });
+      items.push({ str: it.str, x: t[4], y: t[5], w: it.width * vp.scale, size, bold: f.bold, italic: f.italic, font: f.family, fontName: f.raw || '' });
     }
     out.push({ width: vp.width, height: vp.height, items, index: n - 1 });
     page.cleanup?.();

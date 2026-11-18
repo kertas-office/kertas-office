@@ -562,6 +562,14 @@ function handleTableNode(node, context) {
     replace: (m) => `\n// kertas: hash for versions\nfunction kertasHash(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36) + ":" + s.length; }${m}`,
     marker: 'kertas: hash for versions',
   },
+  {
+    // Restoring decorations after an edit read the whole document over and over: with search
+    // highlights on, every keystroke took seconds and long documents froze.
+    dir: 'superdoc/dist/chunks',
+    find: /function charOffsetToPosition\(doc\$1, charOffset, blockSep, leafSep\) \{[\s\S]*?\n\}\nfunction findRangeByText\(doc\$1, text, hintFrom\) \{[\s\S]*?\n\}\n(?=function resolveMovedRangeFromPrevious)/,
+    replace: () => fs.readFileSync(path.join(__dirname, 'patches/decoration-ranges.js'), 'utf8'),
+    marker: 'kertas: fast decoration ranges',
+  },
 ];
 
 for (const p of patches) {

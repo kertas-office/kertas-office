@@ -1236,10 +1236,30 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
     if (findInput.value) runFind();
   }
   function closeFind() { findEl.hidden = true; try { search().query({ query: '' }); } catch { /* noop */ } superdoc.focus?.(); }
+  // Going to a match moves the keyboard to the editor with the match selected, so the next
+  // key typed in the Find box would replace that match in the document. While the search is
+  // driven from the Find bar, the keyboard stays there.
+  function keepFindFocus(run) {
+    const el = findEl.contains(document.activeElement) ? document.activeElement : null;
+    const caret = el && 'selectionStart' in el ? [el.selectionStart, el.selectionEnd] : null;
+    const back = () => {
+      if (!el || findEl.hidden || findEl.contains(document.activeElement)) return;
+      el.focus({ preventScroll: true });
+      if (caret) { try { el.setSelectionRange(caret[0], caret[1]); } catch { /* not a text box */ } }
+    };
+    let out;
+    try { out = run(); } finally {
+      back();
+      // the editor also takes focus a moment later, once it has scrolled to the match
+      requestAnimationFrame(back);
+      for (const ms of [30, 120, 300]) setTimeout(back, ms);
+    }
+    return out;
+  }
   async function runFind() {
     const q = findInput.value;
     if (!q) { findEl.querySelector('.find-count').textContent = ''; return; }
-    const r = await search().query({ query: q });
+    const r = await keepFindFocus(() => search().query({ query: q }));
     updateFindCount(r);
   }
   function updateFindCount(r) {
@@ -1251,22 +1271,22 @@ export async function mount(el, { data, name, html, setDirty, setStatus, toast, 
   findEl.addEventListener('keydown', (e) => {
     e.stopPropagation();
     if (e.key === 'Escape') closeFind();
-    if (e.key === 'Enter' && e.target === findInput) { e.preventDefault(); (e.shiftKey ? search().previous() : search().next()); updateFindCount(); }
+    if (e.key === 'Enter' && e.target === findInput) { e.preventDefault(); keepFindFocus(() => (e.shiftKey ? search().previous() : search().next())); updateFindCount(); }
     if (e.key === 'Enter' && e.target === replaceInput) { e.preventDefault(); replaceOne(); }
   });
-  findEl.querySelector('[data-find-next]').addEventListener('click', () => { search().next(); updateFindCount(); });
-  findEl.querySelector('[data-find-prev]').addEventListener('click', () => { search().previous(); updateFindCount(); });
+  findEl.querySelector('[data-find-next]').addEventListener('click', () => { keepFindFocus(() => search().next()); updateFindCount(); });
+  findEl.querySelector('[data-find-prev]').addEventListener('click', () => { keepFindFocus(() => search().previous()); updateFindCount(); });
   findEl.querySelector('[data-find-close]').addEventListener('click', closeFind);
   async function replaceOne() {
     if (!findInput.value) return;
-    await search().replace({ replacement: replaceInput.value });
+    await keepFindFocus(() => search().replace({ replacement: replaceInput.value }));
     setDirty(true);
     await runFind();
   }
   findEl.querySelector('[data-replace-one]').addEventListener('click', replaceOne);
   findEl.querySelector('[data-replace-all]').addEventListener('click', async () => {
     if (!findInput.value) return;
-    const r = await search().replaceAll({ query: findInput.value, replacement: replaceInput.value });
+    const r = await keepFindFocus(() => search().replaceAll({ query: findInput.value, replacement: replaceInput.value }));
     setDirty(true);
     toast(`Replaced ${r?.replaced ?? 0} occurrence${r?.replaced === 1 ? '' : 's'}`);
     await runFind();
