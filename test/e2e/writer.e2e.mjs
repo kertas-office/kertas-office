@@ -382,6 +382,8 @@ test('equations: insert, double-click to edit, right-click to edit, save', async
   await tex.fill('x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}');
   await page.locator('.modal').getByRole('button', { name: 'Update', exact: true }).click();
   await sleep(800);
+  // the page shows the new equation, not the old one
+  await page.waitForFunction(() => document.querySelector('.view.active .sd-math math mfrac'), null, { timeout: 5000 });
   // right-click > Edit equation
   await page.locator('.view.active .sd-math').first().click({ button: 'right' });
   await page.getByText('Edit equation...').click();
@@ -389,7 +391,15 @@ test('equations: insert, double-click to edit, right-click to edit, save', async
   assert.equal(await tex.inputValue(), 'x=\\frac{-b\\pm \\sqrt{b^2-4ac}}{2a}');
   await tex.fill('E=mc^2');
   await page.locator('.modal').getByRole('button', { name: 'Update', exact: true }).click();
-  await sleep(800);
+  await page.waitForFunction(() => document.querySelector('.view.active .sd-math')?.textContent === 'E=mc2', null, { timeout: 5000 });
+  // same characters, different shape: x squared becomes x sub 2
+  const shape = async (t) => { await page.locator('.view.active .sd-math').first().dblclick(); await page.locator('.modal').waitFor(); await tex.fill(t); await page.locator('.modal').getByRole('button', { name: 'Update', exact: true }).click(); };
+  await shape('x^2');
+  await page.waitForFunction(() => document.querySelector('.view.active .sd-math math msup'), null, { timeout: 5000 });
+  await shape('x_2');
+  await page.waitForFunction(() => document.querySelector('.view.active .sd-math math msub') && !document.querySelector('.view.active .sd-math math msup'), null, { timeout: 5000 });
+  await shape('E=mc^2');
+  await page.waitForFunction(() => document.querySelector('.view.active .sd-math')?.textContent === 'E=mc2', null, { timeout: 5000 });
   const xml = await docXml(await saveBytes(page, 'docx'));
   assert.equal(xml.match(/<m:oMathPara/g)?.length, 1);
   const text = [...xml.matchAll(/<m:t[^>]*>([^<]*)<\/m:t>/g)].map((m) => m[1]).join('');
@@ -408,13 +418,13 @@ test('equations from Word: one on its own line and one in a sentence can both be
   assert.equal(await tex.inputValue(), 'A=\\pi r^2');
   await tex.fill('A=\\pi r^2+1');
   await page.locator('.modal').getByRole('button', { name: 'Update', exact: true }).click();
-  await sleep(800);
+  await page.waitForFunction(() => /\+1$/.test(document.querySelectorAll('.view.active .sd-math')[0]?.textContent || ''), null, { timeout: 5000 });
   await page.locator('.view.active .sd-math').nth(1).dblclick();
   await page.locator('.modal').waitFor();
   assert.equal(await tex.inputValue(), '\\sqrt{2}');
   await tex.fill('\\sqrt{3}');
   await page.locator('.modal').getByRole('button', { name: 'Update', exact: true }).click();
-  await sleep(800);
+  await page.waitForFunction(() => document.querySelectorAll('.view.active .sd-math')[1]?.textContent === '3', null, { timeout: 5000 });
   const xml = await docXml(await saveBytes(page, 'docx'));
   assert.equal(xml.match(/<m:oMathPara/g)?.length, 1);
   assert.match(xml, /Each side has length/);

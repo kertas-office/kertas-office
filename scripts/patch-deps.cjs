@@ -548,6 +548,20 @@ function handleTableNode(node, context) {
     replace: () => 'noBreakHyphen: { inlineConverter: noBreakHyphenNodeToRun },\n\tpassthroughInline: { inlineConverter: kertasSymNodeToRun }, // kertas: draw w:sym',
     marker: 'kertas: draw w:sym',
   },
+  {
+    // The page cache tells paragraphs apart by their runs, but had no case for an equation,
+    // so a changed equation looked the same and its old drawing stayed on the page.
+    dir: 'superdoc/dist/chunks',
+    find: /(const runsVersion = block\.runs\.map\(\(run\) => \{\n)(\t\t\tif \(run\.kind === "image"\) return renderedInlineImageRunVersion\(run\);)/,
+    replace: (m, head, rest) => `${head}\t\t\tif (run.kind === "math") return ["math", run.textContent ?? "", kertasHash(JSON.stringify(run.ommlJson ?? null))].join(","); // kertas: math version\n${rest}`,
+    marker: 'kertas: math version',
+  },
+  {
+    dir: 'superdoc/dist/chunks',
+    find: /\nconst deriveBlockVersion = \(block\) => \{/,
+    replace: (m) => `\n// kertas: hash for versions\nfunction kertasHash(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36) + ":" + s.length; }${m}`,
+    marker: 'kertas: hash for versions',
+  },
 ];
 
 for (const p of patches) {
