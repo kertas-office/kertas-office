@@ -435,3 +435,56 @@ test('equations from Word: one on its own line and one in a sentence can both be
   assert.doesNotMatch(text, /\|2\|.*\|2$/);
   assert.deepEqual(page.errors, []);
 });
+
+test('find: typing a phrase stays in the Find box and never changes the document', async () => {
+  await openFixture(page, 'writer', 'compare-original.docx');
+  await sleep(800);
+  const docText = () => page.evaluate(() => { const d = window.__kertasOoxml.editor().state.doc; return d.textBetween(0, d.content.size, '\n'); });
+  const before = await docText();
+  await page.locator('.view.active .superdoc-page').first().click({ position: { x: 300, y: 200 } });
+  await page.keyboard.press('Control+f');
+  const box = page.locator('.view.active [data-find]');
+  await box.waitFor();
+  // slower than the search delay, as a person types: after the first search the editor
+  // used to take the keyboard, and the rest of the phrase replaced the match in the document
+  for (const ch of 'the city') { await page.keyboard.type(ch); await sleep(260); }
+  await sleep(400);
+  assert.equal(await box.inputValue(), 'the city');
+  assert.equal(await docText(), before);
+  assert.match(await page.locator('.view.active .find-count').innerText(), /^1 of \d+$/);
+  // Enter walks the matches without leaving the box or touching the document
+  await page.keyboard.press('Enter'); await sleep(300);
+  await page.keyboard.press('Enter'); await sleep(300);
+  assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-find')), true);
+  assert.equal(await docText(), before);
+  await page.keyboard.press('Escape');
+  assert.deepEqual(page.errors, []);
+});
+
+test('highlight ranges: the fast lookup gives the same answers as the original', async () => {
+  // scripts/patches/decoration-ranges.js replaces two SuperDoc functions; they must agree
+  const fast = await readFile(new URL('../../scripts/patches/decoration-ranges.js', import.meta.url), 'utf8');
+  for (const f of ['merged-tall.docx', 'references.docx', 'equations.docx']) {
+    await openFixture(page, 'writer', f);
+    await sleep(800);
+    const r = await page.evaluate((fast) => {
+      const doc = window.__kertasOoxml.editor().state.doc;
+      const SEP = '\n';
+      function refOffset(d, o) { const size = d.content.size; if (o <= 0) return 0; if (o >= d.textBetween(0, size, SEP, SEP).length) return size; let low = 0; let high = size; while (low < high) { const mid = Math.floor((low + high) / 2); if (d.textBetween(0, mid, SEP, SEP).length < o) low = mid + 1; else high = mid; } return low; }
+      function refFind(d, text, hint) { if (!text) return null; const full = d.textBetween(0, d.content.size, SEP, SEP); const ms = []; for (let i = 0; ;) { const x = full.indexOf(text, i); if (x === -1) break; ms.push(x); i = x + 1; } if (!ms.length) return null; let from = ms[0]; if (hint != null) from = ms.reduce((acc, x) => { const p = refOffset(d, x); return Math.abs(p - hint) < Math.abs(acc.bestPos - hint) ? { best: x, bestPos: p } : acc; }, { best: ms[0], bestPos: refOffset(d, ms[0]) }).best; const a = refOffset(d, from); const b = refOffset(d, from + text.length); return a < b ? { from: a, to: b } : null; }
+      // eslint-disable-next-line no-new-func
+      const { charOffsetToPosition, findRangeByText, kertasRangeIndex } = new Function('TEXT_RANGE_BLOCK_SEP', 'TEXT_RANGE_LEAF_SEP', `${fast}\nreturn { charOffsetToPosition, findRangeByText, kertasRangeIndex };`)(SEP, SEP);
+      const size = doc.content.size;
+      const full = doc.textBetween(0, size, SEP, SEP);
+      const bad = [];
+      const lens = kertasRangeIndex(doc, SEP, SEP).lens;
+      for (let p = 0; p <= size; p += Math.max(1, Math.floor(size / 200))) if (lens[p] !== doc.textBetween(0, p, SEP, SEP).length) bad.push(`len ${p}`);
+      let seed = 7;
+      const rnd = (m) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % m; };
+      for (let k = 0; k < 150; k++) { const o = rnd(full.length + 20) - 5; if (refOffset(doc, o) !== charOffsetToPosition(doc, o, SEP, SEP)) bad.push(`offset ${o}`); }
+      for (let k = 0; k < 60; k++) { const s = rnd(Math.max(1, full.length - 12)); const text = full.slice(s, s + 1 + rnd(10)); const hint = k % 5 === 0 ? undefined : rnd(size + 1); if (JSON.stringify(refFind(doc, text, hint)) !== JSON.stringify(findRangeByText(doc, text, hint))) bad.push(`find ${JSON.stringify(text)} ${hint}`); }
+      return bad;
+    }, fast);
+    assert.deepEqual(r, [], f);
+  }
+});
