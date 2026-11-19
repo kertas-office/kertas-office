@@ -570,6 +570,23 @@ function handleTableNode(node, context) {
     replace: () => fs.readFileSync(path.join(__dirname, 'patches/decoration-ranges.js'), 'utf8'),
     marker: 'kertas: fast decoration ranges',
   },
+  {
+    // A red underline under part of a text piece hides the piece and sets its position labels
+    // aside (data-sd-orig-pm-*). When text was typed elsewhere, the visible labels were shifted
+    // but the ones set aside were not, so the piece came back with stale positions: clicks went
+    // to other lines, selections took in other lines and underlines sat under the wrong words.
+    dir: 'superdoc/dist/chunks',
+    find: /(\t\t\tconst elements = fragmentEl\.querySelectorAll\("\[data-pm-start\], \[data-pm-end\]"\);\n\t\t\tconst allElements = \[fragmentEl, \.\.\.Array\.from\(elements\)\];\n)/,
+    replace: (m) => `\t\t\tfor (const el of fragmentEl.querySelectorAll("[data-sd-orig-pm-start], [data-sd-orig-pm-end]")) { // kertas: map set-aside positions\n\t\t\t\tconst s = Number(el.getAttribute("data-sd-orig-pm-start"));\n\t\t\t\tif (el.hasAttribute("data-sd-orig-pm-start") && Number.isFinite(s)) el.setAttribute("data-sd-orig-pm-start", String(mapping.map(s)));\n\t\t\t\tconst e = Number(el.getAttribute("data-sd-orig-pm-end"));\n\t\t\t\tif (el.hasAttribute("data-sd-orig-pm-end") && Number.isFinite(e)) el.setAttribute("data-sd-orig-pm-end", String(mapping.map(e, -1)));\n\t\t\t}\n${m}`,
+    marker: 'kertas: map set-aside positions',
+  },
+  {
+    // The same for headers, footers and notes, where positions move by a fixed amount
+    dir: 'superdoc/dist/chunks',
+    find: /(\t\tconst delta = freshStart - paintedStart;\n\t\tif \(delta === 0\) return;\n)/,
+    replace: (m) => `${m}\t\tfor (const el of fragmentEl.querySelectorAll("[data-sd-orig-pm-start], [data-sd-orig-pm-end]")) { // kertas: shift set-aside positions\n\t\t\tconst s = Number(el.getAttribute("data-sd-orig-pm-start"));\n\t\t\tif (el.hasAttribute("data-sd-orig-pm-start") && Number.isFinite(s)) el.setAttribute("data-sd-orig-pm-start", String(s + delta));\n\t\t\tconst e = Number(el.getAttribute("data-sd-orig-pm-end"));\n\t\t\tif (el.hasAttribute("data-sd-orig-pm-end") && Number.isFinite(e)) el.setAttribute("data-sd-orig-pm-end", String(e + delta));\n\t\t}\n`,
+    marker: 'kertas: shift set-aside positions',
+  },
 ];
 
 for (const p of patches) {
