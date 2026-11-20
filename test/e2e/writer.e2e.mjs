@@ -488,3 +488,52 @@ test('highlight ranges: the fast lookup gives the same answers as the original',
     assert.deepEqual(r, [], f);
   }
 });
+
+test('spell check on: after typing, clicks, selections and red underlines stay on the right text', async () => {
+  // A red underline under part of a piece of text sets that piece's position aside; typing
+  // elsewhere used to leave those positions stale, so clicks landed on other lines, selections
+  // took in other lines and underlines moved to other words.
+  const spell = await openApp();
+  try {
+    await spell.evaluate(() => localStorage.setItem('kertas-spell', JSON.stringify({ on: true })));
+    await openFile(spell, 'writer', 'Spelling.docx');
+    await sleep(2000);
+    await spell.locator('.view.active .superdoc-page').first().click({ position: { x: 300, y: 200 } });
+    for (let i = 1; i <= 6; i++) { await spell.keyboard.type(`Line ${i} has a mispeled word and a secnd one in the midle of it.`, { delay: 4 }); await spell.keyboard.press('Enter'); }
+    const marks = () => spell.evaluate(() => [...document.querySelectorAll('.view.active .sd-proofing-spelling')].map((e) => e.textContent));
+    await spell.waitForFunction(() => document.querySelectorAll('.view.active .sd-proofing-spelling').length >= 18, null, { timeout: 15000 });
+    // every drawn piece of text must hold the document's text at the positions it is labelled with
+    const stale = () => spell.evaluate(() => {
+      const doc = window.__kertasOoxml.editor().state.doc;
+      const bad = [];
+      for (const s of document.querySelectorAll('.view.active .superdoc-line [data-pm-start]')) {
+        if (s.querySelector('[data-pm-start]') || !s.textContent.trim()) continue;
+        const a = Number(s.dataset.pmStart); const b = Number(s.dataset.pmEnd);
+        let d = ''; try { d = doc.textBetween(a, b, '', ''); } catch { d = '<out of range>'; }
+        if (d.trim() !== s.textContent.trim()) bad.push(`${JSON.stringify(s.textContent)} is labelled as ${JSON.stringify(d)}`);
+      }
+      return bad;
+    });
+    assert.deepEqual(await stale(), []);
+    // type at the very top, a letter at a time
+    await spell.keyboard.press('Control+Home');
+    await spell.keyboard.type('Hello there, ', { delay: 30 });
+    await sleep(1200);
+    assert.deepEqual(await stale(), []);
+    const words = new Set(await marks());
+    assert.deepEqual([...words].sort(), ['mispeled', 'midle', 'secnd'].sort());
+    // click in line 5: the cursor is in line 5
+    const line = async (n) => spell.evaluate((n) => { const l = [...document.querySelectorAll('.view.active .superdoc-line')].find((x) => x.textContent.includes(`Line ${n} has`)); const r = l.getBoundingClientRect(); const spans = [...l.querySelectorAll('[data-pm-start]')]; return { x: r.left, w: r.width, y: r.top + r.height / 2, a: Math.min(...spans.map((s) => Number(s.dataset.pmStart))), b: Math.max(...spans.map((s) => Number(s.dataset.pmEnd))) }; }, n);
+    const textAround = () => spell.evaluate(() => { const s = window.__kertasOoxml.editor().state; return s.doc.textBetween(s.selection.$from.start(), s.selection.$from.end(), ''); });
+    const l5 = await line(5);
+    await spell.mouse.click(l5.x + l5.w * 0.4, l5.y);
+    assert.match(await textAround(), /^Line 5 has/);
+    // drag from the start of line 3 to the end of line 4: exactly those two lines
+    const l3 = await line(3); const l4 = await line(4);
+    await spell.mouse.move(l3.x + 1, l3.y); await spell.mouse.down();
+    await spell.mouse.move(l3.x + 200, (l3.y + l4.y) / 2, { steps: 4 }); await spell.mouse.move(l4.x + l4.w + 30, l4.y, { steps: 4 }); await spell.mouse.up();
+    const picked = await spell.evaluate(() => { const s = window.__kertasOoxml.editor().state; return s.doc.textBetween(s.selection.from, s.selection.to, '\n'); });
+    assert.equal(picked, 'Line 3 has a mispeled word and a secnd one in the midle of it.\nLine 4 has a mispeled word and a secnd one in the midle of it.');
+    assert.deepEqual(spell.errors, []);
+  } finally { await spell.close(); }
+});
