@@ -111,7 +111,7 @@
     "electron": "^45.2.3",
     "electron-builder": "^26.18.0",
     "exceljs": "^4.4.0",
-    "fontkit": "^2.0.4",
+    "fontkit": "^3.0.0",
     "jszip": "^3.10.2",
     "lucide": "^1.71.0",
     "node-forge": "^1.4.3",
