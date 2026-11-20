@@ -93,8 +93,9 @@ const bandOf = (bands, s) => {
 export function pageBlocks(page, { bodySize, level }) {
   const lines = buildLines(page);
   const blocks = [];
-  const left = Math.min(...lines.map((l) => l.x0));
-  const right = Math.max(...lines.map((l) => l.x1));
+  // The text block's edges, by where most of the text starts and ends: a stray mark in
+  // the margin (a scan has plenty) must not make every body line look inset
+  const { left, right } = textEdges(lines);
   const centre = page.width / 2;
   let i = 0;
   while (i < lines.length) {
@@ -201,9 +202,24 @@ function stripPrefix(runs, prefix) {
   }
   return out;
 }
+/** Left and right edge of the body text: the 8th and 92nd percentile by amount of text */
+export function textEdges(lines) {
+  if (!lines.length) return { left: 0, right: 0 };
+  const total = lines.reduce((n, l) => n + l.text.length, 0) || 1;
+  const at = (key, q) => {
+    const s = [...lines].sort((a, b) => a[key] - b[key]);
+    let acc = 0;
+    for (const l of s) { acc += l.text.length; if (acc >= total * q) return l[key]; }
+    return s.at(-1)[key];
+  };
+  return { left: at('x0', 0.08), right: at('x1', 0.92) };
+}
+
 function alignOf(l, left, right, centre) {
   const mid = (l.x0 + l.x1) / 2;
-  if (l.x0 - left > 30 && Math.abs(mid - centre) < l.size * 1.5 && l.x1 < right - 20) return 'center';
+  // a line that fills most of the width is body text, however evenly it sits
+  const short = l.x1 - l.x0 < (right - left) * 0.8;
+  if (short && l.x0 - left > 30 && l.x1 < right - 20 && (Math.abs(mid - centre) < l.size * 1.5 || Math.abs(mid - (left + right) / 2) < l.size * 1.5)) return 'center';
   if (l.x0 - left > (right - left) * 0.45 && Math.abs(l.x1 - right) < l.size) return 'right';
   return 'left';
 }
@@ -217,12 +233,28 @@ function alignOf(l, left, right, centre) {
 // size per paragraph.
 
 const weightOf = (it) => Math.max(1, it.str.trim().length);
-function weightedMedian(pairs) {
+function weightedQuantile(pairs, q) {
   const s = [...pairs].sort((a, b) => a[0] - b[0]);
-  const half = s.reduce((n, p) => n + p[1], 0) / 2;
+  const cut = s.reduce((n, p) => n + p[1], 0) * q;
   let acc = 0;
-  for (const [v, w] of s) { acc += w; if (acc >= half) return v; }
+  for (const [v, w] of s) { acc += w; if (acc >= cut) return v; }
   return s.length ? s.at(-1)[0] : 0;
+}
+const weightedMedian = (pairs) => weightedQuantile(pairs, 0.5);
+
+/**
+ * Is a scanned page's text layer rough: sized word by word, so converting it mixes font
+ * sizes within lines? (Kertas's own OCR sizes text by the line, so its result is not.)
+ */
+export function textLayerRough(page) {
+  let chars = 0;
+  let off = 0;
+  for (const l of buildLines(page)) {
+    if (l.items.length < 3) continue;
+    const dom = weightedQuantile(l.items.map((it) => [it.size, weightOf(it)]), 0.65);
+    for (const it of l.items) { chars += weightOf(it); if (Math.abs(it.size - dom) > dom * 0.18) off += weightOf(it); }
+  }
+  return chars >= 100 && off / chars >= 0.1;
 }
 const half = (v) => Math.round(v * 2) / 2;
 
@@ -232,9 +264,13 @@ export function settleSizes(pages) {
   const lineSizes = []; // [size, weight]
   for (const p of out) {
     for (const l of buildLines(p)) {
-      const dom = weightedMedian(l.items.map((it) => [it.size, weightOf(it)]));
-      // a superscript or a drop cap keeps its own size; a few percent either way is noise
-      for (const it of l.items) if (it.size >= dom * 0.82 && it.size <= dom * 1.2) it.size = dom;
+      // Text measured from a picture (OCR, or a scanner app's text layer) is sized word by
+      // word: "to" and "as" come out half the size of "They". There the whole line is one size.
+      const measured = p.scan || l.items.some((it) => it.ocr);
+      const dom = weightedQuantile(l.items.map((it) => [it.size, weightOf(it)]), measured ? 0.65 : 0.5);
+      // otherwise a superscript or a drop cap keeps its own size; a few percent either way is noise
+      const [lo, hi] = measured ? [0.4, 1.9] : [0.82, 1.2];
+      for (const it of l.items) if (it.size >= dom * lo && it.size <= dom * hi) it.size = dom;
       lineSizes.push([dom, l.items.reduce((n, it) => n + weightOf(it), 0)]);
     }
   }
@@ -245,23 +281,23 @@ export function settleSizes(pages) {
   const total = lineSizes.reduce((n, p) => n + p[1], 0);
   const near = new Map();
   for (const [v, w] of lineSizes) if (v >= body * 0.8 && v <= body * 1.25) near.set(half(v), (near.get(half(v)) || 0) + w);
-  const noisy = out.some((p) => p.items.some((it) => it.ocr)) || [...near.values()].filter((w) => w >= total * 0.04).length >= 4;
+  const noisy = out.some((p) => p.scan || p.items.some((it) => it.ocr)) || [...near.values()].filter((w) => w >= total * 0.04).length >= 4;
   const tol = noisy ? 0.13 : 0.04;
   // Sizes within the tolerance of each other become the commonest one of the group
   const bySize = new Map();
   for (const p of out) for (const it of p.items) if (it.size > 0 && it.str.trim()) bySize.set(it.size, (bySize.get(it.size) || 0) + weightOf(it));
-  const sizes = [...bySize.keys()].sort((a, b) => a - b);
+  // Groups form around the commonest sizes: the size with the most text takes in everything
+  // within the tolerance on either side, then the next commonest of what is left, and so on
   const settle = new Map();
-  for (let i = 0; i < sizes.length;) {
-    let j = i;
-    while (j + 1 < sizes.length && sizes[j + 1] <= sizes[i] * (1 + tol)) j++;
-    const group = sizes.slice(i, j + 1);
+  const left = new Set(bySize.keys());
+  while (left.size) {
+    const centre = [...left].sort((a, b) => bySize.get(b) - bySize.get(a) || a - b)[0];
+    const group = [...left].filter((v) => v >= centre / (1 + tol) && v <= centre * (1 + tol));
     // the commonest half-point size of the group, by amount of text
     const votes = new Map();
     for (const v of group) votes.set(half(v), (votes.get(half(v)) || 0) + bySize.get(v));
     const rep = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
-    for (const v of group) settle.set(v, rep);
-    i = j + 1;
+    for (const v of group) { settle.set(v, rep); left.delete(v); }
   }
   for (const p of out) for (const it of p.items) if (settle.has(it.size)) it.size = settle.get(it.size);
   return out;

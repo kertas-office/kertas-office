@@ -42,7 +42,7 @@ test('recognised text: words on a line share one size, and lines of the same typ
   const p = { width: 595, height: 842, items: [
     ...line(100, ['They', 'are', 'on', 'one', 'line'], [11.2, 8.1, 8.0, 8.3, 10.9], { ocr: true }).map((it, i) => ({ ...it, size: [11.2, 10.4, 10.2, 10.3, 10.9][i] })),
     ...line(116, ['and', 'this', 'is', 'the', 'next'], [10.1, 10.6, 9.9, 10.4, 10.2], { ocr: true }),
-    ...line(132, ['a', 'third', 'line', 'of', 'body'], 9.6, { ocr: true }),
+    ...line(132, ['a', 'third', 'line', 'of', 'body'], 9.9, { ocr: true }),
     ...line(200, ['A', 'big', 'heading'], 20.3, { ocr: true }),
   ] };
   const out = settleSizes([p])[0].items;
@@ -97,4 +97,46 @@ test('lines with wide spacing still join into one paragraph when the line runs t
   const blocks = analyse([p]).pages[0].blocks.filter((b) => b.type === 'para');
   assert.equal(blocks.length, 2);
   assert.match(blocks[0].runs.map((r) => r.text).join(''), /asking where their order.*do without calling us\.$/);
+});
+
+// ---- scans with a scanner app's text layer
+import { textLayerRough, textEdges } from '../src/lib/pdf-layout.js';
+import { isScan } from '../src/lib/pdf-convert.js';
+
+test('a scanner app\'s text layer, sized word by word, is rough; text sized by the line is not', () => {
+  const words = 'The Owner must ensure that the Property is fully compliant with the Brand Standards and fully adherent to the system sixty days prior to the opening of the hotel to customers'.split(' ');
+  const rows = (sizeOf) => ({ width: 595, height: 842, scan: true, items: Array.from({ length: 6 }, (_, r) => words.slice(r * 5, r * 5 + 5).map((str, i) => ({ str, x: 60 + i * 80, y: 100 + r * 16, w: 70, size: sizeOf(str), bold: false, italic: false, font: null }))).flat() });
+  // short words without tall letters come out much smaller, as scanner apps size them
+  const rough = rows((w) => (/^(to|as|a|is|of|the|and|must|that|with)$/i.test(w) ? 6.2 : 10.4));
+  assert.equal(textLayerRough(rough), true);
+  assert.equal(textLayerRough(rows(() => 10.4)), false);
+  // and converting the rough one still gives one size per line
+  const out = settleSizes([rough])[0].items;
+  assert.equal(new Set(out.map((it) => it.size)).size, 1);
+});
+
+test('a page is a scan when one picture covers most of it', () => {
+  const OPS = { save: 1, restore: 2, transform: 3, paintImageXObject: 4, paintFormXObjectBegin: 5, paintFormXObjectEnd: 6 };
+  const ops = (m) => ({ fnArray: [OPS.save, OPS.transform, OPS.paintImageXObject, OPS.restore], argsArray: [null, m, ['img'], null] });
+  assert.equal(isScan(ops([595, 0, 0, 842, 0, 0]), OPS, 595 * 842), true);
+  assert.equal(isScan(ops([120, 0, 0, 60, 40, 700]), OPS, 595 * 842), false); // a logo
+  assert.equal(isScan(null, OPS, 595 * 842), false);
+});
+
+test('body lines are not centred because of a stray mark in the margin', () => {
+  const row = (y, x, text) => ({ str: text, x, y, w: text.length * 4.6, size: 10, bold: false, italic: false, font: null });
+  const body = 'itself or its assigned designate in order to maintain quality, brand standards and overall conformity with';
+  const p = { width: 595, height: 842, items: [
+    row(60, 277, 'Agreement'),                    // a real centred title
+    row(100, 60, body), row(114, 60, body), row(128, 60, body), row(142, 60, 'the system.'),
+    row(180, 60, body), row(194, 60, body),
+    row(300, 8, '|'),                              // a scribble at the far left
+    row(320, 560, 'ii'),                           // and one at the far right
+  ] };
+  const blocks = analyse([p]).pages[0].blocks;
+  const paras = blocks.filter((b) => b.type === 'para' && b.runs.map((r) => r.text).join('').length > 60);
+  assert.ok(paras.length >= 2);
+  assert.ok(paras.every((b) => b.align === 'left'), paras.map((b) => b.align).join(','));
+  assert.equal(blocks.find((b) => /Agreement/.test((b.runs || []).map((r) => r.text).join('')))?.align, 'center');
+  assert.ok(textEdges([{ x0: 8, x1: 12, text: '|' }, { x0: 60, x1: 540, text: body }, { x0: 60, x1: 540, text: body }]).left === 60);
 });

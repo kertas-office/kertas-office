@@ -2,6 +2,7 @@
 // interface, then the saved PDF read back with pdf-lib and pdf.js (not with Kertas).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { PDFDocument } from '@cantoo/pdf-lib';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { openApp, openFile, openFixture, saveBytes, fixture, stopServer, sleep } from './harness.mjs';
@@ -204,5 +205,30 @@ test('convert: a PDF whose stored text is gibberish is read with text recognitio
   const sizes = await page.evaluate(() => { const out = []; window.__kertasOoxml.editor().state.doc.descendants((n) => { if (n.type.name !== 'paragraph') return true; const s = new Set(); n.descendants((c) => { if (c.isText && c.text.trim()) s.add(JSON.stringify(c.marks.map((m) => m.attrs?.fontSize).filter(Boolean))); }); if (s.size) out.push(s.size); return false; }); return out; });
   assert.ok(sizes.length > 5);
   assert.ok(sizes.every((n) => n === 1), `paragraphs with mixed sizes: ${sizes.filter((n) => n > 1).length}`);
+  assert.deepEqual(page.errors, []);
+});
+
+test('convert: a scan with a scanner app\'s rough text layer offers to read the pages again', async () => {
+  // scan-layer.pdf is a page picture with hidden text sized word by word, as scanner apps add it
+  const mixed = () => page.evaluate(() => { const out = []; window.__kertasOoxml.editor().state.doc.descendants((n) => { if (n.type.name !== 'paragraph') return true; const s = new Set(); n.descendants((c) => { if (c.isText && c.text.trim()) s.add(JSON.stringify(c.marks.map((m) => m.attrs?.fontSize).filter(Boolean))); }); if (s.size) out.push(s.size); return false; }); return { paragraphs: out.length, mixed: out.filter((n) => n > 1).length }; });
+  const convert = async (button, name) => {
+    await openFile(page, 'pdf', name, await readFile(fixture('scan-layer.pdf')));
+    await ribbon('convert', 'c-word');
+    const dlg = page.locator('.modal');
+    await dlg.waitFor();
+    assert.match(await dlg.innerText(), /This PDF is a scan/);
+    await dlg.getByRole('button', { name: button }).click();
+    const docx = name.replace(/\.pdf$/, '.docx');
+    await page.waitForFunction((d) => [...window.__kertas.tabs.values()].some((t) => t.name === d && t.instance), docx, { timeout: 90000 });
+    await sleep(2500);
+    return mixed();
+  };
+  const again = await convert('Recognise text and convert', 'Scan one.pdf');
+  assert.ok(again.paragraphs > 5);
+  assert.equal(again.mixed, 0);
+  // converting the scanner's text as it is no longer mixes sizes inside a paragraph either
+  const asIs = await convert('Convert as it is', 'Scan two.pdf');
+  assert.ok(asIs.paragraphs > 5);
+  assert.equal(asIs.mixed, 0);
   assert.deepEqual(page.errors, []);
 });
