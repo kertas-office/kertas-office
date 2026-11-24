@@ -5,3 +5,7 @@ release/
 scratch/
 website/dist/
 Claude outputs/
+
+# the new Writer (trial) is built by scripts/build-writer2.cjs
+electron/writer2/
+.cache/

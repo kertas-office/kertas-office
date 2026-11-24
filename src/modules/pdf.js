@@ -3,7 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFDocument } from '@cantoo/pdf-lib';
 import { buildPdf, listFormFields, imagesToPdf } from '../lib/pdf-ops.js';
-import { openFiles, saveMany, saveFile, saveAnyFile } from '../lib/platform.js';
+import { openFiles, saveMany, saveFile, saveAnyFile, newWriterOn } from '../lib/platform.js';
 import { extractPages as extractTextPages, pdfToDocx, pdfToSnapshot, fontInfo, textLooksGarbled } from '../lib/pdf-convert.js';
 import { compareText, buildReport } from '../lib/pdf-compare.js';
 import { findFont, cssStack } from '../lib/font-catalog.js';
@@ -1770,6 +1770,15 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
         toast('This PDF has no text layer, so it looks like a scan. Run Recognise text first, then convert.', true);
         setStatus('');
         return;
+      }
+      if (kind === 'word' && !bad.length && !security && !text.some((p) => p.fromOcr) && await newWriterOn()) {
+        // The new Writer's converter keeps the page layout: columns, tables and pictures
+        setStatus('Converting to Word, keeping the layout...');
+        if (await window.kertasNative.newWriter('convert-pdf', await buildOutput(pages))) {
+          setStatus('');
+          toast('Converted to Word. It opened in the new Writer: check the layout, then save.');
+          return;
+        }
       }
       if (kind === 'word') {
         setStatus('Building the Word document...');

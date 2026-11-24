@@ -19,8 +19,10 @@ let forceClose = false; // set when quitting to install an update
 // Serve the built UI from a private app:// origin instead of file://, so module
 // workers (formula engine, PDF renderer) load the same way they do on the web.
 const DIST = path.join(__dirname, '..', 'dist');
+const writer2 = require('./writer2.cjs');
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  ...writer2.schemes(),
 ]);
 function registerAppProtocol() {
   protocol.handle('app', (req) => {
@@ -406,6 +408,19 @@ async function makeDefaultApp() {
   const ok = await new Promise((resolve) => execFile('xdg-mime', ['default', desktop, ...DEFAULT_MIMES], { timeout: 15000 }, (err) => resolve(!err)));
   return { how: ok ? 'done' : 'manual' };
 }
+// The new Writer (trial): whether this build has it, and opening a document in it.
+// It reads the file itself, so the path gets the same checks as any other open.
+ipcMain.handle('kertas:new-writer', async (_e, op, filePath) => {
+  if (op === 'state') return { available: writer2.available, forced: process.env.KERTAS_NEW_WRITER === '1' };
+  if (op === 'convert-pdf') return writer2.convertPdf(filePath); // PDF bytes here, not a path
+  if (op !== 'open' || !writer2.available) return false;
+  if (filePath == null) return writer2.open(null);
+  assertReadable(filePath);
+  if (!/\.docx$/i.test(filePath)) return false;
+  grant(filePath);
+  await addRecent(filePath);
+  return writer2.open(filePath);
+});
 ipcMain.handle('kertas:default-app', () => makeDefaultApp());
 
 ipcMain.handle('kertas:pin-recent', (_e, { path: p, pinned }) => pinRecent(p, !!pinned));
@@ -435,7 +450,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('open-file', (e, filePath) => { e.preventDefault(); sendOpen(filePath); }); // macOS
   // No page gets camera, microphone, location, notifications or similar. The app's own
   // pages may use the clipboard (Paste buttons); nothing else is ever granted.
-  const trusted = (url) => String(url || '').startsWith('app://kertas/') || (DEV_URL && String(url).startsWith(DEV_URL));
+  const trusted = (url) => String(url || '').startsWith('app://kertas/') || (writer2.available && String(url || '').startsWith('kertas-writer://docs/')) || (DEV_URL && String(url).startsWith(DEV_URL));
   const CLIPBOARD = new Set(['clipboard-read', 'clipboard-sanitized-write']);
   app.on('web-contents-created', (_e, contents) => {
     contents.on('will-attach-webview', (ev) => ev.preventDefault());
@@ -445,6 +460,7 @@ if (!app.requestSingleInstanceLock()) {
     session.defaultSession.setPermissionCheckHandler((wc, permission) => CLIPBOARD.has(permission) && trusted(wc?.getURL()));
     session.defaultSession.setDevicePermissionHandler(() => false);
     registerAppProtocol();
+    writer2.start();
     buildMenu();
     createWindow();
     setupUpdates({

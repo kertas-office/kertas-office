@@ -231,3 +231,16 @@ export async function recoveryRead(id) {
   const row = await idbDo('readonly', (st) => st.get(id));
   return row ? new Uint8Array(row.data) : null;
 }
+
+// The new Writer (trial): a second editor for Word documents, in its own window. Off unless
+// switched on in About, so the current Writer stays what everyone gets.
+let newWriterState = null;
+export function newWriterInfo() {
+  if (!newWriterState) newWriterState = (window.kertasNative?.newWriter ? window.kertasNative.newWriter('state') : Promise.resolve({ available: false })).catch(() => ({ available: false }));
+  return newWriterState;
+}
+export const newWriterChosen = () => { try { return localStorage.getItem('kertas-new-writer') === '1'; } catch { return false; } };
+export async function newWriterOn() {
+  const st = await newWriterInfo();
+  return !!st.available && (st.forced || newWriterChosen());
+}

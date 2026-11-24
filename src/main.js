@@ -4,7 +4,7 @@ if (import.meta.env?.DEV) globalThis.__kertasFreezeJson = true;
 import { userName, setUserName } from './lib/user.js';
 import './styles.css';
 import {
-  openFiles, readPath, saveFile, recentFiles, pinRecent, removeRecent, confirmDialog, onNative, confirmClose,
+  openFiles, readPath, saveFile, newWriterInfo, newWriterChosen, newWriterOn, recentFiles, pinRecent, removeRecent, confirmDialog, onNative, confirmClose,
   kindForName, extOf, isDesktop, platform, previewPdf, printToPdf, setNativeTheme,
   recoveryWrite, recoveryDelete, recoveryList, recoveryRead, convertLegacyNative, updates,
 } from './lib/platform.js';
@@ -242,11 +242,19 @@ async function exportPdf(tab, { preview = false } = {}) {
   }
 }
 
+async function newDocument() {
+  if (await newWriterOn() && await window.kertasNative.newWriter('open', null)) return null;
+  return openTab('writer');
+}
+
 async function openFileRecords(records) {
   const opened = [];
   for (const f of records) {
     const kind = kindForName(f.name);
     if (!kind) { toast(`Unsupported file: ${f.name}`, true); continue; }
+    if (kind === 'writer' && f.path && /\.docx$/i.test(f.name) && await newWriterOn()) {
+      if (await window.kertasNative.newWriter('open', f.path)) continue;
+    }
     if (isLegacy(f.name)) {
       // Older formats are converted first, then open like any other document
       try {
@@ -394,7 +402,7 @@ async function makeDefaultApp() {
 // ------------------------------------------------------------ commands
 const active = () => tabs.get(activeId);
 const COMMANDS = [
-  { id: 'new-doc', label: 'New document', icon: 'doc', key: 'Ctrl+N', run: () => openTab('writer') },
+  { id: 'new-doc', label: 'New document', icon: 'doc', key: 'Ctrl+N', run: () => newDocument() },
   { id: 'new-sheet', label: 'New spreadsheet', icon: 'sheet', key: 'Ctrl+Shift+N', run: () => openTab('sheets') },
   { id: 'templates-writer', label: 'New document from a template...', icon: 'template', run: () => openTemplates('writer') },
   { id: 'templates-sheets', label: 'New workbook from a template...', icon: 'template', run: () => openTemplates('sheets') },
@@ -721,6 +729,7 @@ async function showAbout() {
   const st = isDesktop ? await updates('state') : { state: 'web' };
   const lo = isDesktop && window.kertasNative?.hasLibreOffice ? await window.kertasNative.hasLibreOffice() : false;
   const status = { idle: 'Not checked yet', checking: 'Checking...', current: 'Up to date', downloading: `Downloading ${st.available || ''}`, ready: `${st.available} ready, restart to install`, error: `Last check failed: ${st.message || ''}`, dev: 'Development build (no updates)', web: 'Web version', unconfigured: 'This build has no update source' }[st.state] || st.state;
+  const nw = await newWriterInfo();
   const res = await formDialog({
     title: 'Kertas Office',
     description: `Version ${APP_VERSION} · free and open source (AGPL-3.0-or-later)`,
@@ -728,6 +737,7 @@ async function showAbout() {
     fields: [
       { id: 'info', type: 'info', html: `<table class="stat-table"><tr><td>Updates</td><td>${status}</td></tr><tr><td>Older formats</td><td>${isDesktop ? (lo ? 'LibreOffice found: .doc, .xls, .rtf, .odt and .ods keep their formatting' : 'Built in: .xls and .ods, and the text of .doc. Install LibreOffice for full formatting and .rtf / .odt') : '.xls and .ods'}</td></tr><tr><td>Your files</td><td>Stay on this device</td></tr></table>` },
       { id: 'name', label: 'Your name (on tracked changes and comments)', value: userName(), placeholder: 'e.g. Aisha Rahman' },
+      ...(nw.available ? [{ id: 'newWriter', type: 'checkbox', label: 'Open Word documents in the new Writer (preview)', value: newWriterChosen() }] : []),
       ...(isDesktop && st.packaged ? [{ id: 'auto', type: 'checkbox', label: 'Download updates automatically', value: st.auto !== false }] : []),
       ...(SUPPORT_BUILD ? [
         { id: 'support', type: 'info', html: `<div class="support-line">${icon('coffee', 16)}<span>Kertas is free and open source. If it saves you time, you can <a href="${SUPPORT_URL}" target="_blank" rel="noopener">buy me a coffee</a>.</span></div>` },
@@ -741,6 +751,7 @@ async function showAbout() {
   });
   if (!res) return;
   if (res.values.name !== undefined && res.values.name.trim() !== userName()) { setUserName(res.values.name); toast(res.values.name.trim() ? `Your changes and comments now show as ${res.values.name.trim()}` : 'Name cleared'); }
+  if (res.values.newWriter !== undefined && res.values.newWriter !== newWriterChosen()) { try { localStorage.setItem('kertas-new-writer', res.values.newWriter ? '1' : '0'); } catch { /* private mode */ } toast(res.values.newWriter ? 'Word documents now open in the new Writer' : 'Word documents open in the current Writer again'); }
   if (res.values.auto !== undefined && res.values.auto !== (st.auto !== false)) await updates('set-auto', res.values.auto);
   if (res.values.cup !== undefined) { try { localStorage.setItem('kertas-hide-coffee', res.values.cup ? '0' : '1'); } catch { /* private mode */ } showCoffee(); }
   if (res.action === 'check') checkUpdates(true);

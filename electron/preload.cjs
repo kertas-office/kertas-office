@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('kertasNative', {
   onMenu: (cb) => ipcRenderer.on('kertas:menu', (_e, action) => cb(action)),
   onRequestClose: (cb) => ipcRenderer.on('kertas:request-close', () => cb()),
   confirmClose: () => ipcRenderer.send('kertas:confirm-close'),
+  newWriter: (op, filePath) => ipcRenderer.invoke('kertas:new-writer', op, filePath),
   platform: process.platform,
   edit: (action) => ipcRenderer.invoke('kertas:edit', action),
   recovery: (op, args) => ipcRenderer.invoke('kertas:recovery', op, args),
