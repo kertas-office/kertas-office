@@ -31,11 +31,19 @@ jobs:
   # checked by independent readers. Separate from "test" so that check stays quick.
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      # The new Writer (trial): its editor is fetched, patched and built here, so its tests run
+      # (test/e2e/new-writer.e2e.mjs skips itself when it is not built). The checkout and its
+      # installed packages are kept between runs until the patch or the script changes.
+      - uses: actions/cache@v5
+        with:
+          path: .cache
+          key: writer2-${{ hashFiles('scripts/build-writer2.cjs', 'scripts/writer2/genoffice.patch', 'package-lock.json') }}
+      - run: npm run build:writer2
       - run: xvfb-run -a npm run e2e

@@ -15,6 +15,7 @@
     "start": "vite build && electron .",
     "test": "node --test test/*.test.js",
     "e2e": "vite build && node --test --test-concurrency=1 test/e2e/*.e2e.mjs",
+    "build:writer2": "node scripts/build-writer2.cjs",
     "icons": "node scripts/make-icons.cjs",
     "site": "node website/build.mjs",
     "dist": "vite build && electron-builder --config electron-builder.config.cjs --publish never",
