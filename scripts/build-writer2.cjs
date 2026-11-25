@@ -55,6 +55,24 @@ fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(path.join(OUT, 'wasm'), { recursive: true });
 for (const part of ['main', 'preload', 'renderer']) fs.cpSync(path.join(app, 'out-kertas', part), path.join(OUT, part), { recursive: true });
 fs.copyFileSync(path.join(SRC, 'node_modules', '@embedpdf', 'pdfium', 'dist', 'pdfium.wasm'), path.join(OUT, 'wasm', 'pdfium.wasm'));
+// Spelling dictionaries, so the checker never has to fetch one: Electron's own set for the version
+// Kertas ships, of which the languages Kertas offers are kept (electron/writer2.cjs serves them
+// to the checker from this computer). Skipped quietly when offline; spelling then uses whatever the
+// system provides, and on Linux stays off.
+try {
+  const version = require(path.join(ROOT, 'node_modules', 'electron', 'package.json')).version;
+  const cache = path.join(ROOT, '.cache', `hunspell-${version}`);
+  const zip = path.join(cache, 'hunspell_dictionaries.zip');
+  if (!fs.existsSync(zip)) {
+    fs.mkdirSync(cache, { recursive: true });
+    run('curl', ['-fsSL', '-o', zip, `https://github.com/electron/electron/releases/download/v${version}/hunspell_dictionaries.zip`]);
+  }
+  const dict = path.join(OUT, 'dict');
+  fs.mkdirSync(dict, { recursive: true });
+  run('unzip', ['-o', '-q', zip, 'en-US-*.bdic', 'en-GB-[0-9]*.bdic', 'de-DE-*.bdic', 'es-ES-*.bdic', 'fr-FR-*.bdic', 'id-ID-*.bdic', 'LICENSE*', '-d', dict]);
+} catch (e) {
+  console.warn('Spelling dictionaries were not added:', e.message);
+}
 // The licences travel with the code they cover
 for (const f of ['LICENSE', 'NOTICE', 'LICENSE-UNICODE.txt']) fs.copyFileSync(path.join(SRC, f), path.join(OUT, f));
 const notices = path.join(SRC, 'apps', 'shell', 'build', 'THIRD-PARTY-NOTICES.txt');

@@ -2,7 +2,7 @@
 // document engine (Apache-2.0, see NOTICE), hosted as tabs of the Kertas window. The current
 // Writer stays the default; this one is switched on in Settings or with
 // KERTAS_NEW_WRITER=1.
-const { app, ipcMain } = require('electron');
+const { app, ipcMain, session } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -56,6 +56,7 @@ const AI_OFF = { side: 'left', fontSize: 'default', customFontSize: 14, spellche
 function start() {
   if (!host) return;
   answerHostQuestions();
+  serveDictionaries();
   // its own folder for its recent list, settings and templates, apart from Kertas's files
   host.setDataDir(path.join(app.getPath('userData'), 'writer'));
   // Kertas owns the application menu
@@ -78,6 +79,40 @@ function start() {
   host.setActiveDocsResolver(() => { const t = tabs.get(activeTab()); return t ? t.view.webContents : null; });
   host.setDocsFileSavedHook((wc, filePath) => { const id = tabOf(wc.id); if (id) tell('path', id, { path: filePath }); });
   host.setDocsFileOpenedHook((wcId, filePath) => { const id = tabOf(wcId); if (id) tell('path', id, { path: filePath }); });
+}
+
+// ---- spelling, without the internet --------------------------------------------
+// Chromium's spell checker fetches its dictionaries from a Google server: always on Linux, and
+// on Windows for a language the system has no checker for. Kertas goes online for nothing, so
+// the checker is pointed at this computer instead, where a tiny server hands out the
+// dictionaries shipped in writer2/dict. A language that is not there gets no dictionary, and
+// no request leaves the machine.
+const DICT = path.join(ROOT, 'dict');
+function serveDictionaries() {
+  let files = [];
+  try { files = fs.readdirSync(DICT).filter((f) => f.endsWith('.bdic')); } catch { /* built without them */ }
+  const http = require('http');
+  const server = http.createServer((req, res) => {
+    const name = decodeURIComponent(String(req.url || '').split('?')[0].replace(/^\/+/, '')).toLowerCase();
+    const file = files.find((f) => f.toLowerCase() === name);
+    if (!file) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+    fs.createReadStream(path.join(DICT, file)).pipe(res);
+  });
+  server.on('error', () => { /* no port: spelling falls back to the system's own, or stays off */ });
+  server.listen(0, '127.0.0.1', () => {
+    const ses = session.defaultSession;
+    ses.setSpellCheckerDictionaryDownloadURL(`http://127.0.0.1:${server.address().port}/`);
+    if (process.platform === 'linux' && files.length) {
+      // the shipped languages, the system's own first
+      const have = files.map((f) => f.replace(/-\d+-\d+\.bdic$/, ''));
+      const locale = app.getLocale();
+      const pick = have.find((l) => l.toLowerCase() === locale.toLowerCase()) || have.find((l) => l.slice(0, 2) === locale.slice(0, 2)) || 'en-US';
+      ses.setSpellCheckerEnabled(true);
+      try { ses.setSpellCheckerLanguages([pick]); } catch { /* not a language this build knows */ }
+    }
+  });
+  app.on('will-quit', () => server.close());
 }
 
 // ---- as tabs of the Kertas window --------------------------------------------

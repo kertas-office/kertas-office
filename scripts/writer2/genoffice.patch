@@ -649,18 +649,19 @@ index cb1b92d..1206b0a 100644
   *
   * electron-builder bakes the publish URL into resources/app-update.yml at
 diff --git a/apps/docs/src/renderer/App.tsx b/apps/docs/src/renderer/App.tsx
-index b67bd53..cc8acb3 100644
+index b67bd53..ce9b6c4 100644
 --- a/apps/docs/src/renderer/App.tsx
 +++ b/apps/docs/src/renderer/App.tsx
-@@ -162,6 +162,7 @@ import {
+@@ -162,6 +162,8 @@ import {
  } from './mail-merge/output'
  import { ZoteroDocumentController } from './zotero/controller'
  import { AiPanel, aiRevisionAuthor } from './ai/AiPanel'
 +import { KERTAS_AI } from './kertas'
++import { setSlashCommandRunner } from './kertas/slash-menu'
  import type { AiCommentsAccess, AiDocExtras, AiHeaderFooterAccess } from './ai/tools'
  import type { AiStyleInfo } from './ai/style-ops'
  import {
-@@ -2374,7 +2375,9 @@ export function App() {
+@@ -2374,7 +2376,9 @@ export function App() {
  
    useEffect(() => {
      void window.desktop.getRecentFiles().then(setRecent)
@@ -671,7 +672,7 @@ index b67bd53..cc8acb3 100644
      loadSettings()
      return window.desktop.onAiSettingsChanged?.(loadSettings)
    }, [])
-@@ -2769,7 +2772,7 @@ export function App() {
+@@ -2769,7 +2773,7 @@ export function App() {
  
    // window title follows the document, so the OS window list and Switch Window show file names
    useEffect(() => {
@@ -680,7 +681,7 @@ index b67bd53..cc8acb3 100644
    }, [doc])
  
    useEffect(() => window.desktop.onTeardown?.(() => setTornDown(true)), [])
-@@ -3891,7 +3894,7 @@ export function App() {
+@@ -3891,7 +3895,7 @@ export function App() {
        window.desktop.onZoteroRequest(async (request) => {
          try {
            const activeEditor = editorRef.current
@@ -689,7 +690,16 @@ index b67bd53..cc8acb3 100644
            const controller =
              zoteroControllerRef.current ??
              new ZoteroDocumentController(activeEditor, {
-@@ -10413,7 +10416,7 @@ export function App() {
+@@ -8311,6 +8315,8 @@ export function App() {
+   }
+   // native application menu → renderer commands
+   useEffect(() => window.desktop.onMenuCommand(runCommand), [runCommand])
++  // Kertas's slash menu runs the same commands as the ribbon
++  useEffect(() => setSlashCommandRunner(runCommand as (id: string, payload?: string) => void), [runCommand])
+   // the menu's paste-and-match-style arms the plain-paste flag just before its
+   // paste event fires, so the editor skips the Markdown lane (see #2856)
+   useEffect(() => window.desktop.onPastePlain(armPlainPaste), [])
+@@ -10413,7 +10419,7 @@ export function App() {
        />
  
        <div className="app-main">
@@ -757,6 +767,27 @@ index c94b79c..de99bb8 100644
                <div className="ribbon-group-items">
                  <button
                    className={`rb-big ai-entry ${aiEntry.pressed ? 'active' : ''}`}
+diff --git a/apps/docs/src/renderer/components/ribbon-insert-tab.tsx b/apps/docs/src/renderer/components/ribbon-insert-tab.tsx
+index d75bc39..42c2b00 100644
+--- a/apps/docs/src/renderer/components/ribbon-insert-tab.tsx
++++ b/apps/docs/src/renderer/components/ribbon-insert-tab.tsx
+@@ -13,6 +13,7 @@ import {
+   type ChartType,
+ } from './chart-types'
+ import { EquationGallery } from './EquationModal'
++import { FormFieldsGroup } from '../kertas/FormFieldsGroup'
+ import { COVER_PRESETS, coverPageRange, type CoverPreset } from '../editor/cover-pages'
+ import { useI18n, type StringKey } from '../i18n/locale'
+ import { isPlanned, type ActionCommandId } from '../../shared/commands'
+@@ -641,6 +642,8 @@ export function InsertTab({
+ 
+       <div className="ribbon-sep" />
+ 
++      <FormFieldsGroup editor={editor} disabled={!hasDoc} />
++
+       <div className="ribbon-group">
+         <div className="ribbon-group-items">
+           {/* Word: Insert → Comment starts a new comment; the pane toggle stays on Review.
 diff --git a/apps/docs/src/renderer/components/ribbon-tabs.tsx b/apps/docs/src/renderer/components/ribbon-tabs.tsx
 index 06a7821..c5007d0 100644
 --- a/apps/docs/src/renderer/components/ribbon-tabs.tsx
@@ -806,11 +837,72 @@ index 06a7821..c5007d0 100644
                    </button>
                  ))}
                </div>
+diff --git a/apps/docs/src/renderer/editor/convert.ts b/apps/docs/src/renderer/editor/convert.ts
+index 117b4d1..628ecf6 100644
+--- a/apps/docs/src/renderer/editor/convert.ts
++++ b/apps/docs/src/renderer/editor/convert.ts
+@@ -1779,6 +1779,11 @@ function runMarks(run: Run): PmMark[] {
+   }
+   if (run.sdtCheckboxXml !== undefined)
+     marks.push({ type: 'ctrlCheckbox', attrs: { sdtPr: run.sdtCheckboxXml } })
++  if (run.sdtFieldXml !== undefined)
++    marks.push({
++      type: 'ctrlField',
++      attrs: { sdtPr: run.sdtFieldXml, key: run.sdtFieldKey ?? 0 },
++    })
+   if (run.commentIds?.length)
+     marks.push({ type: 'comment', attrs: { ids: run.commentIds.join(' ') } })
+   if (run.ins) {
+@@ -4223,6 +4228,9 @@ function runFromMarks(text: string, marks: PmMark[]): Run {
+       }
+     } else if (mark.type === 'ctrlCheckbox') {
+       run.sdtCheckboxXml = String(mark.attrs?.sdtPr ?? '')
++    } else if (mark.type === 'ctrlField') {
++      run.sdtFieldXml = String(mark.attrs?.sdtPr ?? '')
++      run.sdtFieldKey = Number(mark.attrs?.key ?? 0)
+     } else if (mark.type === 'comment') {
+       const ids = String(mark.attrs?.ids ?? '')
+         .split(' ')
+@@ -4423,6 +4431,8 @@ function runStyleKey(run: Run): string {
+     run.fldBeginXml ?? null,
+     run.fldDirty ?? null,
+     run.sdtCheckboxXml ?? null,
++    run.sdtFieldXml ?? null,
++    run.sdtFieldKey ?? null,
+     run.math?.omml ?? null,
+     run.math?.oleXml ?? null,
+     run.sym ? [run.sym.font, run.sym.char] : null,
+@@ -4495,6 +4505,8 @@ function normalizedRuns(runs: Run[]): unknown[] {
+           r.fldBeginXml ?? null,
+           r.fldDirty ?? null,
+           r.sdtCheckboxXml ?? null,
++          r.sdtFieldXml ?? null,
++          r.sdtFieldKey ?? null,
+           r.math?.omml ?? null,
+           r.math?.oleXml ?? null,
+           r.sym ? [r.sym.font, r.sym.char] : null,
 diff --git a/apps/docs/src/renderer/editor/extensions.ts b/apps/docs/src/renderer/editor/extensions.ts
-index 4dfd85f..a72d4ba 100644
+index 4dfd85f..ec446c1 100644
 --- a/apps/docs/src/renderer/editor/extensions.ts
 +++ b/apps/docs/src/renderer/editor/extensions.ts
-@@ -1625,7 +1625,7 @@ export const DocListItem = Node.create({
+@@ -238,6 +238,7 @@ import {
+   DelMark,
+   InsMark,
+   CtrlCheckboxMark,
++  CtrlFieldMark,
+   FormatOffClearExtension,
+   InstrFieldMark,
+   SymMark,
+@@ -283,6 +284,8 @@ import { MergePreviewExtension } from './merge-preview'
+ import { FormattingMarksExtension } from './formatting-marks'
+ import { AiQueueAnchorsExtension } from './ai-queue-anchors'
+ import { CheckboxToggleExtension } from './checkbox-toggle'
++import { FormFieldsExtension } from '../kertas/form-fields'
++import { SlashMenuExtension } from '../kertas/slash-menu'
+ import { DoubleClickWordExtension } from './dblclick-word'
+ import { OutlineViewExtension } from './outline-view'
+ import { StoryViewExtension } from './story-view'
+@@ -1625,7 +1628,7 @@ export const DocListItem = Node.create({
          }),
        },
        // our own clipboard HTML: renderHTML emits <div class="doc-li …">, which
@@ -819,11 +911,104 @@ index 4dfd85f..a72d4ba 100644
        // to plain text. kind/ilvl ride in data-para; classes are the fallback.
        {
          tag: 'div.doc-li',
+@@ -8068,7 +8071,9 @@ export const textboxSubExtensions = [
+   InstrFieldMark,
+   SymMark,
+   CtrlCheckboxMark,
++  CtrlFieldMark,
+   CheckboxToggleExtension,
++  FormFieldsExtension,
+   DoubleClickWordExtension,
+   TextStyleMark,
+   FormatOffClearExtension,
+@@ -8169,6 +8174,7 @@ export const editorExtensions = [
+   InstrFieldMark,
+   SymMark,
+   CtrlCheckboxMark,
++  CtrlFieldMark,
+   RprChangeMark,
+   TextStyleMark,
+   DocRedaction,
+@@ -8204,6 +8210,8 @@ export const editorExtensions = [
+   InactiveSelectionExtension,
+   AiQueueAnchorsExtension,
+   CheckboxToggleExtension,
++  FormFieldsExtension,
++  SlashMenuExtension,
+   DoubleClickWordExtension,
+   OutlineViewExtension,
+   PageGapNavExtension,
 diff --git a/apps/docs/src/renderer/editor/marks.ts b/apps/docs/src/renderer/editor/marks.ts
-index e99b488..a685ca4 100644
+index e99b488..3e05f32 100644
 --- a/apps/docs/src/renderer/editor/marks.ts
 +++ b/apps/docs/src/renderer/editor/marks.ts
-@@ -514,7 +514,7 @@ export function fontAttrsFromFamilyChain(chain: string | undefined): Record<stri
+@@ -483,6 +483,65 @@ export const CtrlCheckboxMark = Mark.create({
+   },
+ })
+ 
++/** Which kind of inline content control a w:sdtPr declares. */
++export function ctrlFieldKind(sdtPr: string): 'list' | 'date' | 'text' | 'rich' {
++  if (/<w:(?:dropDownList|comboBox)\b/.test(sdtPr)) return 'list'
++  if (/<w:date\b/.test(sdtPr)) return 'date'
++  if (/<w:text\b/.test(sdtPr)) return 'text'
++  return 'rich'
++}
++
++/** The title a control shows (w:alias), unescaped. */
++export function ctrlFieldTitle(sdtPr: string): string {
++  const m = /<w:alias\b[^>]*\bw:val="([^"]*)"/.exec(sdtPr)
++  return (m?.[1] ?? '')
++    .replace(/&quot;/g, '"')
++    .replace(/&lt;/g, '<')
++    .replace(/&gt;/g, '>')
++    .replace(/&amp;/g, '&')
++}
++
++/** Inline content control other than a checkbox (text, drop-down list, combo box, date, rich
++ * text): the text is the control's content, `sdtPr` its properties written back around it, and
++ * `key` tells two neighbouring controls apart. Filling in is in kertas/form-fields.ts. */
++export const CtrlFieldMark = Mark.create({
++  name: 'ctrlField',
++  inclusive: true,
++  addAttributes() {
++    return {
++      sdtPr: { default: '', rendered: false },
++      key: { default: 0, rendered: false },
++    }
++  },
++  parseHTML() {
++    return [
++      {
++        tag: 'span[data-ctrl-field]',
++        getAttrs: (el) => ({
++          sdtPr: el.getAttribute('data-sdt-pr') ?? '',
++          key: Number(el.getAttribute('data-sdt-key')) || 0,
++        }),
++      },
++    ]
++  },
++  renderHTML({ mark }) {
++    const sdtPr = String(mark.attrs.sdtPr ?? '')
++    const kind = ctrlFieldKind(sdtPr)
++    const empty = /<w:showingPlcHdr\b/.test(sdtPr)
++    return [
++      'span',
++      {
++        'data-ctrl-field': kind,
++        'data-sdt-pr': sdtPr,
++        'data-sdt-key': String(mark.attrs.key ?? 0),
++        class: `doc-field-control${empty ? ' is-placeholder' : ''}`,
++        ...(ctrlFieldTitle(sdtPr) ? { title: ctrlFieldTitle(sdtPr) } : {}),
++      },
++      0,
++    ]
++  },
++})
++
+ /**
+  * CSS-only system keywords: names that resolve to a face inside a UA, never a
+  * real font family. They reach a pasted chain as ordinary-looking entries — a
+@@ -514,7 +573,7 @@ export function fontAttrsFromFamilyChain(chain: string | undefined): Record<stri
          !/^var\(|\)$/.test(x) &&
          !/^(serif|sans-serif|monospace|cursive|fantasy|system-ui)$/i.test(x) &&
          !CSS_ONLY_FAMILY.test(x) &&
@@ -1675,12 +1860,590 @@ index 0000000..25ae301
 +/** Kertas Office hosts this editor without the AI assistant: nothing of it is
 + * shown, and nothing is sent anywhere. */
 +export const KERTAS_AI: boolean = false
+diff --git a/apps/docs/src/renderer/kertas/FormFieldsGroup.tsx b/apps/docs/src/renderer/kertas/FormFieldsGroup.tsx
+new file mode 100644
+index 0000000..d6fb400
+--- /dev/null
++++ b/apps/docs/src/renderer/kertas/FormFieldsGroup.tsx
+@@ -0,0 +1,53 @@
++// Kertas Office: the Form fields group on the Insert tab.
++import type { Editor } from '@tiptap/core'
++import { currentField, editFieldProperties, insertFormField, type FormFieldKind } from './form-fields'
++
++const ICONS: Record<FormFieldKind | 'props', string> = {
++  text: 'M3 5h10M8 5v7M5.5 12h5',
++  checkbox: 'M3 3h10v10H3zM5.5 8l2 2 3.5-4',
++  list: 'M2.5 4.5h11v7h-11zM9.5 7l1.5 1.8L12.5 7',
++  date: 'M3 4h10v9H3zM3 7h10M6 2.5v3M10 2.5v3',
++  props: 'M3 4.5h10M3 8h10M3 11.5h10M6 3.2v2.6M10 6.7v2.6M7 10.2v2.6',
++}
++
++function Icon({ d }: { d: string }) {
++  return (
++    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
++      <path d={d} />
++    </svg>
++  )
++}
++
++export function FormFieldsGroup({ editor, disabled }: { editor: Editor; disabled: boolean }) {
++  const inField = !disabled && !!currentField(editor)
++  const button = (kind: FormFieldKind, label: string, tip: string) => (
++    // command-exempt: Kertas's own group, kept apart from the shared command table
++    <button className="rb-small" disabled={disabled} data-tip={tip} onClick={() => void insertFormField(editor, kind)}>
++      <Icon d={ICONS[kind]} />
++      <span className="rb-small-label">{label}</span>
++    </button>
++  )
++  return (
++    <>
++      <div className="ribbon-group">
++        <div className="ribbon-group-items">
++          <div className="rb-col" data-wide="1">
++            {button('text', 'Text field', 'Text field: a box to type in')}
++            {button('checkbox', 'Tick box', 'Tick box: click to tick or clear')}
++            {button('list', 'Dropdown list', 'Dropdown list: pick one of your choices')}
++          </div>
++          <div className="rb-col" data-wide="1">
++            {button('date', 'Date picker', 'Date picker: pick a date from a calendar')}
++            {/* command-exempt: Kertas's own group */}
++            <button className="rb-small" disabled={!inField} data-tip="Field properties: change the title, choices or date format of the field the cursor is in" onClick={() => void editFieldProperties(editor)}>
++              <Icon d={ICONS.props} />
++              <span className="rb-small-label">Field properties</span>
++            </button>
++          </div>
++        </div>
++        <div className="ribbon-group-label">Form fields</div>
++      </div>
++      <div className="ribbon-sep" />
++    </>
++  )
++}
+diff --git a/apps/docs/src/renderer/kertas/form-fields.ts b/apps/docs/src/renderer/kertas/form-fields.ts
+new file mode 100644
+index 0000000..905d9dd
+--- /dev/null
++++ b/apps/docs/src/renderer/kertas/form-fields.ts
+@@ -0,0 +1,513 @@
++// Kertas Office: fillable form fields.
++//
++// A field is an inline content control (w:sdt): a text field, a drop-down
++// list, a date picker or a tick box. The editor holds one as text carrying the
++// `ctrlField` mark (the tick box as `ctrlCheckbox`), with the control's own
++// properties (w:sdtPr) kept on the mark and written back around the text on
++// save, so Word and LibreOffice see the same field.
++//
++// This file is the behaviour: what a click or a key does inside a field, the
++// small pop-ups for picking a choice or a date, and inserting new fields.
++
++import { Extension, type Editor } from '@tiptap/core'
++import type { Mark as PmMark, Node as PmNode } from '@tiptap/pm/model'
++import { Plugin, TextSelection } from '@tiptap/pm/state'
++import type { EditorView } from '@tiptap/pm/view'
++import { ctrlFieldKind, ctrlFieldTitle } from '../editor/marks'
++
++export type FormFieldKind = 'text' | 'checkbox' | 'list' | 'date'
++
++/** one field in the document: where it is, what it holds, what it is */
++export interface FieldRange {
++  from: number
++  to: number
++  text: string
++  sdtPr: string
++  key: number
++  /** the marks of its first character, the control's own left out */
++  marks: readonly PmMark[]
++}
++
++const PLACEHOLDER = { text: 'Click here to type', list: 'Choose an item', date: 'Pick a date', rich: 'Click here to type' }
++const PLACEHOLDER_GREY = '808080'
++export const DATE_FORMATS = ['d MMMM yyyy', 'dd/MM/yyyy', 'MM/dd/yyyy', 'yyyy-MM-dd', 'd MMM yyyy', 'MMMM d, yyyy', 'dddd, d MMMM yyyy']
++
++// ---- the control's properties (w:sdtPr) -------------------------------------
++
++const esc = (v: string): string =>
++  v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
++const unesc = (v: string): string =>
++  v.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
++
++const showsPlaceholder = (sdtPr: string): boolean => /<w:showingPlcHdr\b/.test(sdtPr)
++const withoutPlaceholder = (sdtPr: string): string => sdtPr.replace(/<w:showingPlcHdr\b[^>]*\/>/, '')
++function withPlaceholder(sdtPr: string): string {
++  if (showsPlaceholder(sdtPr)) return sdtPr
++  // CT_SdtPr order: w:showingPlcHdr comes before the element naming the control's type
++  const at = sdtPr.search(/<w:(?:dataBinding|text|dropDownList|comboBox|date|richText|picture|docPartObj|docPartList|group)\b|<\/w:sdtPr>/)
++  return at < 0 ? sdtPr : `${sdtPr.slice(0, at)}<w:showingPlcHdr/>${sdtPr.slice(at)}`
++}
++
++export function listItems(sdtPr: string): Array<{ text: string; value: string }> {
++  const out: Array<{ text: string; value: string }> = []
++  for (const m of sdtPr.matchAll(/<w:listItem\b([^>]*)\/>/g)) {
++    const value = /\bw:value="([^"]*)"/.exec(m[1])?.[1]
++    const text = /\bw:displayText="([^"]*)"/.exec(m[1])?.[1] ?? value
++    if (text !== undefined) out.push({ text: unesc(text), value: unesc(value ?? text) })
++  }
++  return out
++}
++
++export const dateFormatOf = (sdtPr: string): string =>
++  unesc(/<w:dateFormat\b[^>]*\bw:val="([^"]*)"/.exec(sdtPr)?.[1] ?? '') || 'd MMMM yyyy'
++
++const withFullDate = (sdtPr: string, iso: string): string =>
++  sdtPr.replace(/<w:date\b[^>]*?(\/?)>/, (_all, selfClosing: string) =>
++    selfClosing ? `<w:date w:fullDate="${iso}T00:00:00Z"/>` : `<w:date w:fullDate="${iso}T00:00:00Z">`,
++  )
++
++const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
++const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
++
++/** a date in a Word date format (d, dd, ddd, dddd, M, MM, MMM, MMMM, yy, yyyy) */
++export function formatDate(iso: string, format: string): string {
++  const [y, m, d] = iso.split('-').map(Number)
++  if (!y || !m || !d) return iso
++  const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
++  return format.replace(/dddd|ddd|dd|d|MMMM|MMM|MM|M|yyyy|yy|'[^']*'/g, (token) => {
++    switch (token) {
++      case 'dddd': return DAYS[weekday]
++      case 'ddd': return DAYS[weekday].slice(0, 3)
++      case 'dd': return String(d).padStart(2, '0')
++      case 'd': return String(d)
++      case 'MMMM': return MONTHS[m - 1]
++      case 'MMM': return MONTHS[m - 1].slice(0, 3)
++      case 'MM': return String(m).padStart(2, '0')
++      case 'M': return String(m)
++      case 'yyyy': return String(y)
++      case 'yy': return String(y).slice(-2)
++      default: return token.slice(1, -1)
++    }
++  })
++}
++
++const newId = (): number => 1 + Math.floor(Math.random() * 2_000_000_000)
++
++export interface FieldSpec {
++  title?: string
++  choices?: string[]
++  format?: string
++}
++
++export function buildSdtPr(kind: Exclude<FormFieldKind, 'checkbox'>, spec: FieldSpec, placeholder: boolean): string {
++  const head = `${spec.title ? `<w:alias w:val="${esc(spec.title)}"/>` : ''}<w:id w:val="${newId()}"/>${placeholder ? '<w:showingPlcHdr/>' : ''}`
++  if (kind === 'list') {
++    const items = (spec.choices ?? []).map((c) => `<w:listItem w:displayText="${esc(c)}" w:value="${esc(c)}"/>`).join('')
++    return `<w:sdtPr>${head}<w:dropDownList>${items}</w:dropDownList></w:sdtPr>`
++  }
++  if (kind === 'date') {
++    return `<w:sdtPr>${head}<w:date><w:dateFormat w:val="${esc(spec.format || 'd MMMM yyyy')}"/><w:lid w:val="en-US"/><w:storeMappedDataAs w:val="dateTime"/><w:calendar w:val="gregorian"/></w:date></w:sdtPr>`
++  }
++  return `<w:sdtPr>${head}<w:text/></w:sdtPr>`
++}
++
++export const buildCheckboxSdtPr = (title: string): string =>
++  `<w:sdtPr>${title ? `<w:alias w:val="${esc(title)}"/>` : ''}<w:id w:val="${newId()}"/>` +
++  '<w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/>' +
++  '<w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr>'
++
++/** the same properties with a new title, choices or date format */
++export function editSdtPr(sdtPr: string, spec: FieldSpec): string {
++  let xml = sdtPr
++  if (spec.title !== undefined) {
++    xml = xml.replace(/<w:alias\b[^>]*\/>/, '')
++    if (spec.title) xml = xml.replace(/<w:sdtPr>/, `<w:sdtPr><w:alias w:val="${esc(spec.title)}"/>`)
++  }
++  if (spec.choices) {
++    const items = spec.choices.map((c) => `<w:listItem w:displayText="${esc(c)}" w:value="${esc(c)}"/>`).join('')
++    xml = xml.replace(/<w:(dropDownList|comboBox)\b([^>]*?)(?:\/>|>[\s\S]*?<\/w:\1>)/, (_a, tag: string, attrs: string) => `<w:${tag}${attrs}>${items}</w:${tag}>`)
++  }
++  if (spec.format) {
++    xml = /<w:dateFormat\b/.test(xml)
++      ? xml.replace(/<w:dateFormat\b[^>]*\/>/, `<w:dateFormat w:val="${esc(spec.format)}"/>`)
++      : xml.replace(/<w:date\b([^>]*?)\/>/, `<w:date$1><w:dateFormat w:val="${esc(spec.format)}"/></w:date>`)
++  }
++  return xml
++}
++
++// ---- finding and changing a field in the document ---------------------------
++
++const fieldMark = (node: PmNode | null | undefined): PmMark | undefined =>
++  node?.isText ? node.marks.find((m) => m.type.name === 'ctrlField') : undefined
++
++/** the field at `pos`: the one the position is inside, or touching */
++export function fieldAt(doc: PmNode, pos: number): FieldRange | null {
++  if (pos < 0 || pos > doc.content.size) return null
++  const $pos = doc.resolve(pos)
++  const parent = $pos.parent
++  if (!parent.isTextblock) return null
++  const mark = fieldMark($pos.nodeAfter) ?? fieldMark($pos.nodeBefore)
++  if (!mark) return null
++  const same = (node: PmNode): boolean => {
++    const m = fieldMark(node)
++    return !!m && m.attrs.key === mark.attrs.key && m.attrs.sdtPr === mark.attrs.sdtPr
++  }
++  // the run of neighbouring text nodes that belong to this control and include pos
++  let offset = $pos.start()
++  let from = -1
++  let to = -1
++  let text = ''
++  let marks: readonly PmMark[] = []
++  for (let i = 0; i < parent.childCount; i++) {
++    const child = parent.child(i)
++    const end = offset + child.nodeSize
++    if (same(child)) {
++      if (from < 0) { from = offset; text = ''; marks = child.marks.filter((m) => m.type.name !== 'ctrlField') }
++      text += child.text ?? ''
++      to = end
++    } else if (from >= 0) {
++      if (pos >= from && pos <= to) break
++      from = -1
++    }
++    offset = end
++  }
++  if (from < 0 || pos < from || pos > to) return null
++  return { from, to, text, sdtPr: String(mark.attrs.sdtPr ?? ''), key: Number(mark.attrs.key ?? 0), marks }
++}
++
++const isPlaceholderStyle = (m: PmMark): boolean =>
++  m.type.name === 'docTextStyle' &&
++  (m.attrs.styleId === 'PlaceholderText' || /^(808080|7f7f7f|666666)$/i.test(String(m.attrs.color ?? '')))
++
++/** put `text` in the field, as its content or as its placeholder */
++function setField(view: EditorView, field: FieldRange, text: string, sdtPr: string, opts: { placeholder?: boolean; select?: boolean } = {}): void {
++  const { schema } = view.state
++  const marks: PmMark[] = field.marks.filter((m) => !isPlaceholderStyle(m))
++  if (opts.placeholder && schema.marks.docTextStyle) marks.push(schema.marks.docTextStyle.create({ color: PLACEHOLDER_GREY }))
++  marks.push(schema.marks.ctrlField.create({ sdtPr, key: field.key }))
++  const tr = view.state.tr.replaceWith(field.from, field.to, schema.text(text, marks))
++  const end = field.from + text.length
++  tr.setSelection(opts.select ? TextSelection.create(tr.doc, field.from, end) : TextSelection.create(tr.doc, end))
++  view.dispatch(tr.scrollIntoView())
++}
++
++const fill = (view: EditorView, field: FieldRange, text: string, sdtPr = field.sdtPr): void =>
++  setField(view, field, text, withoutPlaceholder(sdtPr))
++
++function clear(view: EditorView, field: FieldRange): void {
++  const kind = ctrlFieldKind(field.sdtPr)
++  setField(view, field, PLACEHOLDER[kind], withPlaceholder(field.sdtPr), { placeholder: true, select: true })
++}
++
++// ---- pop-ups ----------------------------------------------------------------
++
++let openPopup: HTMLElement | null = null
++function closePopup(): void {
++  openPopup?.remove()
++  openPopup = null
++  document.removeEventListener('mousedown', onOutside, true)
++  document.removeEventListener('keydown', onEscape, true)
++}
++function onOutside(e: MouseEvent): void {
++  if (openPopup && !openPopup.contains(e.target as Node)) closePopup()
++}
++function onEscape(e: KeyboardEvent): void {
++  if (e.key === 'Escape') { e.stopPropagation(); closePopup() }
++}
++
++function popupAt(view: EditorView, pos: number, className: string): HTMLElement {
++  closePopup()
++  const el = document.createElement('div')
++  el.className = `kertas-field-popup ${className}`
++  const at = view.coordsAtPos(pos)
++  el.style.left = `${Math.max(8, Math.min(at.left, window.innerWidth - 280))}px`
++  el.style.top = `${Math.min(at.bottom + 4, window.innerHeight - 60)}px`
++  document.body.appendChild(el)
++  openPopup = el
++  // after this click has finished, so it does not close what it opened
++  setTimeout(() => {
++    document.addEventListener('mousedown', onOutside, true)
++    document.addEventListener('keydown', onEscape, true)
++  })
++  return el
++}
++
++function openChoices(view: EditorView, field: FieldRange): void {
++  const items = listItems(field.sdtPr)
++  const el = popupAt(view, field.from, 'kertas-field-menu')
++  if (!items.length) {
++    const empty = document.createElement('div')
++    empty.className = 'kertas-field-empty'
++    empty.textContent = 'This list has no choices yet. Add some with Insert > Form field > Field properties.'
++    el.appendChild(empty)
++    return
++  }
++  for (const item of items) {
++    const btn = document.createElement('button')
++    btn.type = 'button'
++    btn.textContent = item.text
++    if (item.text === field.text && !showsPlaceholder(field.sdtPr)) btn.className = 'is-current'
++    btn.addEventListener('click', () => {
++      closePopup()
++      const now = fieldAt(view.state.doc, field.from)
++      if (now) fill(view, now, item.text)
++      view.focus()
++    })
++    el.appendChild(btn)
++  }
++  const none = document.createElement('button')
++  none.type = 'button'
++  none.className = 'is-clear'
++  none.textContent = 'Clear'
++  none.addEventListener('click', () => {
++    closePopup()
++    const now = fieldAt(view.state.doc, field.from)
++    if (now) clear(view, now)
++    view.focus()
++  })
++  el.appendChild(none)
++}
++
++function openDate(view: EditorView, field: FieldRange): void {
++  const el = popupAt(view, field.from, 'kertas-field-date')
++  const input = document.createElement('input')
++  input.type = 'date'
++  const current = /\bw:fullDate="(\d{4}-\d{2}-\d{2})/.exec(field.sdtPr)?.[1]
++  const today = new Date()
++  input.value = current ?? `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
++  const apply = (iso: string): void => {
++    closePopup()
++    const now = fieldAt(view.state.doc, field.from)
++    if (now && iso) fill(view, now, formatDate(iso, dateFormatOf(now.sdtPr)), withFullDate(now.sdtPr, iso))
++    view.focus()
++  }
++  const ok = document.createElement('button')
++  ok.type = 'button'
++  ok.className = 'is-primary'
++  ok.textContent = 'Set date'
++  ok.addEventListener('click', () => apply(input.value))
++  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); apply(input.value) } })
++  const none = document.createElement('button')
++  none.type = 'button'
++  none.textContent = 'Clear'
++  none.addEventListener('click', () => {
++    closePopup()
++    const now = fieldAt(view.state.doc, field.from)
++    if (now) clear(view, now)
++    view.focus()
++  })
++  el.append(input, ok, none)
++  input.focus()
++}
++
++interface DialogField { id: string; label: string; value: string; type?: 'text' | 'textarea' | 'select'; options?: string[] }
++
++/** a small form over the page; resolves with the values, or null when cancelled */
++function dialog(title: string, hint: string, fields: DialogField[], okLabel: string, validate?: (v: Record<string, string>) => string | null): Promise<Record<string, string> | null> {
++  closePopup()
++  return new Promise((resolve) => {
++    const back = document.createElement('div')
++    back.className = 'kertas-field-dialog-back'
++    const box = document.createElement('form')
++    box.className = 'kertas-field-dialog'
++    const h = document.createElement('h3')
++    h.textContent = title
++    const p = document.createElement('p')
++    p.textContent = hint
++    box.append(h, p)
++    const inputs = new Map<string, HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>()
++    for (const f of fields) {
++      const label = document.createElement('label')
++      label.textContent = f.label
++      let input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
++      if (f.type === 'textarea') { input = document.createElement('textarea'); input.rows = 5 }
++      else if (f.type === 'select') {
++        input = document.createElement('select')
++        for (const o of f.options ?? []) { const opt = document.createElement('option'); opt.value = o; opt.textContent = `${o}   (${formatDate('2026-01-05', o)})`; input.appendChild(opt) }
++      } else { input = document.createElement('input'); input.type = 'text' }
++      input.value = f.value
++      label.appendChild(input)
++      box.appendChild(label)
++      inputs.set(f.id, input)
++    }
++    const error = document.createElement('div')
++    error.className = 'kertas-field-error'
++    const row = document.createElement('div')
++    row.className = 'kertas-field-actions'
++    const cancel = document.createElement('button')
++    cancel.type = 'button'
++    cancel.textContent = 'Cancel'
++    const ok = document.createElement('button')
++    ok.type = 'submit'
++    ok.className = 'is-primary'
++    ok.textContent = okLabel
++    row.append(cancel, ok)
++    box.append(error, row)
++    back.appendChild(box)
++    document.body.appendChild(back)
++    const done = (values: Record<string, string> | null): void => { back.remove(); resolve(values) }
++    cancel.addEventListener('click', () => done(null))
++    back.addEventListener('mousedown', (e) => { if (e.target === back) done(null) })
++    box.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(null) } })
++    box.addEventListener('submit', (e) => {
++      e.preventDefault()
++      const values: Record<string, string> = {}
++      for (const [id, input] of inputs) values[id] = input.value
++      const problem = validate?.(values) ?? null
++      if (problem) { error.textContent = problem; return }
++      done(values)
++    })
++    ;(inputs.values().next().value as HTMLElement | undefined)?.focus()
++  })
++}
++
++const choicesOf = (text: string): string[] => text.split('\n').map((c) => c.trim()).filter(Boolean)
++
++// ---- inserting and editing --------------------------------------------------
++
++/** the field the cursor is in, for the ribbon to enable "Field properties" */
++export function currentField(editor: Editor): FieldRange | null {
++  return fieldAt(editor.state.doc, editor.state.selection.from)
++}
++
++export async function insertFormField(editor: Editor, kind: FormFieldKind): Promise<void> {
++  if (!editor.isEditable) return
++  const { schema } = editor.state
++  if (kind === 'checkbox') {
++    editor.chain().focus().insertContent({ type: 'text', text: '\u2610', marks: [{ type: 'ctrlCheckbox', attrs: { sdtPr: buildCheckboxSdtPr('Tick box') } }] }).run()
++    return
++  }
++  const spec: FieldSpec = { title: kind === 'text' ? 'Text field' : kind === 'list' ? 'Dropdown list' : 'Date picker' }
++  if (kind === 'list') {
++    const v = await dialog('Insert dropdown list', 'A list to pick one choice from. It can be filled in here, in Word and in LibreOffice.', [
++      { id: 'title', label: 'Title (shown when the field is pointed at)', value: spec.title ?? '' },
++      { id: 'choices', label: 'Choices, one per line', value: 'First choice\nSecond choice\nThird choice', type: 'textarea' },
++    ], 'Insert', (values) => (choicesOf(values.choices).length ? null : 'Add at least one choice'))
++    if (!v) return
++    spec.title = v.title.trim()
++    spec.choices = choicesOf(v.choices)
++  } else if (kind === 'date') {
++    const v = await dialog('Insert date picker', 'A date chosen from a calendar. It can be filled in here, in Word and in LibreOffice.', [
++      { id: 'title', label: 'Title (shown when the field is pointed at)', value: spec.title ?? '' },
++      { id: 'format', label: 'Date format', value: 'd MMMM yyyy', type: 'select', options: DATE_FORMATS },
++    ], 'Insert')
++    if (!v) return
++    spec.title = v.title.trim()
++    spec.format = v.format
++  }
++  const placeholder = PLACEHOLDER[kind]
++  const marks: Array<{ type: string; attrs: Record<string, unknown> }> = []
++  if (schema.marks.docTextStyle) marks.push({ type: 'docTextStyle', attrs: { color: PLACEHOLDER_GREY } })
++  marks.push({ type: 'ctrlField', attrs: { sdtPr: buildSdtPr(kind, spec, true), key: newId() } })
++  editor.chain().focus().insertContent({ type: 'text', text: placeholder, marks }).run()
++  // what is typed next belongs after the field, not inside it
++  editor.view.dispatch(editor.state.tr.setStoredMarks([]))
++}
++
++export async function editFieldProperties(editor: Editor): Promise<void> {
++  const field = currentField(editor)
++  if (!field || !editor.isEditable) return
++  const kind = ctrlFieldKind(field.sdtPr)
++  const fields: DialogField[] = [{ id: 'title', label: 'Title (shown when the field is pointed at)', value: ctrlFieldTitle(field.sdtPr) }]
++  if (kind === 'list') fields.push({ id: 'choices', label: 'Choices, one per line', value: listItems(field.sdtPr).map((i) => i.text).join('\n'), type: 'textarea' })
++  if (kind === 'date') fields.push({ id: 'format', label: 'Date format', value: dateFormatOf(field.sdtPr), type: 'select', options: [...new Set([dateFormatOf(field.sdtPr), ...DATE_FORMATS])] })
++  const v = await dialog('Field properties', 'Changes apply to this field only.', fields, 'Save', (values) => (kind === 'list' && !choicesOf(values.choices).length ? 'Add at least one choice' : null))
++  if (!v) return
++  const now = fieldAt(editor.state.doc, field.from)
++  if (!now) return
++  let sdtPr = editSdtPr(now.sdtPr, { title: v.title.trim(), ...(kind === 'list' ? { choices: choicesOf(v.choices) } : {}), ...(kind === 'date' ? { format: v.format } : {}) })
++  let text = now.text
++  // a date already picked is shown again in the new format
++  const iso = /\bw:fullDate="(\d{4}-\d{2}-\d{2})/.exec(sdtPr)?.[1]
++  if (kind === 'date' && iso && !showsPlaceholder(sdtPr)) text = formatDate(iso, dateFormatOf(sdtPr))
++  // a choice that no longer exists goes back to "Choose an item"
++  if (kind === 'list' && !showsPlaceholder(sdtPr) && !listItems(sdtPr).some((i) => i.text === text)) {
++    sdtPr = withPlaceholder(sdtPr)
++    text = PLACEHOLDER.list
++  }
++  setField(editor.view, now, text, sdtPr, { placeholder: showsPlaceholder(sdtPr) })
++  editor.view.focus()
++}
++
++// ---- behaviour inside a field -----------------------------------------------
++
++export const FormFieldsExtension = Extension.create({
++  name: 'kertasFormFields',
++
++  addProseMirrorPlugins() {
++    return [
++      new Plugin({
++        view: () => ({ destroy: closePopup }),
++        props: {
++          handleClick(view, pos, event) {
++            if (event.button !== 0 || event.detail > 1) return false
++            if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false
++            const field = fieldAt(view.state.doc, pos)
++            if (!field) return false
++            // a click just past the field's edge is a click beside it, not on it
++            const target = event.target instanceof Element ? event.target.closest('[data-ctrl-field]') : null
++            if (!target) return false
++            const kind = ctrlFieldKind(field.sdtPr)
++            if (kind === 'list' && !/<w:comboBox\b/.test(field.sdtPr)) { openChoices(view, field); return true }
++            if (kind === 'list') { openChoices(view, field); return false }
++            if (kind === 'date') { openDate(view, field); return true }
++            if (showsPlaceholder(field.sdtPr)) {
++              // the placeholder is replaced as a whole by what is typed
++              view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, field.from, field.to)))
++              return true
++            }
++            return false
++          },
++
++          handleTextInput(view, from, _to, text) {
++            const field = fieldAt(view.state.doc, from)
++            if (!field) return false
++            const kind = ctrlFieldKind(field.sdtPr)
++            const typable = kind === 'text' || kind === 'rich' || /<w:comboBox\b/.test(field.sdtPr)
++            const { selection, schema } = view.state
++            // with the cursor at the field's edge, typing goes beside it: before it as usual,
++            // and after an empty or picked field (there is no "end of its text" to add to)
++            if (selection.empty && from === field.from) return false
++            if (selection.empty && from === field.to && (!typable || showsPlaceholder(field.sdtPr))) {
++              const marks = field.marks.filter((m) => !isPlaceholderStyle(m))
++              view.dispatch(view.state.tr.insert(from, schema.text(text, marks)).scrollIntoView())
++              return true
++            }
++            // a drop-down or a date is picked, not typed
++            if (!typable) { if (kind === 'list') openChoices(view, field); else openDate(view, field); return true }
++            if (showsPlaceholder(field.sdtPr)) { fill(view, field, text); return true }
++            return false
++          },
++
++          handleKeyDown(view, event) {
++            const { selection } = view.state
++            if (event.key === 'Backspace' || event.key === 'Delete') {
++              const field = fieldAt(view.state.doc, selection.from)
++              if (!field) return false
++              if (showsPlaceholder(field.sdtPr)) {
++                // nothing to delete inside an empty field; with the whole of it selected the key removes the field
++                return !(selection.from === field.from && selection.to === field.to)
++              }
++              const whole = selection.from <= field.from && selection.to >= field.to && !selection.empty
++              const lastChar = selection.empty && field.text.length === 1 &&
++                ((event.key === 'Backspace' && selection.from === field.to) || (event.key === 'Delete' && selection.from === field.from))
++              const picked = ctrlFieldKind(field.sdtPr) !== 'text' && ctrlFieldKind(field.sdtPr) !== 'rich' && !/<w:comboBox\b/.test(field.sdtPr)
++              // emptying a field brings its placeholder back, as in Word, instead of removing the field
++              if (lastChar || picked || (whole && selection.from === field.from && selection.to === field.to)) { clear(view, field); return true }
++              return false
++            }
++            if (event.key === 'ArrowRight' && selection.empty && !event.shiftKey) {
++              // at the field's end with nothing after it: the next typing goes outside the field
++              const field = fieldAt(view.state.doc, selection.from)
++              if (field && selection.from === field.to && !selection.$from.nodeAfter) {
++                view.dispatch(view.state.tr.setStoredMarks(field.marks.filter((m) => !isPlaceholderStyle(m))))
++                return true
++              }
++            }
++            return false
++          },
++        },
++      }),
++    ]
++  },
++})
 diff --git a/apps/docs/src/renderer/kertas/skin.css b/apps/docs/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..59c1612
+index 0000000..9175706
 --- /dev/null
 +++ b/apps/docs/src/renderer/kertas/skin.css
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,411 @@
 +/* Kertas Office look for the editor: Kertas's own font, colours and shapes laid
 + * over the editor's tokens. Loaded last so it wins; document content (the page,
 + * its text and pictures) is untouched. The two Inter files are copied in by
@@ -1833,6 +2596,556 @@ index 0000000..59c1612
 +.status-bar {
 +  height: 26px;
 +}
++
++/* ---- form fields (kertas/form-fields.ts) ---- */
++.doc-field-control {
++  background: rgb(37 99 235 / 8%);
++  border-radius: 3px;
++  box-shadow: 0 0 0 1px rgb(37 99 235 / 22%);
++  padding: 0 2px;
++  cursor: text;
++}
++
++.doc-field-control[data-ctrl-field='list'],
++.doc-field-control[data-ctrl-field='date'] {
++  cursor: pointer;
++}
++
++.doc-field-control[data-ctrl-field='list']::after {
++  content: ' \25BE';
++  color: #2563eb;
++}
++
++.doc-field-control:hover {
++  box-shadow: 0 0 0 1px rgb(37 99 235 / 55%);
++}
++
++@media print {
++  .doc-field-control {
++    background: none;
++    box-shadow: none;
++  }
++
++  .doc-field-control[data-ctrl-field='list']::after {
++    content: none;
++  }
++}
++
++.kertas-field-popup {
++  position: fixed;
++  z-index: 5000;
++  min-width: 180px;
++  max-width: 320px;
++  max-height: 300px;
++  overflow: auto;
++  padding: 5px;
++  background: var(--surface);
++  color: var(--text);
++  border: 1px solid var(--border);
++  border-radius: 10px;
++  box-shadow: var(--shadow-menu);
++  font: 13px var(--kertas-font);
++}
++
++.kertas-field-popup button {
++  display: block;
++  width: 100%;
++  padding: 6px 10px;
++  border: none;
++  border-radius: 6px;
++  background: none;
++  color: inherit;
++  font: inherit;
++  text-align: left;
++  cursor: pointer;
++}
++
++.kertas-field-popup button:hover {
++  background: var(--hover);
++}
++
++.kertas-field-popup button.is-current {
++  background: var(--accent-soft);
++  font-weight: 600;
++}
++
++.kertas-field-popup button.is-clear {
++  margin-top: 4px;
++  border-top: 1px solid var(--border-subtle);
++  border-radius: 0 0 6px 6px;
++  color: var(--text-tertiary);
++}
++
++.kertas-field-empty {
++  padding: 8px 10px;
++  color: var(--text-tertiary);
++}
++
++.kertas-field-date {
++  display: flex;
++  gap: 6px;
++  align-items: center;
++  padding: 8px;
++  max-width: none;
++}
++
++.kertas-field-date input,
++.kertas-field-dialog input,
++.kertas-field-dialog textarea,
++.kertas-field-dialog select {
++  padding: 6px 8px;
++  border: 1px solid var(--border-strong);
++  border-radius: 7px;
++  background: var(--surface);
++  color: var(--text);
++  font: 13px var(--kertas-font);
++}
++
++.kertas-field-date button {
++  width: auto;
++  white-space: nowrap;
++}
++
++.kertas-field-popup button.is-primary,
++.kertas-field-dialog button.is-primary {
++  background: var(--accent);
++  color: #ffffff;
++}
++
++.kertas-field-dialog-back {
++  position: fixed;
++  inset: 0;
++  z-index: 6000;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  background: rgb(15 23 42 / 35%);
++}
++
++.kertas-field-dialog {
++  width: 420px;
++  max-width: calc(100vw - 32px);
++  padding: 18px 20px;
++  background: var(--surface);
++  color: var(--text);
++  border-radius: 14px;
++  box-shadow: 0 24px 60px -20px rgb(15 23 42 / 45%);
++  font: 13px var(--kertas-font);
++}
++
++.kertas-field-dialog h3 {
++  margin: 0 0 4px;
++  font-size: 16px;
++}
++
++.kertas-field-dialog p {
++  margin: 0 0 12px;
++  color: var(--text-tertiary);
++}
++
++.kertas-field-dialog label {
++  display: flex;
++  flex-direction: column;
++  gap: 5px;
++  margin-bottom: 11px;
++  font-weight: 500;
++}
++
++.kertas-field-dialog textarea {
++  resize: vertical;
++}
++
++.kertas-field-error {
++  min-height: 16px;
++  color: #dc2626;
++}
++
++.kertas-field-actions {
++  display: flex;
++  justify-content: flex-end;
++  gap: 8px;
++  margin-top: 6px;
++}
++
++.kertas-field-actions button {
++  padding: 7px 14px;
++  border: 1px solid var(--border-strong);
++  border-radius: 8px;
++  background: var(--surface);
++  color: var(--text);
++  font: inherit;
++  cursor: pointer;
++}
++
++.kertas-field-actions button.is-primary {
++  border-color: transparent;
++}
++
++/* ---- slash menu (kertas/slash-menu.ts) ---- */
++.kertas-slash {
++  position: fixed;
++  z-index: 5000;
++  width: 290px;
++  max-height: 320px;
++  display: flex;
++  flex-direction: column;
++  background: var(--surface);
++  color: var(--text);
++  border: 1px solid var(--border);
++  border-radius: 12px;
++  box-shadow: var(--shadow-menu);
++  font: 13px var(--kertas-font);
++  overflow: hidden;
++}
++
++.kertas-slash-search {
++  margin: 8px 8px 4px;
++  padding: 7px 9px;
++  border: 1px solid var(--border-strong);
++  border-radius: 8px;
++  background: var(--surface);
++  color: var(--text);
++  font: inherit;
++  outline: none;
++}
++
++.kertas-slash-list {
++  overflow: auto;
++  padding: 5px;
++}
++
++.kertas-slash-group {
++  padding: 7px 9px 3px;
++  color: var(--text-tertiary);
++  font-size: 11px;
++  font-weight: 600;
++  letter-spacing: 0.04em;
++  text-transform: uppercase;
++}
++
++.kertas-slash-item {
++  display: flex;
++  flex-direction: column;
++  gap: 1px;
++  width: 100%;
++  padding: 6px 9px;
++  border: none;
++  border-radius: 7px;
++  background: none;
++  color: inherit;
++  font: inherit;
++  text-align: left;
++  cursor: pointer;
++}
++
++.kertas-slash-item strong {
++  font-weight: 550;
++}
++
++.kertas-slash-item span {
++  color: var(--text-tertiary);
++  font-size: 12px;
++}
++
++.kertas-slash-item.is-active {
++  background: var(--accent-soft);
++}
++
++.kertas-slash-none {
++  padding: 10px;
++  color: var(--text-tertiary);
++}
+diff --git a/apps/docs/src/renderer/kertas/slash-menu.ts b/apps/docs/src/renderer/kertas/slash-menu.ts
+new file mode 100644
+index 0000000..ac5bcf6
+--- /dev/null
++++ b/apps/docs/src/renderer/kertas/slash-menu.ts
+@@ -0,0 +1,285 @@
++// Kertas Office: slash commands. Type "/" at the start of a line (or after a
++// space) and a menu of blocks and actions opens at the cursor. Keep typing to
++// filter, arrows and Enter to choose, Esc to leave the text as typed. Ctrl+/
++// opens the same menu anywhere.
++
++import { Extension, type Editor } from '@tiptap/core'
++import { Plugin } from '@tiptap/pm/state'
++import type { EditorView } from '@tiptap/pm/view'
++import { insertFormField } from './form-fields'
++
++/** runs one of the editor's own commands (the ribbon's); set by the app once it is ready */
++let run: (id: string, payload?: string) => void = () => {}
++export function setSlashCommandRunner(fn: (id: string, payload?: string) => void): void {
++  run = fn
++}
++
++interface SlashCommand {
++  id: string
++  group: string
++  label: string
++  hint: string
++  keys?: string[]
++  run: (editor: Editor) => void
++}
++
++const cmd = (id: string, payload?: string) => () => run(id, payload)
++const today = (): string => new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })
++
++const COMMANDS: SlashCommand[] = [
++  { id: 'text', group: 'Text', label: 'Text', keys: ['normal', 'paragraph', 'body', 'p'], hint: 'Plain body text', run: cmd('apply-style', 'Normal') },
++  { id: 'h1', group: 'Text', label: 'Heading 1', keys: ['h1', 'title section'], hint: 'Big section heading', run: cmd('apply-style', 'Heading1') },
++  { id: 'h2', group: 'Text', label: 'Heading 2', keys: ['h2', 'subheading'], hint: 'Medium heading', run: cmd('apply-style', 'Heading2') },
++  { id: 'h3', group: 'Text', label: 'Heading 3', keys: ['h3'], hint: 'Small heading', run: cmd('apply-style', 'Heading3') },
++  { id: 'title', group: 'Text', label: 'Title', keys: ['document title'], hint: 'Document title', run: cmd('apply-style', 'Title') },
++  { id: 'quote', group: 'Text', label: 'Quote', keys: ['blockquote', 'citation text'], hint: 'Quoted passage', run: cmd('apply-style', 'Quote') },
++  { id: 'bullets', group: 'Lists', label: 'Bulleted list', keys: ['ul', 'bullet', 'unordered', '-'], hint: 'A simple list', run: cmd('bullets') },
++  { id: 'numbers', group: 'Lists', label: 'Numbered list', keys: ['ol', 'ordered', '1.', 'steps'], hint: '1, 2, 3', run: cmd('numbering') },
++  { id: 'tick', group: 'Lists', label: 'Tick box', keys: ['checkbox', 'todo', 'checklist', 'task'], hint: 'A box to tick later', run: (e) => void insertFormField(e, 'checkbox') },
++  { id: 'f-text', group: 'Forms', label: 'Text field', keys: ['form', 'field', 'input', 'fill in'], hint: 'A box to type in', run: (e) => void insertFormField(e, 'text') },
++  { id: 'f-drop', group: 'Forms', label: 'Dropdown list', keys: ['form', 'select', 'choices', 'combo'], hint: 'Pick one of your choices', run: (e) => void insertFormField(e, 'list') },
++  { id: 'f-date', group: 'Forms', label: 'Date picker', keys: ['form', 'calendar', 'date field'], hint: 'Pick a date from a calendar', run: (e) => void insertFormField(e, 'date') },
++  { id: 'table', group: 'Insert', label: 'Table', keys: ['grid', 'rows', 'columns'], hint: 'Rows and columns', run: cmd('insert-table') },
++  { id: 'picture', group: 'Insert', label: 'Picture', keys: ['image', 'photo', 'img'], hint: 'From your computer', run: cmd('insert-image') },
++  { id: 'divider', group: 'Insert', label: 'Divider', keys: ['line', 'hr', 'rule', 'separator'], hint: 'Horizontal line', run: cmd('insert-horizontal-line') },
++  { id: 'pagebreak', group: 'Insert', label: 'Page break', keys: ['new page', 'break'], hint: 'Start a new page', run: cmd('insert-page-break') },
++  { id: 'link', group: 'Insert', label: 'Link', keys: ['url', 'hyperlink', 'web'], hint: 'Web address or place in the document', run: cmd('insert-link') },
++  { id: 'date', group: 'Insert', label: 'Date', keys: ['today', 'time'], hint: "Today's date", run: (e) => void e.chain().focus().insertContent(today()).run() },
++  { id: 'comment', group: 'Insert', label: 'Comment', keys: ['note', 'review'], hint: 'Comment here', run: cmd('insert-comment') },
++  { id: 'equation', group: 'Insert', label: 'Equation', keys: ['math', 'formula', 'latex'], hint: 'Fractions, roots, sums', run: cmd('insert-equation') },
++  { id: 'textbox', group: 'Insert', label: 'Text box', keys: ['box', 'aside', 'sidebar'], hint: 'Text beside the main text', run: cmd('insert-text-box') },
++  { id: 'shape-rect', group: 'Shapes', label: 'Rectangle', keys: ['shape', 'box', 'square'], hint: 'Drag on the page to draw it', run: cmd('insert-shape', 'roundRect') },
++  { id: 'shape-circle', group: 'Shapes', label: 'Circle', keys: ['shape', 'oval', 'round'], hint: 'Drag on the page to draw it', run: cmd('insert-shape', 'ellipse') },
++  { id: 'shape-arrow', group: 'Shapes', label: 'Arrow', keys: ['shape', 'right arrow'], hint: 'Drag on the page to draw it', run: cmd('insert-shape', 'rightArrow') },
++  { id: 'shape-callout', group: 'Shapes', label: 'Speech bubble', keys: ['shape', 'callout', 'bubble'], hint: 'Drag on the page to draw it', run: cmd('insert-shape', 'wedgeRoundRectCallout') },
++  { id: 'shape-star', group: 'Shapes', label: 'Star', keys: ['shape'], hint: 'Drag on the page to draw it', run: cmd('insert-shape', 'star5') },
++  { id: 'toc', group: 'References', label: 'Table of contents', keys: ['toc', 'contents', 'index'], hint: 'From your headings', run: cmd('insert-toc') },
++  { id: 'footnote', group: 'References', label: 'Footnote', keys: ['note', 'fn'], hint: 'Note at the bottom of the page', run: cmd('insert-footnote') },
++  { id: 'endnote', group: 'References', label: 'Endnote', keys: ['note'], hint: 'Note at the end', run: cmd('insert-endnote') },
++  { id: 'cite', group: 'References', label: 'Citation', keys: ['cite', 'reference', 'source'], hint: 'Pick a source to cite here', run: cmd('citations-pane') },
++  { id: 'bib', group: 'References', label: 'Bibliography', keys: ['references', 'works cited', 'sources list'], hint: 'Reference list in the current style', run: cmd('insert-bibliography') },
++  { id: 'caption', group: 'References', label: 'Caption', keys: ['figure', 'table caption'], hint: 'Figure or table caption', run: cmd('insert-caption') },
++]
++
++/** score of a command for a query: 0 = no match; prefix matches on the label win */
++export function matchScore(c: Pick<SlashCommand, 'label' | 'keys'>, query: string): number {
++  const q = query.trim().toLowerCase()
++  if (!q) return 1
++  const label = c.label.toLowerCase()
++  const words = [label, ...(c.keys ?? [])].map((w) => w.toLowerCase())
++  if (label.startsWith(q)) return 100 - label.length / 100
++  if (words.some((w) => w === q)) return 90
++  if (words.some((w) => w.startsWith(q))) return 70
++  if (label.split(/\s+/).some((w) => w.startsWith(q))) return 60
++  if (words.some((w) => w.includes(q))) return 30
++  let k = 0
++  for (const ch of label) if (ch === q[k]) k++
++  return k === q.length ? 10 : 0
++}
++
++const matches = (query: string): SlashCommand[] =>
++  query.trim()
++    ? COMMANDS.map((c) => ({ c, s: matchScore(c, query) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x) => x.c)
++    : COMMANDS
++
++interface Open {
++  /** position of the "/" in the document, or -1 when opened with Ctrl+/ (its own search box) */
++  slashPos: number
++  el: HTMLElement
++  list: SlashCommand[]
++  index: number
++  query: string
++}
++
++function slashPlugins(getEditor: () => Editor | null): Plugin[] {
++  let open: Open | null = null
++
++  const close = (): void => {
++    open?.el.remove()
++    open = null
++    document.removeEventListener('mousedown', outside, true)
++  }
++  function outside(e: MouseEvent): void {
++    if (open && !open.el.contains(e.target as Node)) close()
++  }
++
++  const render = (): void => {
++    if (!open) return
++    const listEl = open.el.querySelector('.kertas-slash-list') as HTMLElement
++    listEl.textContent = ''
++    if (!open.list.length) {
++      const none = document.createElement('div')
++      none.className = 'kertas-slash-none'
++      none.textContent = 'No matching command'
++      listEl.appendChild(none)
++      return
++    }
++    let group = ''
++    open.list.forEach((c, i) => {
++      if (!open!.query.trim() && c.group !== group) {
++        group = c.group
++        const head = document.createElement('div')
++        head.className = 'kertas-slash-group'
++        head.textContent = group
++        listEl.appendChild(head)
++      }
++      const row = document.createElement('button')
++      row.type = 'button'
++      row.className = `kertas-slash-item${i === open!.index ? ' is-active' : ''}`
++      const label = document.createElement('strong')
++      label.textContent = c.label
++      const hint = document.createElement('span')
++      hint.textContent = c.hint
++      row.append(label, hint)
++      row.addEventListener('mousedown', (e) => e.preventDefault())
++      row.addEventListener('click', () => choose(i))
++      row.addEventListener('mousemove', () => {
++        if (open && open.index !== i) { open.index = i; render() }
++      })
++      listEl.appendChild(row)
++      if (i === open!.index) row.scrollIntoView({ block: 'nearest' })
++    })
++  }
++
++  const show = (view: EditorView, slashPos: number): void => {
++    close()
++    const el = document.createElement('div')
++    el.className = 'kertas-slash'
++    if (slashPos < 0) {
++      const input = document.createElement('input')
++      input.type = 'text'
++      input.placeholder = 'Search commands'
++      input.className = 'kertas-slash-search'
++      input.addEventListener('input', () => {
++        if (!open) return
++        open.query = input.value
++        open.list = matches(open.query)
++        open.index = 0
++        render()
++      })
++      input.addEventListener('keydown', (e) => {
++        if (key(e)) { e.preventDefault(); e.stopPropagation() }
++      })
++      el.appendChild(input)
++      setTimeout(() => input.focus())
++    }
++    const list = document.createElement('div')
++    list.className = 'kertas-slash-list'
++    el.appendChild(list)
++    const at = view.coordsAtPos(view.state.selection.from)
++    document.body.appendChild(el)
++    const height = 320
++    const below = at.bottom + 6 + height < window.innerHeight
++    el.style.left = `${Math.max(8, Math.min(at.left, window.innerWidth - 300))}px`
++    if (below) el.style.top = `${at.bottom + 6}px`
++    else el.style.bottom = `${window.innerHeight - at.top + 6}px`
++    open = { slashPos, el, list: matches(''), index: 0, query: '' }
++    render()
++    setTimeout(() => document.addEventListener('mousedown', outside, true))
++  }
++
++  const choose = (i: number): void => {
++    const editor = getEditor()
++    if (!open || !editor) return
++    const command = open.list[i]
++    const { slashPos } = open
++    close()
++    if (!command) return
++    if (slashPos >= 0) {
++      // take the "/" and what was typed after it back out of the text
++      const to = editor.state.selection.from
++      if (to > slashPos && editor.state.doc.textBetween(slashPos, slashPos + 1) === '/') {
++        editor.view.dispatch(editor.state.tr.delete(slashPos, to))
++      }
++    }
++    editor.view.focus()
++    command.run(editor)
++  }
++
++  /** a key while the menu is open; true when it was the menu's */
++  const key = (e: KeyboardEvent): boolean => {
++    if (!open) return false
++    if (e.key === 'Escape') { close(); getEditor()?.view.focus(); return true }
++    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
++      const n = open.list.length
++      if (n) open.index = (open.index + (e.key === 'ArrowDown' ? 1 : n - 1)) % n
++      render()
++      return true
++    }
++    if (e.key === 'Enter' || e.key === 'Tab') {
++      if (!open.list.length) { close(); return false }
++      choose(open.index)
++      return true
++    }
++    return false
++  }
++
++  return [
++        new Plugin({
++          view: () => ({
++            update(view) {
++              // the text after the "/" is the search; moving away from it closes the menu
++              if (!open || open.slashPos < 0) return
++              const { selection, doc } = view.state
++              const from = open.slashPos
++              const stillThere = selection.empty && selection.from > from && from < doc.content.size && doc.textBetween(from, from + 1) === '/'
++              const $slash = stillThere ? doc.resolve(from) : null
++              if (!stillThere || !$slash || selection.$from.parent !== $slash.parent) { close(); return }
++              const query = doc.textBetween(from + 1, selection.from)
++              if (/\s{2,}|\n/.test(query) || query.length > 30) { close(); return }
++              if (query !== open.query) {
++                open.query = query
++                open.list = matches(query)
++                open.index = 0
++                // nothing matches and the user keeps typing: it was just a slash in the text
++                if (!open.list.length && query.length > 12) { close(); return }
++                render()
++              }
++            },
++            destroy: close,
++          }),
++          props: {
++            handleKeyDown(view, event) {
++              if ((event.ctrlKey || event.metaKey) && event.key === '/') {
++                if (!view.editable) return false
++                show(view, -1)
++                return true
++              }
++              return key(event)
++            },
++            handleTextInput(view, from, to, text) {
++              if (text !== '/' || from !== to || !view.editable) return false
++              const $from = view.state.doc.resolve(from)
++              if (!$from.parent.isTextblock || $from.parent.type.spec.code) return false
++              const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '￼')
++              // only at the start of a line or after a space: a date or a fraction keeps its slash
++              if (before !== '' && !/\s$/.test(before)) return false
++              // after the "/" is in the text, so the menu sits at the cursor that follows it
++              setTimeout(() => {
++                const now = view.state
++                // fast typing may already be past the slash; what follows it is the search
++                if (
++                  now.selection.empty &&
++                  now.selection.from > from &&
++                  now.selection.from <= from + 30 &&
++                  from < now.doc.content.size &&
++                  now.doc.textBetween(from, from + 1) === '/' &&
++                  !/\s/.test(now.doc.textBetween(from, now.selection.from, '\n'))
++                )
++                  show(view, from)
++              })
++              return false
++            },
++          },
++        }),
++  ]
++}
++
++export const SlashMenuExtension = Extension.create({
++  name: 'kertasSlashMenu',
++
++  addProseMirrorPlugins() {
++    const editor = this.editor
++    return slashPlugins(() => (editor.isDestroyed ? null : editor))
++  },
++})
 diff --git a/apps/docs/src/renderer/main.tsx b/apps/docs/src/renderer/main.tsx
 index 3bb7827..d5b9e5a 100644
 --- a/apps/docs/src/renderer/main.tsx
@@ -2276,7 +3589,7 @@ index 38c383d..dd068c8 100644
    /** docProps/app.xml AppVersion; defaults to the OOXML-formatted engine major/minor. */
    appVersion?: string
 diff --git a/packages/docx-engine/src/compare.ts b/packages/docx-engine/src/compare.ts
-index 58c3fff..3940e51 100644
+index 58c3fff..8bb848d 100644
 --- a/packages/docx-engine/src/compare.ts
 +++ b/packages/docx-engine/src/compare.ts
 @@ -93,7 +93,7 @@ export const DEFAULT_COMPARE_SETTINGS: CompareSettings = {
@@ -2297,6 +3610,15 @@ index 58c3fff..3940e51 100644
  
  /**
   * Build the redline: the revised document with the differences marked as
+@@ -1725,6 +1725,8 @@ function foreignRuns(runs: Run[]): Run[] {
+       fldBeginXml: _fldBeginXml,
+       fldDirty: _fldDirty,
+       sdtCheckboxXml: _sdtCheckboxXml,
++      sdtFieldXml: _sdtFieldXml,
++      sdtFieldKey: _sdtFieldKey,
+       ...rest
+     } = run
+     out.push(image ? { ...rest, text: '[picture]' } : rest)
 diff --git a/packages/docx-engine/src/doc-properties.ts b/packages/docx-engine/src/doc-properties.ts
 index c57a3f3..ffa5637 100644
 --- a/packages/docx-engine/src/doc-properties.ts
@@ -2314,6 +3636,37 @@ index c57a3f3..ffa5637 100644
  export const NEW_DOCUMENT_TEMPLATE = 'Normal.dotm'
  /**
   * OOXML AppVersion uses a two-component XX.YYYY value, not semver
+diff --git a/packages/docx-engine/src/generate.ts b/packages/docx-engine/src/generate.ts
+index a0ab9dd..7ba4ea5 100644
+--- a/packages/docx-engine/src/generate.ts
++++ b/packages/docx-engine/src/generate.ts
+@@ -3860,6 +3860,26 @@ function runsXml(
+     let i = from
+     while (i < to) {
+       const run = runs[i]
++      if (run.sdtFieldXml !== undefined) {
++        // an inline content control: consecutive runs of the same control go back
++        // inside one w:sdt. A comment boundary inside it widens to the whole control.
++        const groupStart = i
++        const key = run.sdtFieldKey
++        while (i < to && runs[i].sdtFieldXml !== undefined && runs[i].sdtFieldKey === key) i++
++        // written inside the revision wrapper this range is already in, so the runs
++        // keep their own ins/del (a deleted run still writes w:delText)
++        const group = runs.slice(groupStart, i).map((r): Run => {
++          const { sdtFieldXml: _pr, sdtFieldKey: _key, ...rest } = r
++          return rest
++        })
++        for (let j = groupStart; j < i; j++) parts.push(startsAt(j))
++        parts.push(
++          `<w:sdt>${run.sdtFieldXml}` +
++            `<w:sdtContent>${group.map((r) => fragment(r, false)).join('')}</w:sdtContent></w:sdt>`,
++        )
++        for (let j = groupStart; j < i; j++) parts.push(endsAt(j))
++        continue
++      }
+       if (run.link) {
+         // group consecutive runs sharing the same link target; runs parsed from
+         // distinct w:hyperlink elements (own rId) stay separate so no relationship is orphaned
 diff --git a/packages/docx-engine/src/lazy-media.ts b/packages/docx-engine/src/lazy-media.ts
 index 43357d0..ccb7be9 100644
 --- a/packages/docx-engine/src/lazy-media.ts
@@ -2327,6 +3680,79 @@ index 43357d0..ccb7be9 100644
  
  const MAGIC = 'GENOFFICE-LAZY-MEDIA\n'
  const HASH_RE = /^[0-9a-f]{64}$/
+diff --git a/packages/docx-engine/src/parse-props.ts b/packages/docx-engine/src/parse-props.ts
+index 1503054..52da743 100644
+--- a/packages/docx-engine/src/parse-props.ts
++++ b/packages/docx-engine/src/parse-props.ts
+@@ -1168,6 +1168,7 @@ function sameStyle(a: Run, b: Run): boolean {
+   if (a.refField !== undefined || b.refField !== undefined) return false
+   if (a.instrField !== undefined || b.instrField !== undefined) return false
+   if (a.sdtCheckboxXml !== undefined || b.sdtCheckboxXml !== undefined) return false
++  if (a.sdtFieldKey !== b.sdtFieldKey || a.sdtFieldXml !== b.sdtFieldXml) return false
+   if (a.math || b.math) return false
+   if (a.sym || b.sym) return false
+   if (a.ruby || b.ruby) return false
+diff --git a/packages/docx-engine/src/parse.ts b/packages/docx-engine/src/parse.ts
+index 058bbb6..bb65544 100644
+--- a/packages/docx-engine/src/parse.ts
++++ b/packages/docx-engine/src/parse.ts
+@@ -4592,6 +4592,8 @@ const RESULT_FORMAT_SKIP = new Set([
+   'fldBeginXml',
+   'fldDirty',
+   'sdtCheckboxXml',
++  'sdtFieldXml',
++  'sdtFieldKey',
+   'commentIds',
+   'ins',
+   'del',
+@@ -4641,6 +4643,9 @@ function fieldResultRuns(xml: string, ctx: BuildContext, visible: string): Field
+   return runs
+ }
+ 
++/** numbers the inline content controls met while parsing, so their runs can be told apart */
++let sdtFieldSeq = 0
++
+ function extractRuns(
+   pNode: XNode,
+   ctx: BuildContext,
+@@ -5235,6 +5240,20 @@ function extractRuns(
+         const base = runs.slice(first).find((r) => r.text.trim() !== '') ?? runs[first]
+         runs.length = first
+         pushRun({ ...(base ?? {}), text: control.glyph, sdtCheckboxXml: control.sdtPrXml }, rev)
++      } else if (name === 'w:sdt' && findChild(node, 'w:sdtPr')) {
++        // an inline content control: its runs carry the control's properties, so an
++        // edited paragraph writes the control back around them. The innermost control
++        // of a nested pair keeps its runs.
++        const first = runs.length
++        walk(childrenOf(node), link, rev)
++        const pr = serializeXNode(findChild(node, 'w:sdtPr')!)
++        const key = ++sdtFieldSeq
++        for (const run of runs.slice(first)) {
++          if (run.sdtFieldXml === undefined && run.sdtCheckboxXml === undefined) {
++            run.sdtFieldXml = pr
++            run.sdtFieldKey = key
++          }
++        }
+       } else if (
+         name === 'w:smartTag' ||
+         name === 'w:customXml' ||
+diff --git a/packages/docx-engine/src/types.ts b/packages/docx-engine/src/types.ts
+index 0fcc5ae..bb01886 100644
+--- a/packages/docx-engine/src/types.ts
++++ b/packages/docx-engine/src/types.ts
+@@ -326,6 +326,12 @@ export interface Run {
+   /** w:sdtPr of a content-control checkbox (w14:checkbox) wrapping this run; the run text is the
+    * box glyph, and write-back sets w14:checked from it */
+   sdtCheckboxXml?: string
++  /** w:sdtPr of an inline content control other than a checkbox (plain text, drop-down list,
++   * combo box, date, rich text) wrapping this run. Consecutive runs with the same `sdtFieldKey`
++   * are one control and are written back inside one w:sdt. */
++  sdtFieldXml?: string
++  /** which control of the paragraph this run belongs to (see sdtFieldXml) */
++  sdtFieldKey?: number
+   /**
+    * Run-level formatting revision (w:rPrChange): records the review info, the modeled
+    * subset of the pre-revision formatting (drives the on-screen reject preview) and the
 diff --git a/packages/docx-engine/src/vendor/emf-converter/README.md b/packages/docx-engine/src/vendor/emf-converter/README.md
 index e7d998f..0d238f8 100644
 --- a/packages/docx-engine/src/vendor/emf-converter/README.md
