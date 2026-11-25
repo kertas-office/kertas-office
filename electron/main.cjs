@@ -158,6 +158,7 @@ function createWindow() {
     },
   });
 
+  writer2.attach(mainWindow);
   if (DEV_URL) mainWindow.loadURL(DEV_URL);
   else mainWindow.loadURL('app://kertas/index.html');
 
@@ -225,6 +226,7 @@ function buildMenu() {
 
 // ---------- IPC ----------
 ipcMain.on('kertas:theme', (_e, dark) => {
+  writer2.setTheme(dark);
   if (!mainWindow || process.platform === 'darwin') return;
   try { mainWindow.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#e8ecf5' : '#334155', height: 44 }); } catch { /* not supported */ }
   mainWindow.setBackgroundColor(dark ? '#0b0f1a' : '#eef1f7');
@@ -410,16 +412,27 @@ async function makeDefaultApp() {
 }
 // The new Writer (trial): whether this build has it, and opening a document in it.
 // It reads the file itself, so the path gets the same checks as any other open.
-ipcMain.handle('kertas:new-writer', async (_e, op, filePath) => {
+ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
   if (op === 'state') return { available: writer2.available, forced: process.env.KERTAS_NEW_WRITER === '1' };
-  if (op === 'convert-pdf') return writer2.convertPdf(filePath); // PDF bytes here, not a path
-  if (op !== 'open' || !writer2.available) return false;
-  if (filePath == null) return writer2.open(null);
-  assertReadable(filePath);
-  if (!/\.docx$/i.test(filePath)) return false;
-  grant(filePath);
-  await addRecent(filePath);
-  return writer2.open(filePath);
+  if (!writer2.available) return false;
+  if (op === 'open') { // { id, path? , result? }: a tab for a file, a converted document, or a blank one
+    const { id, path: filePath = null, result = null } = arg || {};
+    if (filePath != null) {
+      assertReadable(filePath);
+      if (!/\.docx$/i.test(filePath)) return false;
+      grant(filePath);
+      await addRecent(filePath);
+    }
+    return writer2.openTab(String(id), { filePath, result });
+  }
+  if (op === 'layout') return writer2.layout(String(arg.id), arg.rect);
+  if (op === 'dirty') return writer2.isDirty(String(arg));
+  if (op === 'close') return writer2.closeTab(String(arg));
+  if (op === 'command') return writer2.command(String(arg.id), String(arg.name));
+  if (op === 'stash') return writer2.stash(arg); // document bytes in, a token for a tab out
+  if (op === 'author') return writer2.setAuthor(arg);
+  if (op === 'convert-pdf') return writer2.convertPdfForTab(arg); // PDF bytes in, a token for the result out
+  return false;
 });
 ipcMain.handle('kertas:default-app', () => makeDefaultApp());
 
@@ -459,8 +472,11 @@ if (!app.requestSingleInstanceLock()) {
     session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => cb(CLIPBOARD.has(permission) && trusted(wc.getURL())));
     session.defaultSession.setPermissionCheckHandler((wc, permission) => CLIPBOARD.has(permission) && trusted(wc?.getURL()));
     session.defaultSession.setDevicePermissionHandler(() => false);
+    // Chromium's spell checker downloads its dictionaries from the internet on Linux (Windows and
+    // macOS use the system's own). Kertas goes online for nothing, so it is switched off there.
+    if (process.platform === 'linux') { session.defaultSession.setSpellCheckerEnabled(false); session.defaultSession.setSpellCheckerLanguages([]); }
     registerAppProtocol();
-    writer2.start();
+    try { writer2.start(); } catch (e) { console.error('The new Writer did not start', e); }
     buildMenu();
     createWindow();
     setupUpdates({

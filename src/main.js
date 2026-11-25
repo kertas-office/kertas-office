@@ -84,6 +84,7 @@ function activate(id) {
   statusRight.textContent = tab ? MODULES[tab.kind].title : 'All files stay on this device';
   if (id === 'home') renderHome();
   tab?.instance?.onShow?.();
+  syncNativeView();
 }
 
 function updateTab(tab) {
@@ -93,8 +94,17 @@ function updateTab(tab) {
   if (tab.id === activeId) document.title = `${tab.name}${tab.dirty ? ' *' : ''} - Kertas Office`;
 }
 
-async function openTab(kind, { name, path = null, data = null, html = null } = {}) {
+async function openTab(kind, { name, path = null, data = null, html = null, result = null } = {}) {
   if (path) for (const t of tabs.values()) if (t.path === path) { activate(t.id); return t; }
+  // Word documents go to the new Writer when it is switched on: a file by its path, anything
+  // else (a template, a dropped file, a converted older format) by its bytes
+  if (kind === 'writer' && !html && (result || await newWriterOn()) && (!name || result || data || /\.docx$/i.test(name))) {
+    try {
+      if (!result && data && !(path && /\.docx$/i.test(path))) result = await window.kertasNative.newWriter('stash', data);
+      const t = await openNativeWriter({ name, path: result ? null : path, result });
+      if (t) return t;
+    } catch (e) { console.error(e); }
+  }
   const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   if (!name) name = `${MODULES[kind].newName}${++untitled[kind]}.${MODULES[kind].ext}`;
 
@@ -133,7 +143,7 @@ async function openTab(kind, { name, path = null, data = null, html = null } = {
       fileMenu: fileMenuFor(tab),
       printToPdf,
       // Lets a module open its output as a new tab (PDF to Word, mail merge...)
-      openDocument: (k, opts) => openTab(k, opts).then((t) => { t?.instance && setTimeout(() => t.instance && (t.dirty = true, updateTab(t)), 600); return t; }),
+      openDocument: (k, opts) => opts?.result ? openTab(k, opts) : openTab(k, opts).then((t) => { t?.instance && setTimeout(() => t.instance && (t.dirty = true, updateTab(t)), 600); return t; }),
     });
     tab.instance.setTheme?.(isDark());
     // What in this file Kertas cannot keep, to mention now and ask about before saving over it
@@ -151,10 +161,105 @@ async function openTab(kind, { name, path = null, data = null, html = null } = {
   return tab;
 }
 
+// ---- the new Writer as a tab -------------------------------------------------
+// Its editor is a view of its own that the desktop app lays over the tab's pane, so this
+// page only says where the pane is. Anything Kertas draws over the page (a dialog, a menu,
+// the command palette) would end up underneath it, so the view steps aside while one is open.
+let shownNative = null;
+function syncNativeView() {
+  if (!isDesktop || !window.kertasNative?.newWriter) return;
+  const tab = tabs.get(activeId);
+  const pane = tab?.native ? tab.el.getBoundingClientRect() : null;
+  // something of Kertas's drawn over the pane: visible, with a size, and overlapping it
+  const covered = !!pane && [...document.body.children].some((el) => {
+    if (el.id === 'app' || el.id === 'toast' || /^(SCRIPT|STYLE|LINK|INPUT)$/.test(el.tagName) || el.hidden) return false;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 1 && r.height > 1 && r.right > pane.left && r.left < pane.right && r.bottom > pane.top && r.top < pane.bottom;
+  });
+  const want = tab?.native && tab.ready && !covered ? tab : null;
+  if (shownNative && shownNative !== want?.id) { window.kertasNative.newWriter('layout', { id: shownNative, rect: null }); shownNative = null; }
+  if (!want) return;
+  const r = want.el.getBoundingClientRect();
+  window.kertasNative.newWriter('layout', { id: want.id, rect: { x: r.left, y: r.top, width: r.width, height: r.height } });
+  shownNative = want.id;
+}
+if (isDesktop && window.kertasNative?.newWriter) {
+  new ResizeObserver(syncNativeView).observe(viewsEl);
+  window.addEventListener('resize', syncNativeView);
+  new MutationObserver(syncNativeView).observe(document.body, { childList: true });
+  // the editor does not announce unsaved changes, so the open tab is asked now and then
+  setInterval(async () => {
+    const tab = tabs.get(activeId);
+    if (!tab?.native || !tab.ready || document.hidden) return;
+    const dirty = !!(await window.kertasNative.newWriter('dirty', tab.id).catch(() => false));
+    if (tabs.has(tab.id) && tab.dirty !== dirty) { tab.dirty = dirty; updateTab(tab); }
+  }, 1500);
+}
+
+async function openNativeWriter({ name, path = null, result = null } = {}) {
+  if (path) for (const t of tabs.values()) if (t.path === path) { activate(t.id); return t; }
+  const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  if (!name) name = `${MODULES.writer.newName}${++untitled.writer}.${MODULES.writer.ext}`;
+
+  const tabEl = document.createElement('button');
+  tabEl.className = 'tab';
+  tabEl.dataset.tab = id;
+  tabEl.innerHTML = `${badge('writer')}<span class="title"></span><span class="dirty"></span><span class="close" title="Close (Ctrl+W)">${icon('close', 13)}</span>`;
+  tabEl.addEventListener('click', (e) => {
+    if (e.target.closest('.close')) { e.stopPropagation(); closeTab(id); } else activate(id);
+  });
+  tabEl.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(id); });
+  tabsEl.appendChild(tabEl);
+  tabEl.scrollIntoView({ inline: 'nearest' });
+
+  const el = document.createElement('section');
+  el.className = 'view';
+  el.id = `view-${id}`;
+  el.innerHTML = `<div class="loading"><div><div class="spinner"></div>Opening ${esc(name)}</div></div>`;
+  viewsEl.appendChild(el);
+
+  const tab = { id, kind: 'writer', name, path, dirty: false, el, tabEl, native: true, ready: false, instance: {} };
+  tabs.set(id, tab);
+  updateTab(tab);
+  activate(id);
+
+  let ok = false;
+  try { ok = await window.kertasNative.newWriter('open', { id, path, result }); } catch (e) { console.error(e); }
+  if (!ok) { tabEl.remove(); el.remove(); tabs.delete(id); activate('home'); return null; }
+  tab.ready = true;
+  syncNativeView();
+  return tab;
+}
+
+if (isDesktop && window.kertasNative?.newWriter) window.kertasNative.newWriter('author', userName()).catch(() => {});
+onNative('new-writer', (ev) => {
+  const tab = ev.id ? tabs.get(ev.id) : null;
+  if (ev.type === 'title' && tab && ev.title && !/^Kertas Writer$/.test(ev.title)) { tab.name = ev.title; updateTab(tab); }
+  else if (ev.type === 'path' && tab && ev.path) {
+    tab.path = ev.path;
+    tab.name = ev.path.split(/[\\/]/).pop();
+    updateTab(tab);
+    if (activeId === tab.id) setStatus(tab.path);
+  } else if (ev.type === 'open-path') openPath(ev.path);
+  else if (ev.type === 'new') newDocument();
+  else if (ev.type === 'result') openTab('writer', { result: ev.token });
+  else if (ev.type === 'close' && tab) closeTab(tab.id);
+  else if (ev.type === 'next-tab' || ev.type === 'prev-tab') {
+    const ids = ['home', ...tabs.keys()];
+    activate(ids[(ids.indexOf(activeId) + (ev.type === 'prev-tab' ? -1 : 1) + ids.length) % ids.length]);
+  }
+});
+
 async function closeTab(id) {
   const tab = tabs.get(id);
   if (!tab) return true;
-  if (tab.dirty) {
+  if (tab.native) {
+    // the editor asks about unsaved changes itself
+    if (tab.dirty) activate(id);
+    if (!(await window.kertasNative.newWriter('close', id))) return false;
+  } else if (tab.dirty) {
     activate(id);
     const choice = await confirmDialog(`Save changes to ${tab.name}?`, 'Your changes will be lost if you do not save them.', ['Save', "Don't Save", 'Cancel']);
     if (choice === 2) return false;
@@ -195,6 +300,7 @@ async function confirmRisk(tab) {
 
 async function saveTab(tab, { saveAs = false, format } = {}) {
   if (!tab?.instance) return false;
+  if (tab.native) { window.kertasNative.newWriter('command', { id: tab.id, name: saveAs ? 'save-as' : 'save' }); return true; }
   const ext = format || (tab.kind === 'sheets' && extOf(tab.name) === 'csv' ? 'csv' : MODULES[tab.kind].ext);
   if (tab.risk?.length && !tab.riskOk && (ext === 'docx' || ext === 'xlsx')) {
     const choice = await confirmRisk(tab);
@@ -226,6 +332,7 @@ async function saveTab(tab, { saveAs = false, format } = {}) {
 }
 
 async function exportPdf(tab, { preview = false } = {}) {
+  if (tab?.native) { window.kertasNative.newWriter('command', { id: tab.id, name: preview ? 'print' : 'export-pdf' }); return; }
   if (!tab?.instance?.exportPdf) { toast('Export to PDF is not available here'); return; }
   try {
     setStatus(preview ? 'Preparing print preview...' : 'Exporting PDF...');
@@ -243,7 +350,6 @@ async function exportPdf(tab, { preview = false } = {}) {
 }
 
 async function newDocument() {
-  if (await newWriterOn() && await window.kertasNative.newWriter('open', null)) return null;
   return openTab('writer');
 }
 
@@ -252,9 +358,6 @@ async function openFileRecords(records) {
   for (const f of records) {
     const kind = kindForName(f.name);
     if (!kind) { toast(`Unsupported file: ${f.name}`, true); continue; }
-    if (kind === 'writer' && f.path && /\.docx$/i.test(f.name) && await newWriterOn()) {
-      if (await window.kertasNative.newWriter('open', f.path)) continue;
-    }
     if (isLegacy(f.name)) {
       // Older formats are converted first, then open like any other document
       try {
@@ -750,7 +853,7 @@ async function showAbout() {
     ],
   });
   if (!res) return;
-  if (res.values.name !== undefined && res.values.name.trim() !== userName()) { setUserName(res.values.name); toast(res.values.name.trim() ? `Your changes and comments now show as ${res.values.name.trim()}` : 'Name cleared'); }
+  if (res.values.name !== undefined && res.values.name.trim() !== userName()) { setUserName(res.values.name); window.kertasNative?.newWriter?.('author', res.values.name.trim()); toast(res.values.name.trim() ? `Your changes and comments now show as ${res.values.name.trim()}` : 'Name cleared'); }
   if (res.values.newWriter !== undefined && res.values.newWriter !== newWriterChosen()) { try { localStorage.setItem('kertas-new-writer', res.values.newWriter ? '1' : '0'); } catch { /* private mode */ } toast(res.values.newWriter ? 'Word documents now open in the new Writer' : 'Word documents open in the current Writer again'); }
   if (res.values.auto !== undefined && res.values.auto !== (st.auto !== false)) await updates('set-auto', res.values.auto);
   if (res.values.cup !== undefined) { try { localStorage.setItem('kertas-hide-coffee', res.values.cup ? '0' : '1'); } catch { /* private mode */ } showCoffee(); }

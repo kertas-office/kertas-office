@@ -118,6 +118,7 @@ export function onNative(event, cb) {
   if (event === 'menu') native.onMenu(cb);
   if (event === 'request-close') native.onRequestClose(cb);
   if (event === 'update' && native.onUpdate) native.onUpdate(cb);
+  if (event === 'new-writer' && native.onNewWriter) native.onNewWriter(cb);
 }
 
 /** Desktop updates: op 'state' | 'check' | 'install' | 'set-auto' */

@@ -1774,9 +1774,10 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
       if (kind === 'word' && !bad.length && !security && !text.some((p) => p.fromOcr) && await newWriterOn()) {
         // The new Writer's converter keeps the page layout: columns, tables and pictures
         setStatus('Converting to Word, keeping the layout...');
-        if (await window.kertasNative.newWriter('convert-pdf', await buildOutput(pages))) {
+        const token = await window.kertasNative.newWriter('convert-pdf', await buildOutput(pages));
+        if (token && await openDocument('writer', { name: `${base}.docx`, result: token })) {
           setStatus('');
-          toast('Converted to Word. It opened in the new Writer: check the layout, then save.');
+          toast('Converted to Word with the layout kept. Check it, then save.');
           return;
         }
       }

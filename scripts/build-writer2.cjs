@@ -44,6 +44,10 @@ if (!given) {
 }
 
 const app = path.join(SRC, 'apps', 'docs');
+// Kertas's own interface font, for the editor's Kertas look (apps/docs/src/renderer/kertas/skin.css)
+const inter = path.join(ROOT, 'node_modules', '@fontsource-variable', 'inter', 'files');
+fs.mkdirSync(path.join(app, 'src', 'renderer', 'kertas'), { recursive: true });
+for (const f of ['inter-latin-wght-normal.woff2', 'inter-latin-ext-wght-normal.woff2']) fs.copyFileSync(path.join(inter, f), path.join(app, 'src', 'renderer', 'kertas', f));
 run('npx', ['electron-vite', 'build', '--config', 'kertas.vite.config.ts'], app);
 try { run('node', ['tools/gen-third-party-notices.mjs'], SRC); } catch { console.warn('Third-party notices were not regenerated'); }
 

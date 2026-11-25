@@ -558,10 +558,10 @@ index 8ce14e6..910f2bb 100644
        try {
 diff --git a/apps/docs/src/main/kertas-entry.ts b/apps/docs/src/main/kertas-entry.ts
 new file mode 100644
-index 0000000..f83e495
+index 0000000..e0eb99c
 --- /dev/null
 +++ b/apps/docs/src/main/kertas-entry.ts
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,73 @@
 +// Entry used when Kertas Office hosts this editor: the same main-process code,
 +// without starting an app of its own.
 +export {
@@ -627,6 +627,14 @@ index 0000000..f83e495
 +  })
 +  return result.docx
 +}
++export {
++  createDocsView,
++  requestDocsClose,
++  docsQueryDirty,
++  setActiveDocsResolver,
++  setDocsFileSavedHook,
++  setDocsFileOpenedHook,
++} from './docs-main'
 diff --git a/apps/docs/src/main/updater.ts b/apps/docs/src/main/updater.ts
 index cb1b92d..1206b0a 100644
 --- a/apps/docs/src/main/updater.ts
@@ -1667,6 +1675,176 @@ index 0000000..25ae301
 +/** Kertas Office hosts this editor without the AI assistant: nothing of it is
 + * shown, and nothing is sent anywhere. */
 +export const KERTAS_AI: boolean = false
+diff --git a/apps/docs/src/renderer/kertas/skin.css b/apps/docs/src/renderer/kertas/skin.css
+new file mode 100644
+index 0000000..59c1612
+--- /dev/null
++++ b/apps/docs/src/renderer/kertas/skin.css
+@@ -0,0 +1,152 @@
++/* Kertas Office look for the editor: Kertas's own font, colours and shapes laid
++ * over the editor's tokens. Loaded last so it wins; document content (the page,
++ * its text and pictures) is untouched. The two Inter files are copied in by
++ * Kertas's build script (scripts/build-writer2.cjs). */
++@font-face {
++  font-family: 'Inter Variable';
++  font-style: normal;
++  font-display: swap;
++  font-weight: 100 900;
++  src: url('./inter-latin-ext-wght-normal.woff2') format('woff2-variations');
++  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
++    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
++    U+2C60-2C7F, U+A720-A7FF;
++}
++@font-face {
++  font-family: 'Inter Variable';
++  font-style: normal;
++  font-display: swap;
++  font-weight: 100 900;
++  src: url('./inter-latin-wght-normal.woff2') format('woff2-variations');
++  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
++    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
++}
++
++:root {
++  --kertas-font: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
++  --kertas-grad-writer: linear-gradient(135deg, #3b82f6 0%, #2563eb 50%, #06b6d4 100%);
++
++  --word-blue: #2563eb;
++  --word-blue-dark: #1d4ed8;
++  --accent: #2563eb;
++  --accent-dark: #1d4ed8;
++  --accent-soft: #e3ebfd;
++  --docs-accent-ghost: rgb(37 99 235 / 10%);
++
++  --surface: #ffffff;
++  --surface-subtle: #f6f8fc;
++  --chrome-bg: #f6f8fc;
++  --canvas: #e7eaf1;
++  --border: #e2e6ee;
++  --border-subtle: #eceff5;
++  --border-strong: #d5dae4;
++  --border-hover: #c5ccd9;
++  --text: #0f172a;
++  --text-primary: #0f172a;
++  --text-secondary: #334155;
++  --text-tertiary: #64748b;
++  --text-muted: #64748b;
++  --text-dim: #475569;
++  --hover: #e9edf5;
++  --pressed: #dde3ee;
++  --active-bg: #e3ebfd;
++  --bg-hover: #e9edf5;
++  --bg-hover-subtle: #eef1f7;
++  --bg-hover-strong: #dde3ee;
++  --bg-content: #f6f8fc;
++  --icon-muted: #94a3b8;
++  --shadow-menu: 0 10px 30px -12px rgb(15 23 42 / 25%), 0 2px 6px rgb(15 23 42 / 6%);
++}
++
++[data-theme='dark'] {
++  --word-blue: #60a5fa;
++  --word-blue-dark: #3b82f6;
++  --accent: #60a5fa;
++  --accent-dark: #3b82f6;
++  --accent-soft: #1c2a4a;
++  --docs-accent-ghost: rgb(96 165 250 / 14%);
++
++  --surface: #151a27;
++  --surface-subtle: #1a2030;
++  --chrome-bg: #111624;
++  --canvas: #0f1420;
++  --border: #252c3d;
++  --border-subtle: #1e2534;
++  --border-strong: #2f384c;
++  --border-hover: #3a4459;
++  --text: #e8ecf5;
++  --text-primary: #e8ecf5;
++  --text-secondary: #c3cad8;
++  --text-tertiary: #8a94a8;
++  --text-muted: #8a94a8;
++  --text-dim: #a5aec0;
++  --hover: #1f2637;
++  --pressed: #283044;
++  --active-bg: #1c2a4a;
++  --bg-hover: #1f2637;
++  --bg-hover-subtle: #1a2030;
++  --bg-hover-strong: #283044;
++  --bg-content: #111624;
++  --icon-muted: #5b657a;
++}
++
++body,
++button,
++input,
++select,
++textarea {
++  font-family: var(--kertas-font);
++}
++
++/* Kertas's tab strip is the window's title bar; this row is not a drag area */
++.ribbon-tabs {
++  -webkit-app-region: no-drag;
++  padding: 6px 10px 0;
++}
++
++.ribbon {
++  border-bottom-color: var(--border);
++}
++
++.ribbon-tab {
++  font-weight: 500;
++  border-radius: 6px 6px 0 0;
++}
++
++.ribbon-tab.active {
++  font-weight: 600;
++}
++
++/* the File button, as in the rest of Kertas: gradient pill */
++.ribbon-tab-file {
++  background: var(--kertas-grad-writer);
++  border-radius: 9px;
++  border-bottom: none;
++  padding: 6px 15px;
++  font-weight: 600;
++  box-shadow: 0 1px 2px rgb(37 99 235 / 35%);
++}
++
++.ribbon-tab-file:hover,
++.ribbon-tab-file.open {
++  background: var(--kertas-grad-writer);
++  filter: brightness(1.07);
++}
++
++.file-menu,
++.rb-font-family-menu,
++.rb-font-size-menu {
++  border-radius: 10px;
++  border-color: var(--border);
++}
++
++.rb-big,
++.rb-small,
++.rb-icon,
++.rb-select {
++  border-radius: 7px;
++}
++
++.status-bar {
++  height: 26px;
++}
+diff --git a/apps/docs/src/renderer/main.tsx b/apps/docs/src/renderer/main.tsx
+index 3bb7827..d5b9e5a 100644
+--- a/apps/docs/src/renderer/main.tsx
++++ b/apps/docs/src/renderer/main.tsx
+@@ -21,6 +21,7 @@ import '@genoffice/ui/ai-scope-quote.css'
+ import '@genoffice/ui/image-viewer.css'
+ import './styles.css'
+ import './fonts/fonts.css'
++import './kertas/skin.css'
+ import { applyAiPanelPrefs, installScreenTips } from '@genoffice/ui'
+ import { connectAppWideMeasurementUnit } from './units'
+ import { setAltChunkHtmlConverter } from '@genoffice/docx-engine'
 diff --git a/apps/docs/src/renderer/styles.css b/apps/docs/src/renderer/styles.css
 index 9a7923c..9945d8b 100644
 --- a/apps/docs/src/renderer/styles.css
