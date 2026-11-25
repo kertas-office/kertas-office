@@ -2,7 +2,7 @@
 // document engine (Apache-2.0, see NOTICE), hosted as tabs of the Kertas window. The current
 // Writer stays the default; this one is switched on in Settings or with
 // KERTAS_NEW_WRITER=1.
-const { app, ipcMain, session } = require('electron');
+const { app, ipcMain, session, utilityProcess } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -21,8 +21,8 @@ function schemes() {
   return [host.RENDERER_SCHEME_PRIVILEGE, host.DOCX_MEDIA_SCHEME_PRIVILEGE];
 }
 
-// What the editor asks its host about. Kertas has no AI assistant, so those
-// questions get "nothing here" and the editor's AI features stay switched off.
+// What the editor asks its host about. (The editor's AI assistant is not part of Kertas's
+// build of it; the one setting about it that the shared interface code still reads says "off".)
 function answerHostQuestions() {
   const inch = /-(US|LR|MM)$/i.test(app.getLocale()) || app.getLocale() === 'en';
   const answers = {
@@ -34,8 +34,6 @@ function answerHostQuestions() {
     'app:get-auto-save-default': () => ({ on: false, updatedAt: 0 }),
     'app:get-ai-panel-prefs': () => AI_OFF,
     'app:set-ai-panel-prefs': () => AI_OFF,
-    'kb:list': () => [],
-    'kb:search': () => [],
   };
   for (const [channel, fn] of Object.entries(answers)) ipcMain.handle(channel, fn);
 }
@@ -66,7 +64,8 @@ function start() {
     rendererFile: path.join(ROOT, 'renderer', 'index.html'),
   });
   host.installRendererProtocol({ docs: path.join(ROOT, 'renderer') });
-  host.setDocsLanguage(app.getLocale());
+  // English, like the rest of Kertas: the editor has other languages, Kertas's own parts do not yet
+  host.setDocsLanguage('en');
   host.installDocsContextMenu((contents) => windows.has(contents.id));
   host.registerDocsIpc();
   host.setDocsShellHooks({
@@ -199,10 +198,25 @@ function command(id, name) {
   if (t) t.view.webContents.send('menu:command', name);
 }
 
-// PDF to Word with the layout kept; the result waits here until its tab asks for it
-async function convertPdfForTab(data) {
-  if (!host) return null;
-  return keepResult(await host.convertPdfBytesToDocx(new Uint8Array(data), path.join(ROOT, 'wasm', 'pdfium.wasm')));
+// PDF to Word with the layout kept. The work runs in a process of its own (see
+// writer2-pdf-worker.cjs), so the window stays responsive however long it takes; the result
+// waits here until its tab asks for it.
+function convertPdfForTab(data) {
+  if (!host) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const child = utilityProcess.fork(path.join(__dirname, 'writer2-pdf-worker.cjs'), [], { serviceName: 'Kertas PDF to Word' });
+    let done = false;
+    const finish = (fn, value) => { if (done) return; done = true; clearTimeout(timer); try { child.kill(); } catch { /* already gone */ } fn(value); };
+    // generous: a scanned book can take minutes; a process that has stopped answering is ended
+    const timer = setTimeout(() => finish(reject, new Error('The conversion took too long and was stopped')), 15 * 60 * 1000);
+    child.on('message', (msg) => {
+      if (msg.docx) finish(resolve, keepResult(msg.docx));
+      else if (msg.error) finish(reject, new Error(msg.error));
+      else if (msg.total) tell('convert-progress', null, { page: msg.page, total: msg.total });
+    });
+    child.on('exit', (code) => finish(reject, new Error(`The converter stopped unexpectedly (${code})`)));
+    child.once('spawn', () => child.postMessage({ pdf: Buffer.from(data), wasm: path.join(ROOT, 'wasm', 'pdfium.wasm') }));
+  });
 }
 
 module.exports = { available, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };

@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, copyFile, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, copyFile, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -116,6 +116,25 @@ const dialogOk = async () => { await w.locator('.modal button.btn-primary:visibl
 /** the paragraphs of a document's XML that hold this text */
 const paragraphsWith = (x, text) => (x.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || []).filter((para) => para.replace(/<[^>]+>/g, '').includes(text));
 const kertasTabs = () => k.evaluate(() => [...document.querySelectorAll('#tabs .tab')].slice(1).map((t) => ({ title: t.querySelector('.title')?.textContent, dirty: t.classList.contains('is-dirty'), active: t.classList.contains('active') })));
+
+test('the build has no AI assistant in it: no provider names, no assistant channels, no prompts', opts, async () => {
+  const root = path.join(ROOT, 'electron', 'writer2');
+  const files = [];
+  for (const sub of ['main', 'preload', path.join('renderer', 'assets')]) {
+    for (const name of await readdir(path.join(root, sub))) if (/\.(c?js|mjs)$/.test(name)) files.push(path.join(root, sub, name));
+  }
+  // what only the assistant has: the services it called, its channels to the main process, its sign-in
+  const marks = /api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis|api\.deepseek\.com|chat\/completions|["'`](?:ai|kb|project):[a-z-]+["'`]|aiStream|aiChat|gsk-login|x-api-key/;
+  const found = [];
+  for (const f of files) {
+    const text = await readFile(f, 'utf8');
+    const m = marks.exec(text);
+    if (m) found.push(`${path.relative(root, f)}: ${text.slice(Math.max(0, m.index - 40), m.index + 60).replace(/\s+/g, ' ')}`);
+  }
+  assert.deepEqual(found, []);
+  const bridge = await readFile(path.join(root, 'preload', 'index.js'), 'utf8');
+  assert.doesNotMatch(bridge, /aiNamingApi|getAiSettings|kbSearch|onMcpCommand/);
+});
 
 test('a Word document opens as a Kertas tab; typing marks it unsaved and saving clears the mark', opts, async () => {
   await open('sample.docx');

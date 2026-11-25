@@ -258,7 +258,8 @@ onNative('new-writer', (ev) => {
     tab.name = ev.path.split(/[\\/]/).pop();
     updateTab(tab);
     if (activeId === tab.id) setStatus(tab.path);
-  } else if (ev.type === 'open-path') openPath(ev.path);
+  } else if (ev.type === 'convert-progress') setStatus(`Converting to Word, keeping the layout: page ${ev.page} of ${ev.total}`);
+  else if (ev.type === 'open-path') openPath(ev.path);
   else if (ev.type === 'new') newDocument();
   else if (ev.type === 'result') openTab('writer', { result: ev.token });
   else if (ev.type === 'close' && tab) closeTab(tab.id);

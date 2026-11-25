@@ -1,12 +1,14 @@
 diff --git a/apps/docs/kertas.vite.config.ts b/apps/docs/kertas.vite.config.ts
 new file mode 100644
-index 0000000..19e997e
+index 0000000..822b24b
 --- /dev/null
 +++ b/apps/docs/kertas.vite.config.ts
-@@ -0,0 +1,36 @@
-+import { resolve } from 'node:path'
+@@ -0,0 +1,172 @@
++import { readdirSync, readFileSync } from 'node:fs'
++import { join, resolve } from 'node:path'
 +import react from '@vitejs/plugin-react'
 +import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
++import type { Plugin } from 'vite'
 +
 +// Build used when Kertas Office hosts this editor. Same sources as the normal
 +// build; the main-process entry exports the hosting functions instead of
@@ -17,31 +19,165 @@ index 0000000..19e997e
 +  '@genoffice/docx-engine': resolve(__dirname, '../../packages/docx-engine/src/index.ts'),
 +}
 +
++// Kertas Office has no AI assistant, and it is left out of the build rather than
++// switched off: the assistant's panel, its tools and the packages that talk to AI
++// services resolve to stand-ins, so their code never reaches the bundle.
++const noAi = resolve(__dirname, 'src/renderer/kertas/no-ai')
++const AI_PACKAGES = /^@genoffice\/(ai-provider|ai-search|project-store|file-parse)(\/|$)/
++const AI_MODULES: Array<[RegExp, string]> = [
++  [/(^|\/)ai\/AiPanel$/, 'AiPanel.tsx'],
++  [/(^|\/)components\/AiAskPopover$|^\.\/AiAskPopover$/, 'AiAskPopover.tsx'],
++  [/(^|\/)mcp-bridge$/, 'mcp-bridge.ts'],
++  [/(^|\/)ai\/tools$/, 'tools.ts'],
++]
++// Every name the sources import from those packages, found by reading the sources, so
++// the stand-in can export each one. A name left out would be a build error, never a
++// silent `undefined`.
++const AI_STANDIN = '\0kertas-no-ai-package'
++function importedAiNames(): string[] {
++  const names = new Set<string>()
++  const roots = [resolve(__dirname, 'src'), resolve(__dirname, '../../packages')]
++  const visit = (dir: string): void => {
++    for (const entry of readdirSync(dir, { withFileTypes: true })) {
++      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue
++      const full = join(dir, entry.name)
++      if (entry.isDirectory()) visit(full)
++      else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.|\.d\.ts$/.test(entry.name)) {
++        const code = readFileSync(full, 'utf8')
++        const stmt = /(?:import|export)\s+(type\s+)?\{([^}]*)\}\s*from\s*['"](@genoffice\/[^'"]+)['"]/g
++        let m: RegExpExecArray | null
++        while ((m = stmt.exec(code)) !== null) {
++          if (m[1] || !AI_PACKAGES.test(m[3])) continue
++          for (const part of m[2].split(',')) {
++            const name = part.trim().replace(/^type\s+.*/, '').split(/\s+as\s+/)[0].trim()
++            if (name) names.add(name)
++          }
++        }
++      }
++    }
++  }
++  for (const root of roots) visit(root)
++  return [...names].sort()
++}
++// What each of those names is in Kertas's build: one inert value that can be called,
++// constructed, read from and iterated (as nothing) without doing anything.
++const standInSource = (): string =>
++  `const inert = new Proxy(function () {}, {
++  get: (_t, key) => key === Symbol.iterator ? function* () {} : key === Symbol.toPrimitive ? () => '' : key === 'then' ? undefined : key === 'prototype' ? Object.prototype : inert,
++  apply: () => inert,
++  construct: () => ({}),
++})
++${importedAiNames().map((name) => `export const ${name} = inert`).join('\n')}
++export default inert
++`
++
++const kertasNoAi = (): Plugin => ({
++  name: 'kertas-no-ai',
++  enforce: 'pre',
++  load(id) {
++    return id === AI_STANDIN ? standInSource() : null
++  },
++  resolveId(source, importer) {
++    if (AI_PACKAGES.test(source)) return AI_STANDIN
++    if (!importer || importer.startsWith(noAi)) return null
++    for (const [pattern, file] of AI_MODULES) if (pattern.test(source)) return resolve(noAi, file)
++    return null
++  },
++})
++// The assistant's interface text goes too: its own string tables load empty, and
++// the few lines about it in the shared tables (sign-in and credit messages) are
++// taken out, so nothing in the build names an AI service.
++const AI_STRINGS = /[\\/]renderer[\\/]i18n[\\/]ai[\\/]([\w-]+)\.ts$/
++const STRING_TABLES = /[\\/](?:renderer[\\/]i18n[\\/](?:app|ribbon)[\\/][\w-]+|packages[\\/]i18n[\\/]src[\\/][\w-]+|main[\\/]docs-main)\.ts$/
++const AI_ENTRY =
++  /^[ \t]*(?:[A-Za-z_$][\w$]*|'[^'\n]+')\s*:\s*(?:\n\s*)?(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)\s*,?[ \t]*\n/gm
++const kertasNoAiStrings = (): Plugin => ({
++  name: 'kertas-no-ai-strings',
++  enforce: 'pre',
++  load(id) {
++    const table = AI_STRINGS.exec(id.split('?')[0])
++    if (!table) return null
++    return `export const ${table[1].replace(/-(\w)/g, (_m, c: string) => c.toUpperCase())} = {}\n`
++  },
++  transform(code, id) {
++    if (!STRING_TABLES.test(id.split('?')[0]) || !/genspark/i.test(code)) return null
++    return { code: code.replace(AI_ENTRY, (entry) => (/genspark/i.test(entry) ? '' : entry)), map: null }
++  },
++})
++// The window's bridge loses the assistant's entries as well: each member of the
++// exposed object that talks on an assistant channel is taken out of the source.
++const PRELOAD = /[\\/]src[\\/]preload[\\/]index\.ts$/
++const AI_CHANNEL = /'(?:ai|kb|project):|docs:mcp-/
++const kertasNoAiBridge = (): Plugin => ({
++  name: 'kertas-no-ai-bridge',
++  enforce: 'pre',
++  transform(code, id) {
++    if (!PRELOAD.test(id.split('?')[0])) return null
++    const lines = code.split('\n')
++    const out: string[] = []
++    let member: string[] | null = null
++    const flush = () => {
++      if (member && !AI_CHANNEL.test(member.join('\n'))) out.push(...member)
++      member = null
++    }
++    for (const line of lines) {
++      // members of the exposed objects start at two spaces; anything at column 0 ends the object
++      if (/^ {2}[A-Za-z_$][\w$]*\s*[:(]/.test(line)) {
++        flush()
++        member = [line]
++      } else if (member && /^\S/.test(line)) {
++        flush()
++        out.push(line)
++      } else if (member) member.push(line)
++      else out.push(line)
++    }
++    flush()
++    const next = out
++      .join('\n')
++      .replace(/^const aiNamingApi = \{\s*\}\n/m, '')
++      .replace(/^contextBridge\.exposeInMainWorld\('aiNamingApi', aiNamingApi\)\n/m, '')
++      .replace(/^const projectApi[^\n]*= \{\s*\}\n/m, 'const projectApi = {}\n')
++    return { code: next, map: null }
++  },
++})
++
 +export default defineConfig({
 +  main: {
++    plugins: [kertasNoAi(), kertasNoAiStrings()],
 +    resolve: { alias: localAlias },
 +    build: {
 +      externalizeDeps: false,
 +      outDir: 'out-kertas/main',
 +      rollupOptions: {
-+        input: resolve(__dirname, 'src/main/kertas-entry.ts'),
++        input: {
++          index: resolve(__dirname, 'src/main/kertas-entry.ts'),
++          pdf2docx: resolve(__dirname, 'src/main/kertas-pdf-entry.ts'),
++        },
 +        external: ['electron', /^node:/],
-+        output: { format: 'cjs', entryFileNames: 'index.cjs', chunkFileNames: '[name]-[hash].cjs' },
++        output: { format: 'cjs', entryFileNames: '[name].cjs', chunkFileNames: '[name]-[hash].cjs' },
 +      },
 +    },
 +  },
 +  preload: {
-+    plugins: [externalizeDepsPlugin({ exclude: ['@genoffice/electron-utils'] })],
++    plugins: [kertasNoAi(), kertasNoAiBridge(), externalizeDepsPlugin({ exclude: ['@genoffice/electron-utils'] })],
 +    build: { outDir: 'out-kertas/preload' },
 +  },
 +  renderer: {
-+    plugins: [react()],
++    plugins: [kertasNoAi(), kertasNoAiStrings(), react()],
 +    resolve: { alias: localAlias },
-+    build: { outDir: 'out-kertas/renderer' },
++    build: {
++      outDir: 'out-kertas/renderer',
++      rollupOptions: {
++        output: {
++          // the bundled fonts keep their own file names apart from the original product's name
++          assetFileNames: (asset) => `assets/${String(asset.names?.[0] ?? asset.name ?? 'asset').replace(/^GenOffice/, 'Kertas').replace(/(\.[^.]+)$/, '-[hash]$1')}`,
++        },
++      },
++    },
 +  },
 +})
 diff --git a/apps/docs/src/main/docs-main.ts b/apps/docs/src/main/docs-main.ts
-index 8ce14e6..910f2bb 100644
+index 8ce14e6..ad45275 100644
 --- a/apps/docs/src/main/docs-main.ts
 +++ b/apps/docs/src/main/docs-main.ts
 @@ -1,3 +1,4 @@
@@ -490,6 +626,24 @@ index 8ce14e6..910f2bb 100644
  
  // the home screen lists all of these; the File menu shows only the first few
  const RECENT_LIMIT = 100
+@@ -7318,7 +7319,7 @@ function rememberOpenDoc(wcId: number, filePath: string): void {
+ }
+ 
+ function docsMediaRoots(wcId: number): string[] {
+-  return documentMediaRoots(openDocByWc.get(wcId), join(app.getPath('temp'), 'genoffice-pasted'))
++  return documentMediaRoots(openDocByWc.get(wcId), join(app.getPath('temp'), 'kertas-pasted'))
+ }
+ 
+ function allowDocWrite(wcId: number, filePath: string): void {
+@@ -7855,7 +7856,7 @@ function savePastedImage(data: unknown, ext: unknown): string | null {
+         ? Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+         : null
+   if (!bytes || bytes.byteLength === 0) return null
+-  const dir = join(app.getPath('temp'), 'genoffice-pasted')
++  const dir = join(app.getPath('temp'), 'kertas-pasted')
+   mkdirSync(dir, { recursive: true })
+   prunePastedImages(dir)
+   const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-')
 @@ -8263,7 +8264,7 @@ let projectStore: ProjectStore | null = null
  let projectIpcRegistered = false
  
@@ -499,16 +653,35 @@ index 8ce14e6..910f2bb 100644
    return projectStore
  }
  
-@@ -8477,7 +8478,7 @@ export function registerDocsIpc(): void {
+@@ -8476,8 +8477,7 @@ export function registerDocsIpc(): void {
+   registerZoteroIpc()
    void app.whenReady().then(registerLazyMediaProtocol)
    // Node fetch (undici) direct connections get reset under VPN/tun setups; retry over Chromium's stack
-   setRescueFetch((url, init) => net.fetch(url, init))
+-  setRescueFetch((url, init) => net.fetch(url, init))
 -  setAiUserAgent(`GenOffice/${app.getVersion()}`)
-+  setAiUserAgent(`Kertas/${app.getVersion()}`)
++  // Kertas: the AI services' network set-up is not part of this build
  
    // shared with the other editor modules — last (identical) registration wins
    ipcMain.removeHandler('app:get-language')
-@@ -9635,7 +9636,7 @@ export function registerDocsIpc(): void {
+@@ -8539,7 +8539,7 @@ export function registerDocsIpc(): void {
+     if (typeof html !== 'string' || !html.trim() || html.length > ALT_CHUNK_HTML_MAX_CHARS) {
+       return null
+     }
+-    const workDir = await mkdtemp(join(tmpdir(), 'genoffice-altchunk-'))
++    const workDir = await mkdtemp(join(tmpdir(), 'kertas-altchunk-'))
+     let driver: ElectronBrowserDriver | null = null
+     try {
+       const htmlPath = join(workDir, 'chunk.html')
+@@ -9587,7 +9587,7 @@ export function registerDocsIpc(): void {
+     }
+     if (!dir) return null
+     const wcId = event.sender.id
+-    const pdfPath = join(tmpdir(), `genoffice-docs-images-${randomUUID()}.pdf`)
++    const pdfPath = join(tmpdir(), `kertas-docs-images-${randomUUID()}.pdf`)
+     allowPdfWrite(wcId, pdfPath)
+     imageExportTemps.set(wcId, (imageExportTemps.get(wcId) ?? new Set()).add(pdfPath))
+     imageExportDirs.set(wcId, (imageExportDirs.get(wcId) ?? new Set()).add(dir))
+@@ -9635,7 +9635,7 @@ export function registerDocsIpc(): void {
  
    // templates live in one folder of their own, where both dialogs start
    const templatesDir = async (): Promise<string> => {
@@ -517,7 +690,7 @@ index 8ce14e6..910f2bb 100644
      await mkdir(dir, { recursive: true })
      return dir
    }
-@@ -9981,7 +9982,7 @@ interface DocsShellHooks {
+@@ -9981,7 +9981,7 @@ interface DocsShellHooks {
    detachedWindowCount?(): number
    /** closes the calling tab instead of the whole shell window (Cmd+W / role:'close') */
    closeActiveTab(): void
@@ -526,7 +699,7 @@ index 8ce14e6..910f2bb 100644
    openGeneratedPath?(path: string): boolean
    /** the open document's file was renamed or moved: recents, tabs and the views follow it */
    fileMoved?(oldPath: string, newPath: string): void
-@@ -10427,7 +10428,7 @@ export function createDocsWindow(openPath?: string): BrowserWindow {
+@@ -10427,7 +10427,7 @@ export function createDocsWindow(openPath?: string): BrowserWindow {
      height: 900,
      minWidth: 720,
      minHeight: 550,
@@ -535,7 +708,7 @@ index 8ce14e6..910f2bb 100644
      // Word-like custom title bar (document name centered, quick-access buttons)
      ...(process.platform === 'darwin'
        ? { titleBarStyle: 'hiddenInset' as const }
-@@ -10760,16 +10761,16 @@ export function startDocsStandalone(): void {
+@@ -10760,16 +10760,16 @@ export function startDocsStandalone(): void {
    installContextMenu(app, () => contextMenuLabels(getUiLang()))
    // dev runs must not share the packaged app's userData (recent files, AI settings)
    // or its single-instance lock — otherwise `npm run dev` silently quits whenever
@@ -558,10 +731,10 @@ index 8ce14e6..910f2bb 100644
        try {
 diff --git a/apps/docs/src/main/kertas-entry.ts b/apps/docs/src/main/kertas-entry.ts
 new file mode 100644
-index 0000000..e0eb99c
+index 0000000..b91b813
 --- /dev/null
 +++ b/apps/docs/src/main/kertas-entry.ts
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,44 @@
 +// Entry used when Kertas Office hosts this editor: the same main-process code,
 +// without starting an app of its own.
 +export {
@@ -598,6 +771,23 @@ index 0000000..e0eb99c
 +export { setDocsMenuGate } from './docs-main'
 +export { queueDocsResultDoc } from './docs-main'
 +
++export {
++  createDocsView,
++  requestDocsClose,
++  docsQueryDirty,
++  setActiveDocsResolver,
++  setDocsFileSavedHook,
++  setDocsFileOpenedHook,
++} from './docs-main'
+diff --git a/apps/docs/src/main/kertas-pdf-entry.ts b/apps/docs/src/main/kertas-pdf-entry.ts
+new file mode 100644
+index 0000000..9084f71
+--- /dev/null
++++ b/apps/docs/src/main/kertas-pdf-entry.ts
+@@ -0,0 +1,32 @@
++// Entry for Kertas Office's PDF to Word converter. It is built as a file of its
++// own and run in a separate process, so a long conversion never holds up the
++// window; nothing in it needs the app.
 +import { readFileSync } from 'node:fs'
 +import { convertPdfToDocx } from '../../../../packages/pdf2docx/src'
 +import type { PdfiumModule } from '../../../../packages/pdf2docx/src'
@@ -627,14 +817,6 @@ index 0000000..e0eb99c
 +  })
 +  return result.docx
 +}
-+export {
-+  createDocsView,
-+  requestDocsClose,
-+  docsQueryDirty,
-+  setActiveDocsResolver,
-+  setDocsFileSavedHook,
-+  setDocsFileOpenedHook,
-+} from './docs-main'
 diff --git a/apps/docs/src/main/updater.ts b/apps/docs/src/main/updater.ts
 index cb1b92d..1206b0a 100644
 --- a/apps/docs/src/main/updater.ts
@@ -649,7 +831,7 @@ index cb1b92d..1206b0a 100644
   *
   * electron-builder bakes the publish URL into resources/app-update.yml at
 diff --git a/apps/docs/src/renderer/App.tsx b/apps/docs/src/renderer/App.tsx
-index b67bd53..c6107ac 100644
+index b67bd53..3dc998e 100644
 --- a/apps/docs/src/renderer/App.tsx
 +++ b/apps/docs/src/renderer/App.tsx
 @@ -162,6 +162,8 @@ import {
@@ -671,7 +853,17 @@ index b67bd53..c6107ac 100644
    const [leftPane, setLeftPane] = useState<LeftPane>(loadLeftPane)
    const showNav = leftPane === 'nav'
    const setShowNav = useCallback((on: boolean) => setLeftPane(on ? 'nav' : null), [])
-@@ -2374,7 +2377,9 @@ export function App() {
+@@ -2050,7 +2053,8 @@ export function App() {
+             for (const src of htmlImgSrcs.slice(0, 10)) {
+               const ed = editorRef.current
+               if (!ed) return
+-              const fetched = await window.desktop.fetchImage(src)
++              // Kertas: no fetching from the web; a copy that carries no bitmap pastes nothing
++              const fetched = await window.desktop.fetchImage?.(src)
+               if (fetched) {
+                 await insertImageFromDataUrl(
+                   ed,
+@@ -2374,7 +2378,9 @@ export function App() {
  
    useEffect(() => {
      void window.desktop.getRecentFiles().then(setRecent)
@@ -682,7 +874,7 @@ index b67bd53..c6107ac 100644
      loadSettings()
      return window.desktop.onAiSettingsChanged?.(loadSettings)
    }, [])
-@@ -2769,7 +2774,7 @@ export function App() {
+@@ -2769,7 +2775,7 @@ export function App() {
  
    // window title follows the document, so the OS window list and Switch Window show file names
    useEffect(() => {
@@ -691,7 +883,7 @@ index b67bd53..c6107ac 100644
    }, [doc])
  
    useEffect(() => window.desktop.onTeardown?.(() => setTornDown(true)), [])
-@@ -3891,7 +3896,7 @@ export function App() {
+@@ -3891,7 +3897,7 @@ export function App() {
        window.desktop.onZoteroRequest(async (request) => {
          try {
            const activeEditor = editorRef.current
@@ -700,7 +892,7 @@ index b67bd53..c6107ac 100644
            const controller =
              zoteroControllerRef.current ??
              new ZoteroDocumentController(activeEditor, {
-@@ -8311,6 +8316,8 @@ export function App() {
+@@ -8311,6 +8317,8 @@ export function App() {
    }
    // native application menu → renderer commands
    useEffect(() => window.desktop.onMenuCommand(runCommand), [runCommand])
@@ -709,7 +901,7 @@ index b67bd53..c6107ac 100644
    // the menu's paste-and-match-style arms the plain-paste flag just before its
    // paste event fires, so the editor skips the Markdown lane (see #2856)
    useEffect(() => window.desktop.onPastePlain(armPlainPaste), [])
-@@ -10413,7 +10420,7 @@ export function App() {
+@@ -10413,7 +10421,7 @@ export function App() {
        />
  
        <div className="app-main">
@@ -718,7 +910,7 @@ index b67bd53..c6107ac 100644
            <div
              className={`ai-dock${showAi ? '' : ' collapsed'}${
                !aiSidebarEnabled && !showAi ? ' ai-dock-off' : ''
-@@ -10545,6 +10552,10 @@ export function App() {
+@@ -10545,6 +10553,10 @@ export function App() {
                      const sec = sections[activeSection]?.settings ?? section
                      ribbonActions.onSection({ ...sec, marginTop: top, marginBottom: bottom })
                    }}
@@ -774,20 +966,307 @@ index afb555e..cd8f0cd 100644
            <div className="ctx-sep" />
            {item(t('appSynonyms'), {
 diff --git a/apps/docs/src/renderer/components/Ribbon.tsx b/apps/docs/src/renderer/components/Ribbon.tsx
-index c94b79c..de99bb8 100644
+index c94b79c..e734c3d 100644
 --- a/apps/docs/src/renderer/components/Ribbon.tsx
 +++ b/apps/docs/src/renderer/components/Ribbon.tsx
-@@ -3171,8 +3171,8 @@ function RibbonInner({
+@@ -1,3 +1,4 @@
++import { KERTAS_AI } from '../kertas'
+ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+ import { wrapBigCaptions } from './ribbon-caption-wrap'
+ import { fitRibbon, styleCardRoom } from './ribbon-fit'
+@@ -3171,147 +3172,151 @@ function RibbonInner({
            </div>
          ) : tab === 'home' ? (
            <>
 -            {/* ---- Genspark AI (first slot: entry + one-click AI actions) ---- */}
 -            <div className="ribbon-group">
+-              <div className="ribbon-group-items">
+-                <button
+-                  className={`rb-big ai-entry ${aiEntry.pressed ? 'active' : ''}`}
+-                  data-tip={t(aiEntry.control.tip)}
+-                  onClick={aiEntry.run}
+-                >
+-                  <span className="rb-big-icon">
+-                    <GensparkMark size={26} />
+-                  </span>
+-                  <span>Genspark AI</span>
+-                </button>
+-                <button
+-                  className="rb-big ai-entry"
+-                  disabled={docEmpty}
+-                  data-tip={t('aiSummarizeBtn')}
+-                  onClick={() => runCommand('ai-preset', t('aiSummarizePrompt'))}
+-                >
+-                  <span className="rb-big-icon">
+-                    <span className="ai-feature-icon" aria-hidden="true">
+-                      <svg
+-                        viewBox="0 0 24 24"
+-                        fill="none"
+-                        stroke="currentColor"
+-                        strokeWidth="1.5"
+-                        strokeLinecap="round"
+-                        strokeLinejoin="round"
+-                      >
+-                        <path
+-                          d="M13.875 21H12H6.5C5.39543 21 4.5 20.1046 4.5 19V5C4.5 3.89543 5.39543 3 6.5 3H17.5C18.6046 3 19.5 3.89543 19.5 5V9V12V13"
+-                          strokeLinecap="round"
+-                        />
+-                        <path d="M8.00001 7H16" strokeLinecap="round" />
+-                        <path d="M8.00007 10.2032H14.0001" strokeLinecap="round" />
+-                        <path d="M8.00007 13.4062H12.0001" strokeLinecap="round" />
+-                        <path
+-                          d="M17 14L17.2579 14.697C17.5961 15.611 17.7652 16.068 18.0986 16.4014C18.432 16.7348 18.889 16.9039 19.803 17.2421L20.5 17.5L19.803 17.7579C18.889 18.0961 18.432 18.2652 18.0986 18.5986C17.7652 18.932 17.5961 19.389 17.2579 20.303L17 21L16.7421 20.303C16.4039 19.389 16.2348 18.932 15.9014 18.5986C15.568 18.2652 15.111 18.0961 14.197 17.7579L13.5 17.5L14.197 17.2421C15.111 16.9039 15.568 16.7348 15.9014 16.4014C16.2348 16.068 16.4039 15.611 16.7421 14.697L17 14Z"
+-                          strokeLinejoin="round"
+-                        />
+-                      </svg>
+-                    </span>
+-                  </span>
+-                  <span>{t('aiSummarizeBtn')}</span>
+-                </button>
+-                <button
+-                  className="rb-big ai-entry"
+-                  disabled={docEmpty}
+-                  data-tip={t('aiPolishBtn')}
+-                  onClick={() =>
+-                    runCommand(
+-                      'ai-preset',
+-                      t(
+-                        editor.state.selection.empty ? 'aiPolishPrompt' : 'aiPolishSelectionPrompt',
+-                      ),
+-                    )
+-                  }
+-                >
+-                  <span className="rb-big-icon">
+-                    <span className="ai-feature-icon" aria-hidden="true">
+-                      <svg
+-                        viewBox="0 0 24 24"
+-                        fill="none"
+-                        stroke="currentColor"
+-                        strokeWidth="1.5"
+-                        strokeLinecap="round"
+-                        strokeLinejoin="round"
+-                      >
+-                        <path
+-                          d="M5.00012 20.7481L8.80319 20.7482L21.7482 7.80317L17.945 4L5 16.945L5.00012 20.7481Z"
+-                          strokeLinejoin="round"
+-                        />
+-                        <path d="M15.1406 6.80469L18.9438 10.6079" />
+-                        <path
+-                          d="M8 3L8.22106 3.59745C8.51094 4.38087 8.65589 4.77259 8.94166 5.05833C9.22743 5.34409 9.61914 5.48903 10.4026 5.77893L11 6L10.4026 6.22107C9.61914 6.51097 9.22743 6.65592 8.94166 6.94167C8.65589 7.22741 8.51094 7.61913 8.22106 8.40255L8 9L7.77894 8.40255C7.48906 7.61913 7.34411 7.22741 7.05834 6.94167C6.77257 6.65592 6.38086 6.51097 5.59743 6.22107L5 6L5.59743 5.77893C6.38086 5.48903 6.77257 5.34409 7.05834 5.05833C7.34411 4.77259 7.48906 4.38087 7.77894 3.59745L8 3Z"
+-                          strokeLinejoin="round"
+-                        />
+-                      </svg>
+-                    </span>
+-                  </span>
+-                  <span>{t('aiPolishBtn')}</span>
+-                </button>
+-                <button
+-                  className="rb-big ai-entry"
+-                  disabled={docEmpty}
+-                  data-tip={t('aiTidyBtn')}
+-                  onClick={() => runCommand('ai-preset', t('aiTidyPrompt'))}
+-                >
+-                  <span className="rb-big-icon">
+-                    <span className="ai-feature-icon" aria-hidden="true">
+-                      <svg
+-                        viewBox="0 0 24 24"
+-                        fill="none"
+-                        stroke="currentColor"
+-                        strokeWidth="1.5"
+-                        strokeLinecap="round"
+-                        strokeLinejoin="round"
+-                      >
+-                        <path d="M4 5H20" strokeLinecap="round" />
+-                        <path d="M4 9H16" strokeLinecap="round" />
+-                        <path d="M4 13H11" strokeLinecap="round" />
+-                        <path d="M4 17H10" strokeLinecap="round" />
+-                        <path
+-                          d="M17 14L17.2579 14.697C17.5961 15.611 17.7652 16.068 18.0986 16.4014C18.432 16.7348 18.889 16.9039 19.803 17.2421L20.5 17.5L19.803 17.7579C18.889 18.0961 18.432 18.2652 18.0986 18.5986C17.7652 18.932 17.5961 19.389 17.2579 20.303L17 21L16.7421 20.303C16.4039 19.389 16.2348 18.932 15.9014 18.5986C15.568 18.2652 15.111 18.0961 14.197 17.7579L13.5 17.5L14.197 17.2421C15.111 16.9039 15.568 16.7348 15.9014 16.4014C16.2348 16.068 16.4039 15.611 16.7421 14.697L17 14Z"
+-                          strokeLinejoin="round"
+-                        />
+-                      </svg>
+-                    </span>
+-                  </span>
+-                  <span>{t('aiTidyBtn')}</span>
+-                </button>
+-                <button
+-                  className="rb-big ai-entry"
+-                  disabled={docEmpty}
+-                  data-tip={t('aiMindMapBtn')}
+-                  onClick={() => runCommand('ai-preset', t('aiMindMapPrompt'))}
+-                >
+-                  <span className="rb-big-icon">
+-                    <span className="ai-feature-icon" aria-hidden="true">
+-                      <svg
+-                        viewBox="0 0 24 24"
+-                        fill="none"
+-                        stroke="currentColor"
+-                        strokeWidth="1.5"
+-                        strokeLinecap="round"
+-                        strokeLinejoin="round"
+-                      >
+-                        <rect x="2.5" y="9.5" width="6" height="5" rx="1.5" />
+-                        <rect x="15.5" y="4" width="6" height="5" rx="1.5" />
+-                        <rect x="15.5" y="15" width="6" height="5" rx="1.5" />
+-                        <path d="M8.5 12h3.5M12 12V6.5h3.5M12 12v5.5h3.5" />
+-                      </svg>
+-                    </span>
+-                  </span>
+-                  <span>{t('aiMindMapBtn')}</span>
+-                </button>
+-              </div>
+-              <div className="ribbon-group-label">Genspark AI</div>
+-            </div>
+-
+-            <div className="ribbon-sep" />
 +            {/* ---- AI (first slot: entry + one-click AI actions); hidden in Kertas ---- */}
-+            <div className="ribbon-group kertas-ai-off">
++            {KERTAS_AI && (
++              <>
++                <div className="ribbon-group">
++                  <div className="ribbon-group-items">
++                    <button
++                      className={`rb-big ai-entry ${aiEntry.pressed ? 'active' : ''}`}
++                      data-tip={t(aiEntry.control.tip)}
++                      onClick={aiEntry.run}
++                    >
++                      <span className="rb-big-icon">
++                        <GensparkMark size={26} />
++                      </span>
++                      <span>Genspark AI</span>
++                    </button>
++                    <button
++                      className="rb-big ai-entry"
++                      disabled={docEmpty}
++                      data-tip={t('aiSummarizeBtn')}
++                      onClick={() => runCommand('ai-preset', t('aiSummarizePrompt'))}
++                    >
++                      <span className="rb-big-icon">
++                        <span className="ai-feature-icon" aria-hidden="true">
++                          <svg
++                            viewBox="0 0 24 24"
++                            fill="none"
++                            stroke="currentColor"
++                            strokeWidth="1.5"
++                            strokeLinecap="round"
++                            strokeLinejoin="round"
++                          >
++                            <path
++                              d="M13.875 21H12H6.5C5.39543 21 4.5 20.1046 4.5 19V5C4.5 3.89543 5.39543 3 6.5 3H17.5C18.6046 3 19.5 3.89543 19.5 5V9V12V13"
++                              strokeLinecap="round"
++                            />
++                            <path d="M8.00001 7H16" strokeLinecap="round" />
++                            <path d="M8.00007 10.2032H14.0001" strokeLinecap="round" />
++                            <path d="M8.00007 13.4062H12.0001" strokeLinecap="round" />
++                            <path
++                              d="M17 14L17.2579 14.697C17.5961 15.611 17.7652 16.068 18.0986 16.4014C18.432 16.7348 18.889 16.9039 19.803 17.2421L20.5 17.5L19.803 17.7579C18.889 18.0961 18.432 18.2652 18.0986 18.5986C17.7652 18.932 17.5961 19.389 17.2579 20.303L17 21L16.7421 20.303C16.4039 19.389 16.2348 18.932 15.9014 18.5986C15.568 18.2652 15.111 18.0961 14.197 17.7579L13.5 17.5L14.197 17.2421C15.111 16.9039 15.568 16.7348 15.9014 16.4014C16.2348 16.068 16.4039 15.611 16.7421 14.697L17 14Z"
++                              strokeLinejoin="round"
++                            />
++                          </svg>
++                        </span>
++                      </span>
++                      <span>{t('aiSummarizeBtn')}</span>
++                    </button>
++                    <button
++                      className="rb-big ai-entry"
++                      disabled={docEmpty}
++                      data-tip={t('aiPolishBtn')}
++                      onClick={() =>
++                        runCommand(
++                          'ai-preset',
++                          t(
++                            editor.state.selection.empty ? 'aiPolishPrompt' : 'aiPolishSelectionPrompt',
++                          ),
++                        )
++                      }
++                    >
++                      <span className="rb-big-icon">
++                        <span className="ai-feature-icon" aria-hidden="true">
++                          <svg
++                            viewBox="0 0 24 24"
++                            fill="none"
++                            stroke="currentColor"
++                            strokeWidth="1.5"
++                            strokeLinecap="round"
++                            strokeLinejoin="round"
++                          >
++                            <path
++                              d="M5.00012 20.7481L8.80319 20.7482L21.7482 7.80317L17.945 4L5 16.945L5.00012 20.7481Z"
++                              strokeLinejoin="round"
++                            />
++                            <path d="M15.1406 6.80469L18.9438 10.6079" />
++                            <path
++                              d="M8 3L8.22106 3.59745C8.51094 4.38087 8.65589 4.77259 8.94166 5.05833C9.22743 5.34409 9.61914 5.48903 10.4026 5.77893L11 6L10.4026 6.22107C9.61914 6.51097 9.22743 6.65592 8.94166 6.94167C8.65589 7.22741 8.51094 7.61913 8.22106 8.40255L8 9L7.77894 8.40255C7.48906 7.61913 7.34411 7.22741 7.05834 6.94167C6.77257 6.65592 6.38086 6.51097 5.59743 6.22107L5 6L5.59743 5.77893C6.38086 5.48903 6.77257 5.34409 7.05834 5.05833C7.34411 4.77259 7.48906 4.38087 7.77894 3.59745L8 3Z"
++                              strokeLinejoin="round"
++                            />
++                          </svg>
++                        </span>
++                      </span>
++                      <span>{t('aiPolishBtn')}</span>
++                    </button>
++                    <button
++                      className="rb-big ai-entry"
++                      disabled={docEmpty}
++                      data-tip={t('aiTidyBtn')}
++                      onClick={() => runCommand('ai-preset', t('aiTidyPrompt'))}
++                    >
++                      <span className="rb-big-icon">
++                        <span className="ai-feature-icon" aria-hidden="true">
++                          <svg
++                            viewBox="0 0 24 24"
++                            fill="none"
++                            stroke="currentColor"
++                            strokeWidth="1.5"
++                            strokeLinecap="round"
++                            strokeLinejoin="round"
++                          >
++                            <path d="M4 5H20" strokeLinecap="round" />
++                            <path d="M4 9H16" strokeLinecap="round" />
++                            <path d="M4 13H11" strokeLinecap="round" />
++                            <path d="M4 17H10" strokeLinecap="round" />
++                            <path
++                              d="M17 14L17.2579 14.697C17.5961 15.611 17.7652 16.068 18.0986 16.4014C18.432 16.7348 18.889 16.9039 19.803 17.2421L20.5 17.5L19.803 17.7579C18.889 18.0961 18.432 18.2652 18.0986 18.5986C17.7652 18.932 17.5961 19.389 17.2579 20.303L17 21L16.7421 20.303C16.4039 19.389 16.2348 18.932 15.9014 18.5986C15.568 18.2652 15.111 18.0961 14.197 17.7579L13.5 17.5L14.197 17.2421C15.111 16.9039 15.568 16.7348 15.9014 16.4014C16.2348 16.068 16.4039 15.611 16.7421 14.697L17 14Z"
++                              strokeLinejoin="round"
++                            />
++                          </svg>
++                        </span>
++                      </span>
++                      <span>{t('aiTidyBtn')}</span>
++                    </button>
++                    <button
++                      className="rb-big ai-entry"
++                      disabled={docEmpty}
++                      data-tip={t('aiMindMapBtn')}
++                      onClick={() => runCommand('ai-preset', t('aiMindMapPrompt'))}
++                    >
++                      <span className="rb-big-icon">
++                        <span className="ai-feature-icon" aria-hidden="true">
++                          <svg
++                            viewBox="0 0 24 24"
++                            fill="none"
++                            stroke="currentColor"
++                            strokeWidth="1.5"
++                            strokeLinecap="round"
++                            strokeLinejoin="round"
++                          >
++                            <rect x="2.5" y="9.5" width="6" height="5" rx="1.5" />
++                            <rect x="15.5" y="4" width="6" height="5" rx="1.5" />
++                            <rect x="15.5" y="15" width="6" height="5" rx="1.5" />
++                            <path d="M8.5 12h3.5M12 12V6.5h3.5M12 12v5.5h3.5" />
++                          </svg>
++                        </span>
++                      </span>
++                      <span>{t('aiMindMapBtn')}</span>
++                    </button>
++                  </div>
++                  <div className="ribbon-group-label">Genspark AI</div>
++                </div>
++    
++                <div className="ribbon-sep" />
++              </>
++            )}
+ 
+             <div className="ribbon-group">
                <div className="ribbon-group-items">
-                 <button
-                   className={`rb-big ai-entry ${aiEntry.pressed ? 'active' : ''}`}
 diff --git a/apps/docs/src/renderer/components/VerticalRuler.tsx b/apps/docs/src/renderer/components/VerticalRuler.tsx
 index 1ff2130..46a3121 100644
 --- a/apps/docs/src/renderer/components/VerticalRuler.tsx
@@ -928,46 +1407,270 @@ index d75bc39..42c2b00 100644
          <div className="ribbon-group-items">
            {/* Word: Insert → Comment starts a new comment; the pane toggle stays on Review.
 diff --git a/apps/docs/src/renderer/components/ribbon-tabs.tsx b/apps/docs/src/renderer/components/ribbon-tabs.tsx
-index 06a7821..c5007d0 100644
+index 06a7821..24a7d3d 100644
 --- a/apps/docs/src/renderer/components/ribbon-tabs.tsx
 +++ b/apps/docs/src/renderer/components/ribbon-tabs.tsx
-@@ -905,7 +905,7 @@ export function ReviewTab({
+@@ -1,3 +1,4 @@
++import { KERTAS_AI } from '../kertas'
+ import { useRef, useState } from 'react'
+ import { imageSizeOf } from '../editor/picture-bytes'
+ import type { Editor, JSONContent } from '@tiptap/core'
+@@ -904,22 +905,26 @@ export function ReviewTab({
+       {/* Word: Proofing (Editor) sits leftmost */}
        <div className="ribbon-group">
          <div className="ribbon-group-items">
-           <button
+-          <button
 -            className="rb-big"
-+            className="rb-big kertas-ai-off"
-             disabled={!hasDoc}
-             data-tip={`${t('ribbonEditorTip')} — ${t('ribbonAiCreditNote')}`}
-             onClick={() => {
-@@ -945,7 +945,7 @@ export function ReviewTab({
+-            disabled={!hasDoc}
+-            data-tip={`${t('ribbonEditorTip')} — ${t('ribbonAiCreditNote')}`}
+-            onClick={() => {
+-              if (hasRangeSelection()) onAiPreset(t('ribbonEditorSelectionPrompt'))
+-              else if (confirmAiRewrite()) onAiPreset(t('ribbonEditorPrompt'))
+-            }}
+-          >
+-            <span className="rb-big-icon">
+-              <span className="ai-feature-icon" aria-hidden="true">
+-                <img src={iconEditor} width={22} height={22} alt="" />
+-              </span>
+-            </span>
+-            <span>{t('ribbonEditorBtn')}</span>
+-          </button>
++          {KERTAS_AI && (
++            <>
++              <button
++                className="rb-big"
++                disabled={!hasDoc}
++                data-tip={`${t('ribbonEditorTip')} — ${t('ribbonAiCreditNote')}`}
++                onClick={() => {
++                  if (hasRangeSelection()) onAiPreset(t('ribbonEditorSelectionPrompt'))
++                  else if (confirmAiRewrite()) onAiPreset(t('ribbonEditorPrompt'))
++                }}
++              >
++                <span className="rb-big-icon">
++                  <span className="ai-feature-icon" aria-hidden="true">
++                    <img src={iconEditor} width={22} height={22} alt="" />
++                  </span>
++                </span>
++                <span>{t('ribbonEditorBtn')}</span>
++              </button>
++            </>
++          )}
+           <div className="rb-col" data-wide="1" data-collapse="2">
+             <button
+               className={`rb-small ${spellcheck ? 'active' : ''}`}
+@@ -945,43 +950,47 @@ export function ReviewTab({
  
        <div className="ribbon-group">
          <div className="ribbon-group-items">
 -          <div className="rb-split-wrap">
-+          <div className="rb-split-wrap kertas-ai-off">
-             <button
-               className="rb-big"
-               disabled={!hasDoc}
-@@ -1073,7 +1073,7 @@ export function ReviewTab({
+-            <button
+-              className="rb-big"
+-              disabled={!hasDoc}
+-              data-tip={`${t('ribbonTranslateTip')} — ${t('ribbonAiCreditNote')}`}
+-              onClick={() => toggleDropdown(setDropdown, 'translate')}
+-            >
+-              <span className="rb-big-icon">
+-                <span className="ai-feature-icon" aria-hidden="true">
+-                  <img src={iconTranslate} width={22} height={22} alt="" />
+-                </span>
+-                <IconCaret />
+-              </span>
+-              <span>{t('ribbonTranslate')}</span>
+-            </button>
+-            {dropdown === 'translate' && (
+-              <div data-rb-panel="" className="layout-menu">
+-                {TRANSLATE_LANGS.map(({ code }) => (
+-                  <button
+-                    key={code}
+-                    onClick={() => {
+-                      setDropdown(() => null)
+-                      if (hasRangeSelection()) {
+-                        onAiPreset(
+-                          t('ribbonTranslateSelectionPrompt', { lang: t(ribbonLangKey(code)) }),
+-                        )
+-                      } else if (confirmAiRewrite()) {
+-                        onAiPreset(t('ribbonTranslatePrompt', { lang: t(ribbonLangKey(code)) }))
+-                      }
+-                    }}
+-                  >
+-                    {t('ribbonTranslateTo', { lang: t(ribbonLangKey(code)) })}
+-                  </button>
+-                ))}
++          {KERTAS_AI && (
++            <>
++              <div className="rb-split-wrap">
++                <button
++                  className="rb-big"
++                  disabled={!hasDoc}
++                  data-tip={`${t('ribbonTranslateTip')} — ${t('ribbonAiCreditNote')}`}
++                  onClick={() => toggleDropdown(setDropdown, 'translate')}
++                >
++                  <span className="rb-big-icon">
++                    <span className="ai-feature-icon" aria-hidden="true">
++                      <img src={iconTranslate} width={22} height={22} alt="" />
++                    </span>
++                    <IconCaret />
++                  </span>
++                  <span>{t('ribbonTranslate')}</span>
++                </button>
++                {dropdown === 'translate' && (
++                  <div data-rb-panel="" className="layout-menu">
++                    {TRANSLATE_LANGS.map(({ code }) => (
++                      <button
++                        key={code}
++                        onClick={() => {
++                          setDropdown(() => null)
++                          if (hasRangeSelection()) {
++                            onAiPreset(
++                              t('ribbonTranslateSelectionPrompt', { lang: t(ribbonLangKey(code)) }),
++                            )
++                          } else if (confirmAiRewrite()) {
++                            onAiPreset(t('ribbonTranslatePrompt', { lang: t(ribbonLangKey(code)) }))
++                          }
++                        }}
++                      >
++                        {t('ribbonTranslateTo', { lang: t(ribbonLangKey(code)) })}
++                      </button>
++                    ))}
++                  </div>
++                )}
+               </div>
+-            )}
+-          </div>
++            </>
++          )}
+           <RbCommand cmd="tools-language" look="big">
+             <IconGlobe size={BIG} />
+           </RbCommand>
+@@ -1072,32 +1081,36 @@ export function ReviewTab({
+               <span className="rb-small-label">{t('ribbonShowComments')}</span>
              </button>
            </div>
-           <button
+-          <button
 -            className="rb-big"
-+            className="kertas-ai-off rb-big"
-             disabled={!hasDoc || openCommentCount === 0}
-             data-tip={`${t('ribbonAiCommentsTip', { count: openCommentCount })} — ${t('ribbonAiCreditNote')}`}
-             onClick={() => onAiPreset(t('ribbonAiCommentsPrompt'))}
-@@ -1289,7 +1289,7 @@ export function ReviewTab({
+-            disabled={!hasDoc || openCommentCount === 0}
+-            data-tip={`${t('ribbonAiCommentsTip', { count: openCommentCount })} — ${t('ribbonAiCreditNote')}`}
+-            onClick={() => onAiPreset(t('ribbonAiCommentsPrompt'))}
+-          >
+-            <span className="rb-big-icon">
+-              <span className="ai-feature-icon" aria-hidden="true">
+-                <svg
+-                  viewBox="0 0 24 24"
+-                  fill="none"
+-                  stroke="currentColor"
+-                  strokeWidth="1.5"
+-                  strokeLinecap="round"
+-                  strokeLinejoin="round"
+-                >
+-                  <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 3V11.5a7.5 7.5 0 0 1 7.5-7.5h2A7.5 7.5 0 0 1 20 11.5z" />
+-                  <path
+-                    d="M17 14l.26.7c.34.91.5 1.37.84 1.7.33.33.79.5 1.7.84l.7.26-.7.26c-.91.34-1.37.5-1.7.84-.34.33-.5.79-.84 1.7L17 21l-.26-.7c-.34-.91-.5-1.37-.84-1.7-.33-.34-.79-.5-1.7-.84l-.7-.26.7-.26c.91-.34 1.37-.5 1.7-.84.34-.33.5-.79.84-1.7L17 14z"
+-                    strokeLinejoin="round"
+-                  />
+-                </svg>
+-              </span>
+-            </span>
+-            <span>{t('ribbonAiComments')}</span>
+-          </button>
++          {KERTAS_AI && (
++            <>
++              <button
++                className="rb-big"
++                disabled={!hasDoc || openCommentCount === 0}
++                data-tip={`${t('ribbonAiCommentsTip', { count: openCommentCount })} — ${t('ribbonAiCreditNote')}`}
++                onClick={() => onAiPreset(t('ribbonAiCommentsPrompt'))}
++              >
++                <span className="rb-big-icon">
++                  <span className="ai-feature-icon" aria-hidden="true">
++                    <svg
++                      viewBox="0 0 24 24"
++                      fill="none"
++                      stroke="currentColor"
++                      strokeWidth="1.5"
++                      strokeLinecap="round"
++                      strokeLinejoin="round"
++                    >
++                      <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 3V11.5a7.5 7.5 0 0 1 7.5-7.5h2A7.5 7.5 0 0 1 20 11.5z" />
++                      <path
++                        d="M17 14l.26.7c.34.91.5 1.37.84 1.7.33.33.79.5 1.7.84l.7.26-.7.26c-.91.34-1.37.5-1.7.84-.34.33-.5.79-.84 1.7L17 21l-.26-.7c-.34-.91-.5-1.37-.84-1.7-.33-.34-.79-.5-1.7-.84l-.7-.26.7-.26c.91-.34 1.37-.5 1.7-.84.34-.33.5-.79.84-1.7L17 14z"
++                        strokeLinejoin="round"
++                      />
++                    </svg>
++                  </span>
++                </span>
++                <span>{t('ribbonAiComments')}</span>
++              </button>
++            </>
++          )}
+         </div>
+         <div className="ribbon-group-label">{t('ribbonGroupComments')}</div>
+       </div>
+@@ -1288,33 +1301,37 @@ export function ReviewTab({
+               <span className="rb-small-label">{t('ribbonNextChange')}</span>
              </button>
            </div>
-           <button
+-          <button
 -            className="rb-big"
-+            className="kertas-ai-off rb-big"
-             disabled={!hasDoc || revisionCount === 0}
-             data-tip={`${t('ribbonAiRevisionsTip', { count: revisionCount })} — ${t('ribbonAiCreditNote')}`}
-             onClick={() => onAiPreset(t('ribbonAiRevisionsPrompt'))}
-@@ -1688,7 +1688,7 @@ export function ViewTab({
+-            disabled={!hasDoc || revisionCount === 0}
+-            data-tip={`${t('ribbonAiRevisionsTip', { count: revisionCount })} — ${t('ribbonAiCreditNote')}`}
+-            onClick={() => onAiPreset(t('ribbonAiRevisionsPrompt'))}
+-          >
+-            <span className="rb-big-icon">
+-              <span className="ai-feature-icon" aria-hidden="true">
+-                <svg
+-                  viewBox="0 0 24 24"
+-                  fill="none"
+-                  stroke="currentColor"
+-                  strokeWidth="1.5"
+-                  strokeLinecap="round"
+-                  strokeLinejoin="round"
+-                >
+-                  <path d="M4 5h16M4 9h12M4 13h9M4 17h7" />
+-                  <path
+-                    d="M17 14l.26.7c.34.91.5 1.37.84 1.7.33.33.79.5 1.7.84l.7.26-.7.26c-.91.34-1.37.5-1.7.84-.34.33-.5.79-.84 1.7L17 21l-.26-.7c-.34-.91-.5-1.37-.84-1.7-.33-.34-.79-.5-1.7-.84l-.7-.26.7-.26c.91-.34 1.37-.5 1.7-.84.34-.33.5-.79.84-1.7L17 14z"
+-                    strokeLinejoin="round"
+-                  />
+-                  <path d="M19.5 4.5l-7 7-2 .5.5-2 7-7z" />
+-                </svg>
+-              </span>
+-            </span>
+-            <span>{t('ribbonAiRevisions')}</span>
+-          </button>
++          {KERTAS_AI && (
++            <>
++              <button
++                className="rb-big"
++                disabled={!hasDoc || revisionCount === 0}
++                data-tip={`${t('ribbonAiRevisionsTip', { count: revisionCount })} — ${t('ribbonAiCreditNote')}`}
++                onClick={() => onAiPreset(t('ribbonAiRevisionsPrompt'))}
++              >
++                <span className="rb-big-icon">
++                  <span className="ai-feature-icon" aria-hidden="true">
++                    <svg
++                      viewBox="0 0 24 24"
++                      fill="none"
++                      stroke="currentColor"
++                      strokeWidth="1.5"
++                      strokeLinecap="round"
++                      strokeLinejoin="round"
++                    >
++                      <path d="M4 5h16M4 9h12M4 13h9M4 17h7" />
++                      <path
++                        d="M17 14l.26.7c.34.91.5 1.37.84 1.7.33.33.79.5 1.7.84l.7.26-.7.26c-.91.34-1.37.5-1.7.84-.34.33-.5.79-.84 1.7L17 21l-.26-.7c-.34-.91-.5-1.37-.84-1.7-.33-.34-.79-.5-1.7-.84l-.7-.26.7-.26c.91-.34 1.37-.5 1.7-.84.34-.33.5-.79.84-1.7L17 14z"
++                        strokeLinejoin="round"
++                      />
++                      <path d="M19.5 4.5l-7 7-2 .5.5-2 7-7z" />
++                    </svg>
++                  </span>
++                </span>
++                <span>{t('ribbonAiRevisions')}</span>
++              </button>
++            </>
++          )}
+         </div>
+         <div className="ribbon-group-label">{t('ribbonGroupChanges')}</div>
+       </div>
+@@ -1688,7 +1705,7 @@ export function ViewTab({
                      }}
                    >
                      {w.focused ? '✓ ' : ''}
@@ -1204,565 +1907,6 @@ index a682d4f..2806046 100644
      return true
    } catch (err) {
      if (generation !== openGeneration) return
-diff --git a/apps/docs/src/renderer/fonts/README.md b/apps/docs/src/renderer/fonts/README.md
-index 980695e..89fce5a 100644
---- a/apps/docs/src/renderer/fonts/README.md
-+++ b/apps/docs/src/renderer/fonts/README.md
-@@ -70,7 +70,7 @@ forms + basic Latin
- Rare characters outside the subset still fall through to system fonts (shown as
- missing glyphs in minimal environments); bold is synthesized by the browser.
- 
--The serif subset also backs the `GenOffice Fullwidth TC` face (`fonts.css`), a
-+The serif subset also backs the `Kertas Fullwidth TC` face (`fonts.css`), a
- unicode-range shim (U+FF0D/FF0F/FF3C/FF3F/FF5E) slotted before Songti TC in the
- Traditional Chinese serif chain: Songti TC draws those fullwidth glyphs at
- ~0.2-0.5em of ink inside the 1em advance, so a PMingLiU document's U+FF0F
-@@ -81,9 +81,9 @@ chain order; advances are 1.0em everywhere, so line breaking is unchanged.
- 
- | Font                                 | Role                                                        |
- | ------------------------------------ | ----------------------------------------------------------- |
--| GenOffice Serif KR (subset woff2)    | Batang-metric stand-in for Korean serif families            |
--| GenOffice Sans KR (subset woff2)     | fallback for Korean sans families (Malgun etc.)             |
--| GenOffice Che Latin KR (ASCII woff2) | half-width Latin for BatangChe/GulimChe/DotumChe/GungsuhChe |
-+| Kertas Serif KR (subset woff2)    | Batang-metric stand-in for Korean serif families            |
-+| Kertas Sans KR (subset woff2)     | fallback for Korean sans families (Malgun etc.)             |
-+| Kertas Che Latin KR (ASCII woff2) | half-width Latin for BatangChe/GulimChe/DotumChe/GungsuhChe |
- 
- Source: Noto Serif/Sans CJK KR Regular from [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk)
- (SIL OFL 1.1), subset with fonttools to the 2,350 KS X 1001 syllables + jamo
-@@ -106,7 +106,7 @@ ink widths and side bearings of Batang/Malgun
- (`tools/normalize-kr-latin-metrics.py`,
- `tools/scale-kr-sans-latin-ink.py`).
- 
--`GenOfficeCheLatinKR.woff2` is an ASCII-only derivative of GenOffice Sans KR.
-+`GenOfficeCheLatinKR.woff2` is an ASCII-only derivative of Kertas Sans KR.
- `tools/build-kr-che-latin-font.py` gives its Noto-derived outlines fixed 0.5em
- advances and transforms them to measured DotumChe ink boxes. Microsoft Office
- fonts are build-time measurement references only; no Microsoft outlines are
-@@ -117,11 +117,11 @@ counterpart line factors live in `lineHeightFactor()` of `line-metrics.ts`.
- The Sans/Che source copyright (Adobe 2014–2021 and Google LLC), Serif source
- copyright (Adobe 2017–2024), and full OFL 1.1 text are in `LICENSE-OFL.txt`.
- 
--### GenOffice Gothic KR
-+### Kertas Gothic KR
- 
- | Font                               | Role                                            |
- | ---------------------------------- | ----------------------------------------------- |
--| GenOffice Gothic KR (subset woff2) | real-metric face for NanumGothic-declaring docs |
-+| Kertas Gothic KR (subset woff2) | real-metric face for NanumGothic-declaring docs |
- 
- Source: NanumGothic Regular from [google/fonts](https://github.com/google/fonts/tree/main/ofl/nanumgothic)
- (SIL OFL 1.1). Word for Mac renders NanumGothic documents with the OS
-@@ -136,11 +136,11 @@ Reserved Font Names include "Nanum" and "NanumGothic"; subsetting is a
- modification). The exact NHN copyright/Reserved Font Name notice and the full
- OFL 1.1 text are in `LICENSE-OFL.txt`.
- 
--### GenOffice UI Kana JP
-+### Kertas UI Kana JP
- 
- | Font                                      | Role                                                |
- | ----------------------------------------- | --------------------------------------------------- |
--| GenOffice UI Kana JP (Regular/Bold woff2) | Meiryo UI-advance kana/JP punctuation for the alias |
-+| Kertas UI Kana JP (Regular/Bold woff2) | Meiryo UI-advance kana/JP punctuation for the alias |
- 
- Source: Noto Sans JP variable font from [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk)
- (SIL OFL 1.1), instanced at wght 400/700. Word for Mac renders Meiryo UI with
-@@ -159,7 +159,7 @@ outlines are modified).
- 
- | Font                             | Role                                 |
- | -------------------------------- | ------------------------------------ |
--| GenOffice Poppins (subset woff2) | real face for Poppins-declaring docs |
-+| Kertas Poppins (subset woff2) | real face for Poppins-declaring docs |
- 
- Source: Poppins Regular/Bold from [google/fonts](https://github.com/google/fonts/tree/main/ofl/poppins)
- (SIL OFL 1.1). Poppins is an M365 cloud font: Word downloads the real face and
-@@ -177,7 +177,7 @@ order. Italic synthesizes oblique from these faces.
- 
- | Font                             | Role                                 |
- | -------------------------------- | ------------------------------------ |
--| GenOffice DM Sans (subset woff2) | real face for DM Sans-declaring docs |
-+| Kertas DM Sans (subset woff2) | real face for DM Sans-declaring docs |
- 
- Source: DM Sans 1.200 Regular/Bold statics from [google/fonts](https://github.com/google/fonts/tree/af0704e25dfad3e8999a2955cbbdfa2b28099617/ofl/dmsans)
- (SIL OFL 1.1; the current upstream is a variable font whose instances no
-@@ -196,7 +196,7 @@ Italic synthesizes oblique from these faces.
- 
- | Font                    | Role                                     |
- | ----------------------- | ---------------------------------------- |
--| GenOffice Tamil (woff2) | Latha-metric stand-in for Tamil families |
-+| Kertas Tamil (woff2) | Latha-metric stand-in for Tamil families |
- 
- Source: Noto Sans Tamil Regular from [notofonts](https://github.com/notofonts/notofonts.github.io)
- (SIL OFL 1.1). Word substitutes missing Tamil families with Latha; Chromium's
-@@ -213,8 +213,8 @@ per OFL ("Noto" is a Reserved Font Name; advances are modified).
- 
- | Font                                   | Role                                                    |
- | -------------------------------------- | ------------------------------------------------------- |
--| GenOffice Cordia (Regular/Bold woff2)  | Cordia New-metric stand-in for Thai families Word lacks |
--| GenOffice Sarabun (Regular/Bold woff2) | TH SarabunPSK-metric stand-in (Word ships that face)    |
-+| Kertas Cordia (Regular/Bold woff2)  | Cordia New-metric stand-in for Thai families Word lacks |
-+| Kertas Sarabun (Regular/Bold woff2) | TH SarabunPSK-metric stand-in (Word ships that face)    |
- 
- Word for Mac ships Cordia New and TH SarabunPSK in its DFonts and substitutes
- Cordia New for every other Thai family (TH SarabunIT9, Angsana New, the UPC
-@@ -237,7 +237,7 @@ and ink contract; the line factors (1.147 / 1.31) live in `line-factors.json`.
- 
- | Font                      | Role                                         |
- | ------------------------- | -------------------------------------------- |
--| GenOffice Bengali (woff2) | Nirmala UI-metric stand-in, Regular and Bold |
-+| Kertas Bengali (woff2) | Nirmala UI-metric stand-in, Regular and Bold |
- 
- Source: Noto Sans Bengali Regular/Bold from [notofonts](https://github.com/notofonts/notofonts.github.io)
- (SIL OFL 1.1). Word for Mac renders Nirmala UI for real (M365 cloud font);
-@@ -277,7 +277,7 @@ serif, so unknown Arabic families default to the Naskh chain.
- 
- | Font                              | Role                                             |
- | --------------------------------- | ------------------------------------------------ |
--| GenOffice PUA Blank (woff2, 312B) | blank 1em glyph for all of U+E000-F8FF (BMP PUA) |
-+| Kertas PUA Blank (woff2, 312B) | blank 1em glyph for all of U+E000-F8FF (BMP PUA) |
- 
- Generated from scratch by `tools/build-pua-blank-font.py` (no upstream font;
- two glyphs, both empty). Chromium never system-falls-back for Private Use
-@@ -294,8 +294,8 @@ Every bundled face carries TrueType (glyf) outlines. Chromium's PDF backend
- (Skia, `printToPDF`) cannot embed CFF-flavoured faces: each glyph drawn with
- one lands in the exported PDF as a Type3 path procedure instead of an embedded
- font (no font name in the viewer, unreliable text selection and search).
--Noto Sans/Serif CJK SC and the three Noto-derived KR faces (GenOffice Sans KR,
--GenOffice Serif KR, GenOffice Che Latin KR) come from CFF sources, so the last
-+Noto Sans/Serif CJK SC and the three Noto-derived KR faces (Kertas Sans KR,
-+GenOffice Serif KR, Kertas Che Latin KR) come from CFF sources, so the last
- build step for them is `tools/convert-cff-to-glyf.py`: cu2qu at 1 font unit,
- glyph order, cmap, advances, OS/2, hhea/vhea, name and layout tables carried
- over byte for byte (the script asserts it), VORG dropped with each vertical
-@@ -305,6 +305,6 @@ origin kept in vmtx. Only outlines change, so the OFL Reserved Font Name
- `tools/scale-kr-sans-latin-ink.py` and `tools/build-kr-che-latin-font.py`
- edit CFF charstrings: run them on a CFF build, then convert. Those charstrings
- also carried their own widths, which no longer matched the normalized hmtx
--(hangul 0.92em, `A` 1.275em in GenOffice Sans KR). Chromium on Windows
-+(hangul 0.92em, `A` 1.275em in Kertas Sans KR). Chromium on Windows
- measured the CFF faces with those widths (probe 2026-10-31) while macOS used
- hmtx; glyf has no widths of its own, so hmtx now holds on every platform.
-diff --git a/apps/docs/src/renderer/fonts/fonts.css b/apps/docs/src/renderer/fonts/fonts.css
-index 4c05654..b7082d9 100644
---- a/apps/docs/src/renderer/fonts/fonts.css
-+++ b/apps/docs/src/renderer/fonts/fonts.css
-@@ -202,7 +202,7 @@
-  * generated font (tools/build-pua-blank-font.py) maps all of U+E000-F8FF to a
-  * blank 1em glyph so PUA stays invisible in the chains that carry it. */
- @font-face {
--  font-family: 'GenOffice PUA Blank';
-+  font-family: 'Kertas PUA Blank';
-   src: url('./GenOfficePUABlank.woff2') format('woff2');
-   unicode-range: U+E000-F8FF;
-   font-weight: normal;
-@@ -215,7 +215,7 @@
-  * at a 1em advance and would swallow Latin punctuation ahead of the generic
-  * face, shifting every wrap. CJK-named unknown fonts keep the full subsets
-  * (fullwidth quotes are correct inside CJK body text). Same ranges as the
-- * 'GenOffice Hiragino/Batang…' local() aliases below. */
-+ * 'Kertas Hiragino/Batang…' local() aliases below. */
- @font-face {
-   font-family: 'Noto Sans CJK GO';
-   src: url('./NotoSansCJKsc-Regular-subset.woff2') format('woff2');
-@@ -244,14 +244,14 @@
-  * sans Basic Latin matches Malgun (tools/normalize-kr-sans-hmtx.py).
-  */
- @font-face {
--  font-family: 'GenOffice Sans KR';
-+  font-family: 'Kertas Sans KR';
-   src: url('./GenOfficeSansKR-Regular-subset.woff2') format('woff2');
-   font-weight: normal;
-   font-style: normal;
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Serif KR';
-+  font-family: 'Kertas Serif KR';
-   src: url('./GenOfficeSerifKR-Regular-subset.woff2') format('woff2');
-   font-weight: normal;
-   font-style: normal;
-@@ -283,7 +283,7 @@
-  * (tools/build-gothic-kr-font.py), advances unmodified; renamed per OFL
-  * ("Nanum" is a Reserved Font Name and subsetting is a modification). */
- @font-face {
--  font-family: 'GenOffice Gothic KR';
-+  font-family: 'Kertas Gothic KR';
-   src: url('./GenOfficeGothicKR-Regular-subset.woff2') format('woff2');
-   font-weight: normal;
-   font-style: normal;
-@@ -296,7 +296,7 @@
-  * Sans KR outlines reshaped to DotumChe ink boxes); hangul falls through to
-  * the KR chains. */
- @font-face {
--  font-family: 'GenOffice Che Latin KR';
-+  font-family: 'Kertas Che Latin KR';
-   src: url('./GenOfficeCheLatinKR.woff2') format('woff2');
-   unicode-range: U+0020-007E;
-   font-weight: normal;
-@@ -307,7 +307,7 @@
- /* SimSun ASCII is half-width fixed pitch (Word PDF: 0.5em per character at
-  * 12pt); the -Che face carries the same 0.5em advances. */
- @font-face {
--  font-family: 'GenOffice SimSun Latin';
-+  font-family: 'Kertas SimSun Latin';
-   src: url('./GenOfficeCheLatinKR.woff2') format('woff2');
-   unicode-range: U+0020-007E;
-   font-weight: normal;
-@@ -321,7 +321,7 @@
-  * this one-glyph face (tools/build-balanced-space-font.py). Its 0.8/0.2 line
-  * box sits inside every CJK face's, so the wrapped span never lifts a line. */
- @font-face {
--  font-family: 'GenOffice Balanced Space';
-+  font-family: 'Kertas Balanced Space';
-   src: url('./GenOfficeBalancedSpace.woff2') format('woff2');
-   unicode-range: U+0020;
-   font-weight: normal;
-@@ -382,14 +382,14 @@
-  * bundled (tools/build-poppins-font.py). A locally installed Poppins still
-  * precedes this face in the chain. */
- @font-face {
--  font-family: 'GenOffice Poppins';
-+  font-family: 'Kertas Poppins';
-   src: url('./GenOfficePoppins-Regular-subset.woff2') format('woff2');
-   font-weight: normal;
-   font-style: normal;
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Poppins';
-+  font-family: 'Kertas Poppins';
-   src: url('./GenOfficePoppins-Bold-subset.woff2') format('woff2');
-   font-weight: bold;
-   font-style: normal;
-@@ -402,14 +402,14 @@
-  * Latin subset is bundled (tools/build-dm-sans-font.py). A locally installed
-  * DM Sans still precedes this face in the chain. */
- @font-face {
--  font-family: 'GenOffice DM Sans';
-+  font-family: 'Kertas DM Sans';
-   src: url('./GenOfficeDMSans-Regular-subset.woff2') format('woff2');
-   font-weight: normal;
-   font-style: normal;
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice DM Sans';
-+  font-family: 'Kertas DM Sans';
-   src: url('./GenOfficeDMSans-Bold-subset.woff2') format('woff2');
-   font-weight: bold;
-   font-style: normal;
-@@ -501,7 +501,7 @@
-  * half-width slash. Serve them from the bundled Noto subset (ink matches
-  * PMingLiU); real PMingLiU still precedes this face in the TC serif chain. */
- @font-face {
--  font-family: 'GenOffice Fullwidth TC';
-+  font-family: 'Kertas Fullwidth TC';
-   src: url('./NotoSerifCJKsc-Regular-subset.woff2') format('woff2');
-   unicode-range: U+FF0D, U+FF0F, U+FF3C, U+FF3F, U+FF5E;
-   font-weight: normal;
-@@ -514,7 +514,7 @@
-  * at weight normal only, forces Blink to synthesize bold at >=600. On Windows the
-  * local() sources don't resolve and the chain falls through to SimSun. */
- @font-face {
--  font-family: 'GenOffice Songti SC';
-+  font-family: 'Kertas Songti SC';
-   src: local('STSongti-SC-Regular'), local('Songti SC Regular');
-   font-weight: normal;
-   font-style: normal;
-@@ -525,7 +525,7 @@
-  * (0.075). Registering weight-normal only makes Blink synthesize (0.082) instead of
-  * selecting the anemic face, so bold TC headings read as bold like in Word. */
- @font-face {
--  font-family: 'GenOffice Songti TC';
-+  font-family: 'Kertas Songti TC';
-   src: local('STSongti-TC-Regular'), local('Songti TC Regular');
-   font-weight: normal;
-   font-style: normal;
-@@ -538,13 +538,13 @@
-  * expose only the CJK ranges; other scripts continue down the chain to
-  * proportional faces. Roman numerals (U+2160-217F) are included: East Asian
-  * faces draw them fullwidth like Word (prod_020 JP reference list). Registered weight-normal (bold synthesized, like
-- * 'GenOffice Songti SC') except Hiragino Sans, which has a real W6 face.
-+ * 'Kertas Songti SC') except Hiragino Sans, which has a real W6 face.
-  * Hiragino Mincho stays weight-normal on purpose: Word's JP serif faces
-  * (Yu Mincho, MS Mincho) ship no bold and Word synthesizes uniform thick
-  * strokes, while real Mincho W6 keeps hairline horizontals — a bold U+4E00
-  * reads as an arrow at body sizes (prod_070 table caption). */
- @font-face {
--  font-family: 'GenOffice Hiragino Sans';
-+  font-family: 'Kertas Hiragino Sans';
-   src: local('Hiragino Sans'), local('HiraginoSans-W3'), local('MS Gothic');
-   unicode-range:
-     U+2160-217F, U+2E80-303F, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+AC00-D7A3, U+F900-FAFF,
-@@ -553,7 +553,7 @@
-   font-style: normal;
- }
- @font-face {
--  font-family: 'GenOffice Hiragino Sans';
-+  font-family: 'Kertas Hiragino Sans';
-   src: local('HiraginoSans-W6'), local('Hiragino Sans W6');
-   unicode-range:
-     U+2160-217F, U+2E80-303F, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+AC00-D7A3, U+F900-FAFF,
-@@ -573,7 +573,7 @@
-   font-style: normal;
- }
- @font-face {
--  font-family: 'GenOffice Hiragino Mincho';
-+  font-family: 'Kertas Hiragino Mincho';
-   src: local('Hiragino Mincho ProN'), local('HiraMinProN-W3');
-   unicode-range:
-     U+2160-217F, U+2E80-303F, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+AC00-D7A3, U+F900-FAFF,
-@@ -582,7 +582,7 @@
-   font-style: normal;
- }
- @font-face {
--  font-family: 'GenOffice MS Mincho';
-+  font-family: 'Kertas MS Mincho';
-   src: local('MS Mincho'), local('MS PMincho');
-   unicode-range:
-     U+2160-217F, U+2E80-303F, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+AC00-D7A3, U+F900-FAFF,
-@@ -591,7 +591,7 @@
-   font-style: normal;
- }
- @font-face {
--  font-family: 'GenOffice Batang';
-+  font-family: 'Kertas Batang';
-   src: local('Batang'), local('BatangChe');
-   unicode-range:
-     U+2160-217F, U+2E80-303F, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+AC00-D7A3, U+F900-FAFF,
-@@ -600,7 +600,7 @@
-   font-style: normal;
- }
- @font-face {
--  font-family: 'GenOffice Myungjo';
-+  font-family: 'Kertas Myungjo';
-   src: local('AppleMyungjo');
-   unicode-range:
-     U+2160-217F, U+2E80-303F, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+AC00-D7A3, U+F900-FAFF,
-@@ -609,7 +609,7 @@
-   font-style: normal;
- }
- @font-face {
--  font-family: 'GenOffice Heiti TC';
-+  font-family: 'Kertas Heiti TC';
-   src: local('Heiti TC'), local('Heiti TC Light'), local('STHeitiTC-Light');
-   unicode-range:
-     U+2160-217F, U+2E80-303F, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+AC00-D7A3, U+F900-FAFF,
-@@ -618,7 +618,7 @@
-   font-style: normal;
- }
- @font-face {
--  font-family: 'GenOffice MingLiU';
-+  font-family: 'Kertas MingLiU';
-   src: local('PMingLiU'), local('MingLiU');
-   unicode-range:
-     U+2160-217F, U+2E80-303F, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+AC00-D7A3, U+F900-FAFF,
-@@ -633,7 +633,7 @@
-  * Sans Tamil with advances rewritten to Latha's (tools/build-tamil-font.py;
-  * shaped sentence R 0.994, all probe sentences within ±2.3%). */
- @font-face {
--  font-family: 'GenOffice Tamil';
-+  font-family: 'Kertas Tamil';
-   src: url('./GenOfficeTamil-Regular.woff2') format('woff2');
-   font-weight: normal;
-   font-style: normal;
-@@ -645,14 +645,14 @@
-  * advances rewritten to Nirmala UI's (tools/build-bengali-font.py; shaped
-  * body paragraphs within 0.98-1.02 of Nirmala UI). */
- @font-face {
--  font-family: 'GenOffice Bengali';
-+  font-family: 'Kertas Bengali';
-   src: url('./GenOfficeBengali-Regular.woff2') format('woff2');
-   font-weight: normal;
-   font-style: normal;
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Bengali';
-+  font-family: 'Kertas Bengali';
-   src: url('./GenOfficeBengali-Bold.woff2') format('woff2');
-   font-weight: bold;
-   font-style: normal;
-@@ -663,7 +663,7 @@
-  * subset at 1em fullwidth and an 80-char rule overflows the column (Word draws
-  * it ~0.65em on a single line). Menlo/Consolas keep them ~0.6em. */
- @font-face {
--  font-family: 'GenOffice Box Drawing';
-+  font-family: 'Kertas Box Drawing';
-   /* Chromium local() matches PostScript/full names, not family names */
-   src: local('Menlo-Regular'), local('Menlo Regular'), local('Menlo'), local('Consolas');
-   unicode-range: U+2500-257F;
-@@ -675,7 +675,7 @@
-  * through to AppleMyungjo, whose U+2082 is a full-width (1.0em) glyph —
-  * "Cu₂O" rendered as "Cu₂ O". Serve them from bundled latin faces instead. */
- @font-face {
--  font-family: 'GenOffice Sans KR';
-+  font-family: 'Kertas Sans KR';
-   src: url('@genoffice/ui/fonts/Carlito-Regular.ttf') format('truetype');
-   unicode-range: U+2070-209F, U+00B2-00B3, U+00B9;
-   font-weight: normal;
-@@ -683,7 +683,7 @@
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Serif KR';
-+  font-family: 'Kertas Serif KR';
-   /* Carlito, not Caladea/LiberationSerif: only Carlito covers the whole block */
-   src: url('@genoffice/ui/fonts/Carlito-Regular.ttf') format('truetype');
-   unicode-range: U+2070-209F, U+00B2-00B3, U+00B9;
-diff --git a/apps/docs/src/renderer/fonts/fonts.generated.css b/apps/docs/src/renderer/fonts/fonts.generated.css
-index 1423475..fa7c658 100644
---- a/apps/docs/src/renderer/fonts/fonts.generated.css
-+++ b/apps/docs/src/renderer/fonts/fonts.generated.css
-@@ -3218,25 +3218,25 @@
-  * Liberation Sans size-adjusted to the Word face's Latin advances (hmtx sentence ratio
-  * over a mixed-case English sample).
-  * 
-- * GenOffice Cordia: hmtx 2026-11-03
-+ * Kertas Cordia: hmtx 2026-11-03
-  * Thai advances per glyph from hmtx, Regular and Bold; Latin ratio 0.649 regular / 0.643 bold
-  * fonts: Cordia New (Word DFonts cordia.ttc); NotoSansThai; LiberationSans */
- @font-face {
--  font-family: 'GenOffice Cordia';
-+  font-family: 'Kertas Cordia';
-   src: url('./GenOfficeCordia-Regular.woff2') format('woff2');
-   font-weight: normal;
-   font-style: normal;
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Cordia';
-+  font-family: 'Kertas Cordia';
-   src: url('./GenOfficeCordia-Bold.woff2') format('woff2');
-   font-weight: bold;
-   font-style: normal;
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Cordia';
-+  font-family: 'Kertas Cordia';
-   src: url('./LiberationSans-Regular.ttf');
-   size-adjust: 64.9%;
-   unicode-range: U+0000-0DFF, U+0E80-10FFFF;
-@@ -3245,7 +3245,7 @@
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Cordia';
-+  font-family: 'Kertas Cordia';
-   src: url('./LiberationSans-Bold.ttf');
-   size-adjust: 64.3%;
-   unicode-range: U+0000-0DFF, U+0E80-10FFFF;
-@@ -3260,10 +3260,10 @@
-  * itself resolves ahead of this alias.
-  * Chromium local() matches PostScript/full names, not family names.
-  * 
-- * GenOffice Ethiopic: corpus 2026-08-13
-+ * Kertas Ethiopic: corpus 2026-08-13
-  * regression sample 39: line breaks match Word at 72%; the residual page-4 spill is line-height, not width */
- @font-face {
--  font-family: 'GenOffice Ethiopic';
-+  font-family: 'Kertas Ethiopic';
-   src: local('Kefa-Regular'), local('Kefa Regular'), local('Kefa');
-   size-adjust: 72%;
-   font-weight: normal;
-@@ -3280,25 +3280,25 @@
-  * Liberation Sans size-adjusted to the Word face's Latin advances (hmtx sentence ratio
-  * over a mixed-case English sample).
-  * 
-- * GenOffice Sarabun: hmtx 2026-11-03
-+ * Kertas Sarabun: hmtx 2026-11-03
-  * Thai advances per glyph from hmtx, Regular and Bold; Latin ratio 0.644 regular / 0.657 bold
-  * fonts: TH SarabunPSK (Word DFonts thsarabun.ttf); NotoSansThai; LiberationSans */
- @font-face {
--  font-family: 'GenOffice Sarabun';
-+  font-family: 'Kertas Sarabun';
-   src: url('./GenOfficeSarabun-Regular.woff2') format('woff2');
-   font-weight: normal;
-   font-style: normal;
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Sarabun';
-+  font-family: 'Kertas Sarabun';
-   src: url('./GenOfficeSarabun-Bold.woff2') format('woff2');
-   font-weight: bold;
-   font-style: normal;
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Sarabun';
-+  font-family: 'Kertas Sarabun';
-   src: url('./LiberationSans-Regular.ttf');
-   size-adjust: 64.4%;
-   unicode-range: U+0000-0DFF, U+0E80-10FFFF;
-@@ -3307,7 +3307,7 @@
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice Sarabun';
-+  font-family: 'Kertas Sarabun';
-   src: url('./LiberationSans-Bold.ttf');
-   size-adjust: 65.7%;
-   unicode-range: U+0000-0DFF, U+0E80-10FFFF;
-@@ -3321,11 +3321,11 @@
-  * alias keeps digit-heavy cells wrapping like Word. A locally installed YaHei
-  * precedes it in the chain.
-  * 
-- * GenOffice YaHei Latin: hmtx 2026-09-23
-+ * Kertas YaHei Latin: hmtx 2026-09-23
-  * tabular digits 0.586em (bold 0.617) vs Helvetica 0.556
-  * fonts: Microsoft YaHei; Helvetica */
- @font-face {
--  font-family: 'GenOffice YaHei Latin';
-+  font-family: 'Kertas YaHei Latin';
-   src: local('Helvetica'), local('ArialMT'), url('./LiberationSans-Regular.ttf');
-   size-adjust: 106%;
-   unicode-range: U+0020-007E;
-@@ -3334,7 +3334,7 @@
-   font-display: block;
- }
- @font-face {
--  font-family: 'GenOffice YaHei Latin';
-+  font-family: 'Kertas YaHei Latin';
-   src: local('Helvetica-Bold'), local('Arial-BoldMT'), url('./LiberationSans-Bold.ttf');
-   size-adjust: 108%;
-   unicode-range: U+0020-007E;
-@@ -3445,7 +3445,7 @@
-  * (text-weighted mean 0.769em, bold 0.820em), U+30FC 0.816/0.882em,
-  * ideographic space and 、。 0.664em, corner/angle brackets and ・ 0.5em, at
-  * full glyph height; kanji and （）：；！？ stay 1em and fall through to the
-- * chain. The bundled GenOffice UI Kana JP faces (tools/build-meiryo-ui-kana-
-+ * chain. The bundled Kertas UI Kana JP faces (tools/build-meiryo-ui-kana-
-  * font.py: Noto Sans JP outlines condensed horizontally to Meiryo UI's exact
-  * per-glyph advances) carry those ranges — a size-adjust alias would shrink
-  * the height too and leave kana at ~77% next to full-size kanji. Latin in
-@@ -3454,7 +3454,7 @@
-  * these aliases in the chain.
-  * 
-  * Meiryo UI GO: probe 2026-09-03
-- * Word probe from meiryo.ttc: Latin Verdana-derived at 0.9705x (bold 0.948x), kana via the bundled GenOffice UI Kana JP faces */
-+ * Word probe from meiryo.ttc: Latin Verdana-derived at 0.9705x (bold 0.948x), kana via the bundled Kertas UI Kana JP faces */
- @font-face {
-   font-family: 'Meiryo UI GO';
-   src: url('./GenOfficeUIKanaJP-Regular.woff2') format('woff2');
-@@ -6031,14 +6031,14 @@
-  * Chromium never see it, so Bengali runs fell to Kohinoor Bangla, 1.34x the Word
-  * line width, and a 38-page Bengali document wrapped to 40 pages. Its glyphs sit
-  * small in the em: the Bengali block is 0.69 of Nirmala UI's advances at a
-- * near-constant ratio (one size-adjusted GenOffice Bengali face per weight) and
-+ * near-constant ratio (one size-adjusted Kertas Bengali face per weight) and
-  * its Latin is Times at 0.827 for every glyph (the rangeless Liberation Serif
-  * faces, which also keep quotes and dashes off the CJK tail). Every face pins the
-  * cloud font's hhea box (0.8081 / 0.4863 regular, 0.8403 / 0.4775 bold) divided
-  * by its size-adjust. Word has no italic cut; both sides synthesize it.
-  * 
-  * Shonar Bangla GO: hmtx 2026-11-12
-- * hb-shape widths of 207 Bengali paragraphs of a corpus document: Shonar Bangla over GenOffice Bengali 0.687 regular (p10-p90 0.674-0.706), 0.686 bold (0.673-0.700); hmtx of its Latin letters, digits, punctuation, quotes and space over Liberation Serif 0.827 for every glyph in both cuts; Word paces the face at its hhea box (10.5 pt at line 340 auto -> 19.7 pt)
-+ * hb-shape widths of 207 Bengali paragraphs of a corpus document: Shonar Bangla over Kertas Bengali 0.687 regular (p10-p90 0.674-0.706), 0.686 bold (0.673-0.700); hmtx of its Latin letters, digits, punctuation, quotes and space over Liberation Serif 0.827 for every glyph in both cuts; Word paces the face at its hhea box (10.5 pt at line 340 auto -> 19.7 pt)
-  * fonts: Shonar Bangla Regular/Bold (Office CloudFonts cache); GenOfficeBengali-Regular/Bold.woff2; LiberationSerif-Regular/Bold.ttf */
- @font-face {
-   font-family: 'Shonar Bangla GO';
 diff --git a/apps/docs/src/renderer/html-export.ts b/apps/docs/src/renderer/html-export.ts
 index 2eae9d1..27180c9 100644
 --- a/apps/docs/src/renderer/html-export.ts
@@ -2591,6 +2735,53 @@ index 0000000..905d9dd
 +    ]
 +  },
 +})
+diff --git a/apps/docs/src/renderer/kertas/no-ai/AiAskPopover.tsx b/apps/docs/src/renderer/kertas/no-ai/AiAskPopover.tsx
+new file mode 100644
+index 0000000..000780e
+--- /dev/null
++++ b/apps/docs/src/renderer/kertas/no-ai/AiAskPopover.tsx
+@@ -0,0 +1,4 @@
++// Kertas Office has no AI assistant: the "ask about the selection" bubble is not built.
++export function AiAskPopover(): null {
++  return null
++}
+diff --git a/apps/docs/src/renderer/kertas/no-ai/AiPanel.tsx b/apps/docs/src/renderer/kertas/no-ai/AiPanel.tsx
+new file mode 100644
+index 0000000..3107042
+--- /dev/null
++++ b/apps/docs/src/renderer/kertas/no-ai/AiPanel.tsx
+@@ -0,0 +1,11 @@
++// Kertas Office has no AI assistant. This stands in for the assistant's panel
++// when Kertas builds the editor (see kertas.vite.config.ts), so none of the
++// assistant's code, prompts or network calls are part of the build.
++import { forwardRef } from 'react'
++
++export const AiPanel = forwardRef<unknown, Record<string, unknown>>(function AiPanel() {
++  return null
++})
++
++/** the author name the assistant's own tracked changes carried; nothing writes them here */
++export const aiRevisionAuthor = (): string => ''
+diff --git a/apps/docs/src/renderer/kertas/no-ai/mcp-bridge.ts b/apps/docs/src/renderer/kertas/no-ai/mcp-bridge.ts
+new file mode 100644
+index 0000000..b01366b
+--- /dev/null
++++ b/apps/docs/src/renderer/kertas/no-ai/mcp-bridge.ts
+@@ -0,0 +1,4 @@
++// Kertas Office has no AI assistant: nothing outside the app drives the editor.
++export function installMcpBridge(): () => void {
++  return () => {}
++}
+diff --git a/apps/docs/src/renderer/kertas/no-ai/tools.ts b/apps/docs/src/renderer/kertas/no-ai/tools.ts
+new file mode 100644
+index 0000000..cc37f40
+--- /dev/null
++++ b/apps/docs/src/renderer/kertas/no-ai/tools.ts
+@@ -0,0 +1,4 @@
++// Kertas Office has no AI assistant: the assistant's tools are not built. The
++// editor only told them which document they had last read.
++export function carryDocSeen(): void {}
++export function markDocSeen(): void {}
 diff --git a/apps/docs/src/renderer/kertas/skin.css b/apps/docs/src/renderer/kertas/skin.css
 new file mode 100644
 index 0000000..9286c06
@@ -3356,18 +3547,9 @@ index 3bb7827..d5b9e5a 100644
  import { connectAppWideMeasurementUnit } from './units'
  import { setAltChunkHtmlConverter } from '@genoffice/docx-engine'
 diff --git a/apps/docs/src/renderer/styles.css b/apps/docs/src/renderer/styles.css
-index 9a7923c..9945d8b 100644
+index 9a7923c..98d00b6 100644
 --- a/apps/docs/src/renderer/styles.css
 +++ b/apps/docs/src/renderer/styles.css
-@@ -5559,7 +5559,7 @@ th[data-rev-fmt] {
-    on this span made the table-row cut measuring split a two-line row across
-    pages. */
- .doc-balanced-space {
--  font-family: 'GenOffice Balanced Space';
-+  font-family: 'Kertas Balanced Space';
- }
- 
- /* dark page in the light theme: Word's gray band around the dark paper — one
 @@ -9763,7 +9763,7 @@ body.docs-crop-active
    display: flex;
    flex-direction: column;
@@ -3392,290 +3574,22 @@ index 9a7923c..9945d8b 100644
 +  display: none !important;
 +}
 diff --git a/apps/docs/src/renderer/text-layout/face-chains.ts b/apps/docs/src/renderer/text-layout/face-chains.ts
-index 7792f44..e512fe1 100644
+index 7792f44..e6a5b67 100644
 --- a/apps/docs/src/renderer/text-layout/face-chains.ts
 +++ b/apps/docs/src/renderer/text-layout/face-chains.ts
-@@ -18,55 +18,55 @@ import {
- 
- export const CJK_SERIF = 'Noto Serif CJK SC'
- export const CJK_SANS = 'Noto Sans CJK SC'
--export const BOX = 'GenOffice Box Drawing'
-+export const BOX = 'Kertas Box Drawing'
- // KR tail: hangul a Japanese face cannot draw is Word's per-glyph fallback, Malgun
- // Gothic or Batang at 1em (probes 2026-09-30, 2026-11-03); without it Chromium's
- // system fallback packs the syllables at 0.865em
- export const JA_SANS = [
-   'Yu Gothic',
--  'GenOffice Hiragino Sans',
-+  'Kertas Hiragino Sans',
-   'Meiryo',
-   'Noto Sans JP',
--  'GenOffice Sans KR',
-+  'Kertas Sans KR',
- ]
- export const JA_SERIF = [
-   'Yu Mincho',
--  'GenOffice Hiragino Mincho',
--  'GenOffice MS Mincho',
-+  'Kertas Hiragino Mincho',
-+  'Kertas MS Mincho',
-   'Noto Serif JP',
--  'GenOffice Batang',
--  'GenOffice Serif KR',
-+  'Kertas Batang',
-+  'Kertas Serif KR',
- ]
- // Han after the hangul face: Word draws a Korean face's Hanja at 1em (Gulim, Malgun),
- // Apple SD Gothic Neo at 0.865em packs a Hanja-heavy line tighter than Word
- export const KO_SANS = [
-   'Malgun Gothic',
--  'GenOffice Sans KR',
-+  'Kertas Sans KR',
-   'Noto Sans CJK GO',
-   'PingFang TC',
-   'Apple SD Gothic Neo',
-   'Noto Sans KR',
- ]
- export const KO_SERIF = [
--  'GenOffice Batang',
--  'GenOffice Serif KR',
--  'GenOffice Myungjo',
-+  'Kertas Batang',
-+  'Kertas Serif KR',
-+  'Kertas Myungjo',
+@@ -53,7 +53,7 @@ export const KO_SERIF = [
+   'GenOffice Myungjo',
    'Noto Serif KR',
  ]
 -// 'GenOffice *' entries are CJK-only local() aliases (fonts.css): the underlying
 +// 'Kertas *' entries are CJK-only local() aliases (fonts.css): the underlying
  // system faces draw Cyrillic/Greek fullwidth, so those scripts must pass through
--const TC_SANS = ['Microsoft JhengHei', 'PingFang TC', 'GenOffice Heiti TC', 'Noto Sans TC']
--// 'GenOffice Fullwidth TC' (fonts.css): fullwidth U+FF0D/FF0F/FF3C/FF3F/FF5E whose Songti TC glyphs look half-width
--// 'GenOffice Songti TC' (fonts.css): weight-normal alias so bold synthesizes like Word's faux-bold PMingLiU
-+const TC_SANS = ['Microsoft JhengHei', 'PingFang TC', 'Kertas Heiti TC', 'Noto Sans TC']
-+// 'Kertas Fullwidth TC' (fonts.css): fullwidth U+FF0D/FF0F/FF3C/FF3F/FF5E whose Songti TC glyphs look half-width
-+// 'Kertas Songti TC' (fonts.css): weight-normal alias so bold synthesizes like Word's faux-bold PMingLiU
- const TC_SERIF = [
--  'GenOffice MingLiU',
--  'GenOffice Fullwidth TC',
--  'GenOffice Songti TC',
-+  'Kertas MingLiU',
-+  'Kertas Fullwidth TC',
-+  'Kertas Songti TC',
-   'Songti TC',
-   'Noto Serif TC',
- ]
- const SC_SANS = ['PingFang SC', 'Microsoft YaHei', CJK_SANS]
--const SC_SERIF = ['GenOffice Songti SC', 'STSong', 'SimSun', CJK_SERIF]
-+const SC_SERIF = ['Kertas Songti SC', 'STSong', 'SimSun', CJK_SERIF]
- 
- const ARABIC_CAPABLE_ALT_RE =
-   /arial|calibri|tahoma|segoe ui|times new roman|courier new|microsoft sans serif|arabic|sakkal|dubai/i
-@@ -113,7 +113,7 @@ export const FACE_CHAIN_RULES: ChainRule[] = [
-   },
-   // Aptos (M365 cloud face, never installed locally): line metrics equal Calibri's
-   // (Word probe 2026-08-22) but its advances do not, so the size-adjusted Carlito
--  // aliases in fonts.css stand in (probe 2026-09-03); 'GenOffice PUA Blank' keeps
-+  // aliases in fonts.css stand in (probe 2026-09-03); 'Kertas PUA Blank' keeps
-   // AI-residue PUA tokens invisible like Word. Body, Display and Narrow cuts have
-   // fitted aliases; Mono/Serif are unprobed
-   {
-@@ -127,7 +127,7 @@ export const FACE_CHAIN_RULES: ChainRule[] = [
-           : f.includes('narrow')
-             ? 'Aptos Narrow GO'
-             : 'Aptos GO'
--      return [[alias, 'GenOffice PUA Blank', CJK_SANS], 'sans-serif']
-+      return [[alias, 'Kertas PUA Blank', CJK_SANS], 'sans-serif']
-     },
-   },
-   // Cambria Math text runs lay out with Cambria's advances in Word (fonts.css alias); only the symbols need a math face
-@@ -184,7 +184,7 @@ export const FACE_CHAIN_RULES: ChainRule[] = [
-   {
-     id: 'segoe-ui',
-     when: (f) => SEGOE_UI_TEXT_RE.test(f),
--    chain: () => [['Segoe UI GO', 'Noto Sans CJK GO', 'GenOffice PUA Blank'], 'sans-serif'],
-+    chain: () => [['Segoe UI GO', 'Noto Sans CJK GO', 'Kertas PUA Blank'], 'sans-serif'],
-   },
-   {
-     id: 'mono',
-@@ -201,13 +201,13 @@ export const FACE_CHAIN_RULES: ChainRule[] = [
-   {
-     id: 'poppins',
-     when: (f) => f.includes('poppins'),
--    chain: () => [['GenOffice Poppins', CJK_SANS], 'sans-serif'],
-+    chain: () => [['Kertas Poppins', CJK_SANS], 'sans-serif'],
-   },
-   // DM Sans renders real in Word when installed; the bundled Latin subset carries its true advances (corpus 2026-09-30)
-   {
-     id: 'dm-sans',
-     when: (f) => f.includes('dm sans'),
--    chain: () => [['GenOffice DM Sans', CJK_SANS], 'sans-serif'],
-+    chain: () => [['Kertas DM Sans', CJK_SANS], 'sans-serif'],
-   },
-   // Montserrat is an M365 cloud font Word renders real, ignoring its fontTable altName; only the
-   // cloud family names qualify: a PostScript-style "Montserrat-Bold" is unknown to Word and keeps the altName
-@@ -228,14 +228,14 @@ export const FACE_CHAIN_RULES: ChainRule[] = [
-     when: (f) => f.includes('\u4e2d\u5b8b') || f.includes('zhongsong'),
-     chain: () => [['STZhongsong', 'Songti SC', 'STSong', 'SimSun', CJK_SERIF], 'serif'],
-   },
--  // 'GenOffice Songti SC' (fonts.css local() alias of Songti SC): macOS Chromium refuses synthetic
-+  // 'Kertas Songti SC' (fonts.css local() alias of Songti SC): macOS Chromium refuses synthetic
-   // bold for 'Songti SC' by name; the alias lets Blink synthesize. SimSun's ASCII is half-width
-   // fixed pitch (0.5em); the Songti stand-in is proportional, so the Latin alias leads
-   {
-     id: 'simsun',
-     when: (f) => /simsun|\u5b8b\u4f53|nsimsun/.test(f),
-     chain: () => [
--      ['GenOffice SimSun Latin', 'GenOffice Songti SC', 'STSong', 'SimSun', CJK_SERIF],
-+      ['Kertas SimSun Latin', 'Kertas Songti SC', 'STSong', 'SimSun', CJK_SERIF],
-       'serif',
-     ],
-   },
-@@ -426,7 +426,7 @@ export const FACE_CHAIN_RULES: ChainRule[] = [
-         const cheSerif = cheGungsuh || /batang|바탕/i.test(nfkc)
-         return [
-           [
--            'GenOffice Che Latin KR',
-+            'Kertas Che Latin KR',
-             ...(cheGungsuh ? ['GungSeo'] : []),
-             ...(cheSerif ? KO_SERIF : KO_SANS),
-           ],
-@@ -448,7 +448,7 @@ export const FACE_CHAIN_RULES: ChainRule[] = [
-     id: 'dfkai',
-     when: (f) => /\u6a19\u6977|dfkai/.test(f),
-     chain: () => [
--      ['Microsoft YaHei', 'GenOffice YaHei Latin', 'PingFang SC', CJK_SANS],
-+      ['Microsoft YaHei', 'Kertas YaHei Latin', 'PingFang SC', CJK_SANS],
-       'sans-serif',
-     ],
-   },
-@@ -469,19 +469,19 @@ export const FACE_CHAIN_RULES: ChainRule[] = [
-   {
-     id: 'ethiopic',
-     when: (_f, _h, nfkc) => /nyala|ebrima|abyssinica|ethiopic/i.test(nfkc),
--    chain: () => [['GenOffice Ethiopic'], 'sans-serif'],
-+    chain: () => [['Kertas Ethiopic'], 'sans-serif'],
-   },
-   // Bengali: Nirmala UI is an M365 cloud face Word renders real; macOS has no twin and Chromium's Kohinoor Bangla shapes ~8% narrower, so the bundled Nirmala-metric face leads
-   {
-     id: 'nirmala',
-     when: (_f, _h, nfkc) => /nirmala/i.test(nfkc),
--    chain: () => [['GenOffice Bengali', 'Kohinoor Bangla', 'Bangla Sangam MN'], 'sans-serif'],
-+    chain: () => [['Kertas Bengali', 'Kohinoor Bangla', 'Bangla Sangam MN'], 'sans-serif'],
-   },
-   // Tamil: Latha renders through the bundled Latha-metric face; Vijaya and missing Tamil names lay out as Vijaya on Word for Mac (probe 2026-09-30), whose advances InaiMathi matches within 1 %
-   {
-     id: 'latha',
-     when: (_f, _h, nfkc) => /latha/i.test(nfkc),
--    chain: () => [['GenOffice Tamil', 'InaiMathi', 'Tamil MN', 'Tamil Sangam MN'], 'sans-serif'],
-+    chain: () => [['Kertas Tamil', 'InaiMathi', 'Tamil MN', 'Tamil Sangam MN'], 'sans-serif'],
-   },
-   {
-     id: 'tamil',
-diff --git a/apps/docs/src/renderer/text-layout/font-rules/availability.ts b/apps/docs/src/renderer/text-layout/font-rules/availability.ts
-index 11ae7d0..ea6cf52 100644
---- a/apps/docs/src/renderer/text-layout/font-rules/availability.ts
-+++ b/apps/docs/src/renderer/text-layout/font-rules/availability.ts
-@@ -25,18 +25,18 @@ import { isEastAsianFaceName as isCjkFontName } from '../face-info'
- export const BUNDLED_FONTS = new Set([
-   'Noto Sans CJK SC',
-   'Noto Serif CJK SC',
--  'GenOffice Sans KR',
--  'GenOffice Serif KR',
--  'GenOffice Gothic KR',
--  'GenOffice Poppins',
--  'GenOffice DM Sans',
--  'GenOffice Tamil',
--  'GenOffice Cordia',
--  'GenOffice Sarabun',
--  'GenOffice Bengali',
--  'GenOffice Fullwidth TC',
--  'GenOffice Songti SC',
--  'GenOffice Songti TC',
-+  'Kertas Sans KR',
-+  'Kertas Serif KR',
-+  'Kertas Gothic KR',
-+  'Kertas Poppins',
-+  'Kertas DM Sans',
-+  'Kertas Tamil',
-+  'Kertas Cordia',
-+  'Kertas Sarabun',
-+  'Kertas Bengali',
-+  'Kertas Fullwidth TC',
-+  'Kertas Songti SC',
-+  'Kertas Songti TC',
-   'Carlito GO',
-   'Aptos GO',
-   'Aptos Display GO',
+ const TC_SANS = ['Microsoft JhengHei', 'PingFang TC', 'GenOffice Heiti TC', 'Noto Sans TC']
+ // 'GenOffice Fullwidth TC' (fonts.css): fullwidth U+FF0D/FF0F/FF3C/FF3F/FF5E whose Songti TC glyphs look half-width
 diff --git a/apps/docs/src/renderer/text-layout/font-rules/css-chains.ts b/apps/docs/src/renderer/text-layout/font-rules/css-chains.ts
-index 19dd75b..74d7fae 100644
+index 19dd75b..afd2f35 100644
 --- a/apps/docs/src/renderer/text-layout/font-rules/css-chains.ts
 +++ b/apps/docs/src/renderer/text-layout/font-rules/css-chains.ts
-@@ -43,7 +43,7 @@ const HAND_STAND_IN_CHAINS: Record<string, [string[], Generic]> = {
-   ],
-   cambria: [['Caladea', 'Cambria Cyrillic GO', BOX, CJK_SERIF], 'serif'],
-   'times new roman': [['Liberation Serif', BOX, CJK_SERIF], 'serif'],
--  'segoe ui': [['Segoe UI GO', 'Noto Sans CJK GO', 'GenOffice PUA Blank'], 'sans-serif'],
-+  'segoe ui': [['Segoe UI GO', 'Noto Sans CJK GO', 'Kertas PUA Blank'], 'sans-serif'],
-   // M365 cloud faces Word downloads; macOS ships the same Linotype design as
-   // Avenir Next (Regular, Medium, Demi Bold, Bold), so the text keeps its look
-   // and weights instead of falling to the generic sans
-@@ -55,14 +55,14 @@ const HAND_STAND_IN_CHAINS: Record<string, [string[], Generic]> = {
-   batang: [KO_SERIF, 'serif'],
-   gulim: [KO_SANS, 'sans-serif'],
-   dotum: [KO_SANS, 'sans-serif'],
--  nanumgothic: [['GenOffice Gothic KR', ...KO_SANS], 'sans-serif'],
--  'nanum gothic': [['GenOffice Gothic KR', ...KO_SANS], 'sans-serif'],
--  'nanumgothic extrabold': [['GenOffice Gothic KR', ...KO_SANS], 'sans-serif'],
-+  nanumgothic: [['Kertas Gothic KR', ...KO_SANS], 'sans-serif'],
-+  'nanum gothic': [['Kertas Gothic KR', ...KO_SANS], 'sans-serif'],
-+  'nanumgothic extrabold': [['Kertas Gothic KR', ...KO_SANS], 'sans-serif'],
-   nanummyeongjo: [KO_SERIF, 'serif'],
-   'nanum myeongjo': [KO_SERIF, 'serif'],
-   nanummyeongjoextrabold: [KO_SERIF, 'serif'],
-   simsun: [
--    ['GenOffice SimSun Latin', 'GenOffice Songti SC', 'STSong', 'SimSun', CJK_SERIF],
-+    ['Kertas SimSun Latin', 'Kertas Songti SC', 'STSong', 'SimSun', CJK_SERIF],
-     'serif',
-   ],
-   simhei: [['Heiti SC', 'STHeiti', 'SimHei', 'PingFang SC', CJK_SANS], 'sans-serif'],
-@@ -134,7 +134,7 @@ function latinSlotHead(sub: string): string[] {
-   const k = sub.normalize('NFKC').toLowerCase()
-   if (k === 'calibri') return ['Carlito GO']
-   if (k === 'cambria') return ['KR Theme Latin GO']
--  if (k === 'simsun' || k === '\u5b8b\u4f53') return ['GenOffice SimSun Latin']
-+  if (k === 'simsun' || k === '\u5b8b\u4f53') return ['Kertas SimSun Latin']
-   return latinChainHead(sub)
- }
- 
-@@ -188,7 +188,7 @@ function substituteFontFamily(font: string): string | null {
-   // SimSun chain carries none, so the 1em hangul faces close it
-   const hangulTail =
-     /^(simsun|\u5b8b\u4f53)$/i.test(face.family.normalize('NFKC')) && !/[\uac00-\ud7a3]/.test(nfkc)
--      ? `,'GenOffice Batang','GenOffice Serif KR'`
-+      ? `,'Kertas Batang','Kertas Serif KR'`
-       : ''
-   const generic = target.lastIndexOf(',')
-   const chain = `${target.slice(0, generic)}${hangulTail}${target.slice(generic)}`
-@@ -221,8 +221,8 @@ export function cssFontFamily(font: string): string {
-   // (tools/build-thai-font.py) lead. On Windows the declared name resolves first.
-   if (THAI_FONT_RE.test(font.normalize('NFKC').toLowerCase())) {
-     const face = /^th sarabunpsk$/i.test(font.normalize('NFKC'))
--      ? 'GenOffice Sarabun'
--      : 'GenOffice Cordia'
-+      ? 'Kertas Sarabun'
-+      : 'Kertas Cordia'
-     return `${cssChain(font, face, 'Thonburi')},sans-serif`
-   }
-   const byFace = standInFontFamily(font) ?? substituteFontFamily(font)
-@@ -256,7 +256,7 @@ export function cssFontFamily(font: string): string {
-       : CJK_SANS
-   // the GO aliases exclude PUA, so the blank face keeps those codepoints
-   // invisible (the full subsets' blank .notdef used to catch them)
--  const pua = latinNamed ? ['GenOffice PUA Blank'] : []
-+  const pua = latinNamed ? ['Kertas PUA Blank'] : []
-   return `${chain(font, tail, ...pua)},${serifLike ? 'serif' : 'sans-serif'}`
- }
- 
 @@ -275,7 +275,7 @@ function latinChainHead(ascii: string): string[] {
    const jp = fams.findIndex((fam) => /^'Noto (?:Sans|Serif) JP'$/.test(fam))
    const latin = fams.filter(
@@ -3685,23 +3599,6 @@ index 19dd75b..74d7fae 100644
        !/noto (sans|serif) cjk/i.test(fam) &&
        !/ JA GO'$/.test(fam) &&
        !/^(serif|sans-serif|monospace)$/.test(fam),
-diff --git a/apps/docs/src/renderer/text-layout/font-rules/face-classes.ts b/apps/docs/src/renderer/text-layout/font-rules/face-classes.ts
-index 8d2f59f..ba1b183 100644
---- a/apps/docs/src/renderer/text-layout/font-rules/face-classes.ts
-+++ b/apps/docs/src/renderer/text-layout/font-rules/face-classes.ts
-@@ -29,10 +29,10 @@ export const isTimesClassFace = (face: string): boolean =>
- export const SEGOE_SYMBOL_CSS = "'Segoe UI Symbol GO'"
- 
- /** the face whose only glyph is the balanced-width space, as a CSS family */
--export const BALANCED_SPACE_CSS = "'GenOffice Balanced Space'"
-+export const BALANCED_SPACE_CSS = "'Kertas Balanced Space'"
- 
- /** family name of the blank PUA face in fonts.css */
--export const PUA_BLANK_FAMILY = 'GenOffice PUA Blank'
-+export const PUA_BLANK_FAMILY = 'Kertas PUA Blank'
- 
- /** metrics of the face a declared name resolves to */
- export const declaredFaceMetrics = (font: string) => resolveDeclaredFace(font)?.metrics
 diff --git a/apps/docs/src/renderer/text-layout/font-rules/index.ts b/apps/docs/src/renderer/text-layout/font-rules/index.ts
 index 16c750f..0458ef1 100644
 --- a/apps/docs/src/renderer/text-layout/font-rules/index.ts
@@ -3716,18 +3613,9 @@ index 16c750f..0458ef1 100644
    return null
  }
 diff --git a/apps/docs/src/renderer/text-layout/font-rules/web-faces.ts b/apps/docs/src/renderer/text-layout/font-rules/web-faces.ts
-index e120b74..de69160 100644
+index e120b74..c4ef29a 100644
 --- a/apps/docs/src/renderer/text-layout/font-rules/web-faces.ts
 +++ b/apps/docs/src/renderer/text-layout/font-rules/web-faces.ts
-@@ -5,7 +5,7 @@ import { GENERIC_FAMILIES, isBundledFont, isFontAvailable } from './availability
-  * Bundled web face that leads a chain but has not loaded yet: canvas measures
-  * the next installed family instead (an unloaded font-display:block face is
-  * skipped), so the strut would carry e.g. Apple SD Gothic Neo's 0.90/0.30
-- * under GenOffice Sans KR spans (1.16/0.29) and every hangul line unions
-+ * under Kertas Sans KR spans (1.16/0.29) and every hangul line unions
-  * ~1.5px past its line-height (+1pt per Korean table row vs Word).
-  */
- export function unloadedBundledPrimary(chain: string): string | null {
 @@ -33,7 +33,7 @@ export function unloadedBundledPrimary(chain: string): string | null {
   * while layout later resolves the loaded alias (0.69/0.25em) as primary.
   */
@@ -3737,28 +3625,6 @@ index e120b74..de69160 100644
  }
  
  /** bundled web face a chain resolves to before any installed family or generic */
-diff --git a/apps/docs/src/renderer/text-layout/strut-face.ts b/apps/docs/src/renderer/text-layout/strut-face.ts
-index 9d024e0..3a0b261 100644
---- a/apps/docs/src/renderer/text-layout/strut-face.ts
-+++ b/apps/docs/src/renderer/text-layout/strut-face.ts
-@@ -14,7 +14,7 @@
- import { PUA_BLANK_FAMILY } from './font-rules/face-classes'
- import { gridStrutMetricsPct } from '../line-metrics'
- 
--export const GRID_STRUT_FAMILY = 'GenOffice Grid Strut'
-+export const GRID_STRUT_FAMILY = 'Kertas Grid Strut'
- 
- /**
-  * src of the bundled blank PUA face (fonts.css, build-hashed URL), read from the
-@@ -49,7 +49,7 @@ export function blankFontFaceSrc(): string | null {
-     // jsdom drops @font-face rules from the CSSOM: scan raw <style> text
-     try {
-       for (const el of Array.from(document.querySelectorAll('style'))) {
--        const m = /@font-face\s*{[^}]*GenOffice PUA Blank[^}]*?src:\s*([^;}]+)/.exec(
-+        const m = /@font-face\s*{[^}]*Kertas PUA Blank[^}]*?src:\s*([^;}]+)/.exec(
-           el.textContent ?? '',
-         )
-         if (m) blankSrcCache = m[1].trim()
 diff --git a/apps/docs/src/renderer/word-count.ts b/apps/docs/src/renderer/word-count.ts
 index baa778a..7c770e7 100644
 --- a/apps/docs/src/renderer/word-count.ts
