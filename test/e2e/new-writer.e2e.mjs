@@ -44,6 +44,9 @@ after(async () => {
   try { await Promise.race([app?.close(), sleep(5000)]); } catch { /* closing */ }
   try { child?.kill('SIGKILL'); } catch { /* gone */ }
   await rm(dir, { recursive: true, force: true }).catch(() => {});
+  // The connections to the editor views that went away with their tabs can keep this process
+  // alive after everything is reported; end it, with the exit code the results gave it.
+  setTimeout(() => process.exit(), 3000).unref();
 });
 
 const editors = () => app.context().pages().filter((p) => p.url().startsWith('kertas-writer://'));
