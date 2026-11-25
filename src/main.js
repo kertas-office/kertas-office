@@ -42,9 +42,12 @@ hydrateIcons();
 // ------------------------------------------------------------ helpers
 export function toast(msg, isError = false) {
   toastEl.textContent = msg;
-  toastEl.className = `toast show${isError ? ' error' : ''}`;
+  // over a new-Writer tab the page is covered by the editor's own view, so the message
+  // moves up into the tab strip, the one place of Kertas's that is always in sight
+  const over = tabs.get(activeId)?.native ? ' over-native' : '';
+  toastEl.className = `toast show${isError ? ' error' : ''}${over}`;
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => { toastEl.className = 'toast'; }, isError ? 5000 : 2400);
+  toast._t = setTimeout(() => { toastEl.className = `toast${over}`; }, isError ? 5000 : 2400);
 }
 function setStatus(text) { statusEl.textContent = text; }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -174,13 +177,25 @@ function syncNativeView() {
   const covered = !!pane && [...document.body.children].some((el) => {
     if (el.id === 'app' || el.id === 'toast' || /^(SCRIPT|STYLE|LINK|INPUT)$/.test(el.tagName) || el.hidden) return false;
     const cs = getComputedStyle(el);
-    if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return false;
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false; // not opacity: dialogs fade in from 0
     const r = el.getBoundingClientRect();
     return r.width > 1 && r.height > 1 && r.right > pane.left && r.left < pane.right && r.bottom > pane.top && r.top < pane.bottom;
   });
   const want = tab?.native && tab.ready && !covered ? tab : null;
-  if (shownNative && shownNative !== want?.id) { window.kertasNative.newWriter('layout', { id: shownNative, rect: null }); shownNative = null; }
+  if (shownNative && shownNative !== want?.id) {
+    const id = shownNative;
+    shownNative = null;
+    const hidden = tabs.get(id);
+    if (covered && hidden === tab) {
+      // a dialog is opening over this tab: leave a picture of the editor behind it
+      // (never waiting long for the picture: the dialog must not stay hidden behind the editor)
+      Promise.race([window.kertasNative.newWriter('snapshot', id), new Promise((r) => setTimeout(() => r(null), 200))]).then((url) => {
+        if (url && shownNative !== id) { hidden.el.style.backgroundImage = `url(${url})`; hidden.el.classList.add('native-still'); }
+      }).catch(() => {}).finally(() => { if (shownNative !== id) window.kertasNative.newWriter('layout', { id, rect: null }); });
+    } else window.kertasNative.newWriter('layout', { id, rect: null });
+  }
   if (!want) return;
+  if (want.el.classList.contains('native-still')) setTimeout(() => { if (shownNative === want.id) { want.el.classList.remove('native-still'); want.el.style.backgroundImage = ''; } }, 150);
   const r = want.el.getBoundingClientRect();
   window.kertasNative.newWriter('layout', { id: want.id, rect: { x: r.left, y: r.top, width: r.width, height: r.height } });
   shownNative = want.id;
@@ -230,6 +245,7 @@ async function openNativeWriter({ name, path = null, result = null } = {}) {
   if (!ok) { tabEl.remove(); el.remove(); tabs.delete(id); activate('home'); return null; }
   tab.ready = true;
   syncNativeView();
+  setTimeout(() => { if (tabs.has(id)) el.innerHTML = ''; }, 1500); // the editor covers the pane by now
   return tab;
 }
 

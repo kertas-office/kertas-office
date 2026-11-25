@@ -169,6 +169,14 @@ function layout(id, rect) {
   }
 }
 
+// A picture of the tab's editor as it is now, for the page to show in its place while the
+// view steps aside for one of Kertas's dialogs
+async function snapshot(id) {
+  const t = tabs.get(id);
+  if (!t || !t.shown) return null;
+  try { return (await t.view.webContents.capturePage()).toDataURL(); } catch { return null; }
+}
+
 async function isDirty(id) {
   const t = tabs.get(id);
   return t ? host.docsQueryDirty(t.view.webContents) : false;
@@ -197,4 +205,4 @@ async function convertPdfForTab(data) {
   return keepResult(await host.convertPdfBytesToDocx(new Uint8Array(data), path.join(ROOT, 'wasm', 'pdfium.wasm')));
 }
 
-module.exports = { available, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, isDirty, closeTab, command, convertPdfForTab };
+module.exports = { available, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };

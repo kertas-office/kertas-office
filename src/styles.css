@@ -554,6 +554,8 @@ select.dlg-input { height: 36px; }
 }
 .toast.show { opacity: 1; transform: translateX(-50%); }
 .toast.error { background: rgba(190,18,60,.92); }
+.toast.over-native { top: 3px; bottom: auto; padding: 5px 14px; font-size: 12.5px; border-radius: 9px; transform: translateX(-50%) translateY(-10px) scale(.98); }
+.toast.over-native.show { transform: translateX(-50%); }
 
 /* command palette */
 .palette { background: color-mix(in srgb, var(--surface-solid) 92%, transparent) !important; position: fixed; top: 14vh; left: 50%; transform: translateX(-50%); width: min(560px, 92vw); border-radius: var(--r-xl); overflow: hidden; z-index: 950; animation: menu-in .18s var(--ease); }
@@ -1168,3 +1170,7 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 /* Equations: double-click to edit */
 .writer-body .sd-math { cursor: pointer; border-radius: 4px; transition: box-shadow .12s; }
 .writer-body .sd-math:hover { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #7c3aed) 45%, transparent); }
+
+/* a new-Writer tab while its editor has stepped aside for a dialog: a picture of it stays */
+.view.native-still { background-size: 100% 100%; background-repeat: no-repeat; }
+.view.native-still > .loading { display: none; }

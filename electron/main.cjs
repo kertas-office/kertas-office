@@ -426,6 +426,7 @@ ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
     return writer2.openTab(String(id), { filePath, result });
   }
   if (op === 'layout') return writer2.layout(String(arg.id), arg.rect);
+  if (op === 'snapshot') return writer2.snapshot(String(arg));
   if (op === 'dirty') return writer2.isDirty(String(arg));
   if (op === 'close') return writer2.closeTab(String(arg));
   if (op === 'command') return writer2.command(String(arg.id), String(arg.name));

@@ -882,7 +882,7 @@ index 117b4d1..628ecf6 100644
            r.math?.oleXml ?? null,
            r.sym ? [r.sym.font, r.sym.char] : null,
 diff --git a/apps/docs/src/renderer/editor/extensions.ts b/apps/docs/src/renderer/editor/extensions.ts
-index 4dfd85f..ec446c1 100644
+index 4dfd85f..017e472 100644
 --- a/apps/docs/src/renderer/editor/extensions.ts
 +++ b/apps/docs/src/renderer/editor/extensions.ts
 @@ -238,6 +238,7 @@ import {
@@ -911,7 +911,21 @@ index 4dfd85f..ec446c1 100644
        // to plain text. kind/ilvl ride in data-para; classes are the fallback.
        {
          tag: 'div.doc-li',
-@@ -8068,7 +8071,9 @@ export const textboxSubExtensions = [
+@@ -6131,10 +6134,11 @@ function wireFormulaLatexEdit(
+     e.stopPropagation()
+   })
+   button.addEventListener('click', openModal)
+-  if (isMathType) host.addEventListener('dblclick', openModal)
++  // Kertas: a double-click edits any equation, as in the Writer it replaces
++  host.addEventListener('dblclick', openModal)
+   host.appendChild(button)
+   return () => {
+-    if (isMathType) host.removeEventListener('dblclick', openModal)
++    host.removeEventListener('dblclick', openModal)
+     button.remove()
+   }
+ }
+@@ -8068,7 +8072,9 @@ export const textboxSubExtensions = [
    InstrFieldMark,
    SymMark,
    CtrlCheckboxMark,
@@ -921,7 +935,7 @@ index 4dfd85f..ec446c1 100644
    DoubleClickWordExtension,
    TextStyleMark,
    FormatOffClearExtension,
-@@ -8169,6 +8174,7 @@ export const editorExtensions = [
+@@ -8169,6 +8175,7 @@ export const editorExtensions = [
    InstrFieldMark,
    SymMark,
    CtrlCheckboxMark,
@@ -929,7 +943,7 @@ index 4dfd85f..ec446c1 100644
    RprChangeMark,
    TextStyleMark,
    DocRedaction,
-@@ -8204,6 +8210,8 @@ export const editorExtensions = [
+@@ -8204,6 +8211,8 @@ export const editorExtensions = [
    InactiveSelectionExtension,
    AiQueueAnchorsExtension,
    CheckboxToggleExtension,
