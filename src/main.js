@@ -384,7 +384,7 @@ async function confirmRisk(tab) {
     description: `Saving ${tab.name} in Kertas removes the following. The rest of the file is kept.`,
     width: 500,
     fields: [{ id: 'list', type: 'info', html: `<ul class="risk-list">${tab.risk.map((r) => `<li>${esc(r.label)}${r.count > 1 ? ` <span>(${r.count})</span>` : ''}</li>`).join('')}</ul><p class="risk-tip">To keep the original as it is, save your changes as a copy.</p>` }],
-    actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'copy', label: 'Save a copy' }, { id: 'save', label: 'Save anyway', primary: true }],
+    actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'copy', label: 'Save a copy' }, { id: 'save', group: 'files', label: 'Save anyway', primary: true }],
   });
   if (!res || res.action === 'cancel') return 'cancel';
   return res.action;
@@ -605,25 +605,25 @@ async function makeDefaultApp() {
 // ------------------------------------------------------------ commands
 const active = () => tabs.get(activeId);
 const COMMANDS = [
-  { id: 'new-doc', label: 'New document', icon: 'doc', key: 'Ctrl+N', run: () => newDocument() },
-  { id: 'new-sheet', label: 'New spreadsheet', icon: 'sheet', key: 'Ctrl+Shift+N', run: () => openTab('sheets') },
-  { id: 'templates-writer', label: 'New document from a template...', icon: 'template', run: () => openTemplates('writer') },
-  { id: 'templates-sheets', label: 'New workbook from a template...', icon: 'template', run: () => openTemplates('sheets') },
-  { id: 'open', label: 'Open...', icon: 'open', key: 'Ctrl+O', run: () => openDialog() },
+  { id: 'new-doc', group: 'files', label: 'New document', icon: 'doc', key: 'Ctrl+N', run: () => newDocument() },
+  { id: 'new-sheet', group: 'files', label: 'New spreadsheet', icon: 'sheet', key: 'Ctrl+Shift+N', run: () => openTab('sheets') },
+  { id: 'templates-writer', group: 'files', label: 'New document from a template...', icon: 'template', run: () => openTemplates('writer') },
+  { id: 'templates-sheets', group: 'files', label: 'New workbook from a template...', icon: 'template', run: () => openTemplates('sheets') },
+  { id: 'open', group: 'files', label: 'Open...', icon: 'open', key: 'Ctrl+O', run: () => openDialog() },
   { id: 'save', label: 'Save', icon: 'save', key: 'Ctrl+S', run: () => active() && saveTab(active()), needsTab: true },
-  { id: 'save-as', label: 'Save as...', icon: 'save-as', key: 'Ctrl+Shift+S', run: () => active() && saveTab(active(), { saveAs: true }), needsTab: true },
-  { id: 'export-pdf', label: 'Export as PDF...', icon: 'export', key: 'Ctrl+Shift+E', run: () => exportPdf(active()), needsTab: true },
-  { id: 'print', label: 'Print...', icon: 'print', key: 'Ctrl+P', run: () => exportPdf(active(), { preview: true }), needsTab: true },
-  { id: 'close-tab', label: 'Close tab', icon: 'close', key: 'Ctrl+W', run: () => active() && closeTab(activeId), needsTab: true },
-  { id: 'merge-pdfs', label: 'Merge PDFs...', icon: 'merge', run: mergePdfs },
-  { id: 'sign-pdf', label: 'Sign a PDF...', icon: 'sign', run: signPdf },
-  { id: 'images-to-pdf', label: 'Images to PDF...', icon: 'file-image', run: imagesToPdfCmd },
-  { id: 'home', label: 'Go to Home', icon: 'home', run: () => activate('home') },
-  { id: 'theme', label: 'Toggle dark mode', icon: 'moon', run: () => applyTheme(!isDark()) },
-  ...(isDesktop ? [{ id: 'default-app', label: 'Make Kertas the default app for documents', icon: 'shield-check', run: () => makeDefaultApp() }] : []),
-  { id: 'check-updates', label: 'Check for updates', icon: 'refresh', run: () => checkUpdates(true) },
-  { id: 'about', label: 'About Kertas Office', icon: 'sparkles', run: () => showAbout() },
-  ...(SUPPORT_BUILD ? [{ id: 'support', label: 'Support Kertas (buy me a coffee)', icon: 'coffee', run: () => openSupport() }] : []),
+  { id: 'save-as', group: 'files', label: 'Save as...', icon: 'save-as', key: 'Ctrl+Shift+S', run: () => active() && saveTab(active(), { saveAs: true }), needsTab: true },
+  { id: 'export-pdf', group: 'files', label: 'Export as PDF...', icon: 'export', key: 'Ctrl+Shift+E', run: () => exportPdf(active()), needsTab: true },
+  { id: 'print', group: 'files', label: 'Print...', icon: 'print', key: 'Ctrl+P', run: () => exportPdf(active(), { preview: true }), needsTab: true },
+  { id: 'close-tab', group: 'files', label: 'Close tab', icon: 'close', key: 'Ctrl+W', run: () => active() && closeTab(activeId), needsTab: true },
+  { id: 'merge-pdfs', group: 'files', label: 'Merge PDFs...', icon: 'merge', run: mergePdfs },
+  { id: 'sign-pdf', group: 'files', label: 'Sign a PDF...', icon: 'sign', run: signPdf },
+  { id: 'images-to-pdf', group: 'files', label: 'Images to PDF...', icon: 'file-image', run: imagesToPdfCmd },
+  { id: 'home', group: 'app', label: 'Go to Home', icon: 'home', run: () => activate('home') },
+  { id: 'theme', group: 'app', label: 'Toggle dark mode', icon: 'moon', run: () => applyTheme(!isDark()) },
+  ...(isDesktop ? [{ id: 'default-app', group: 'app', label: 'Make Kertas the default app for documents', icon: 'shield-check', run: () => makeDefaultApp() }] : []),
+  { id: 'check-updates', group: 'help', label: 'Check for updates', icon: 'refresh', run: () => checkUpdates(true) },
+  { id: 'about', group: 'help', label: 'About Kertas Office', icon: 'sparkles', run: () => showAbout() },
+  ...(SUPPORT_BUILD ? [{ id: 'support', group: 'help', label: 'Support Kertas (buy me a coffee)', icon: 'coffee', run: () => openSupport() }] : []),
 ];
 const runCommand = (id) => COMMANDS.find((c) => c.id === id)?.run();
 
@@ -633,6 +633,7 @@ function fileMenuFor() {
 }
 
 // Command palette (Ctrl+K)
+const PALETTE_SECTIONS = { files: 'Files and PDF tools', app: 'Kertas Office', help: 'Help', recent: 'Recent files' };
 function openPalette() {
   if (document.querySelector('.palette')) return;
   const back = document.createElement('div');
@@ -650,10 +651,17 @@ function openPalette() {
   const render = async () => {
     const q = input.value.toLowerCase().trim();
     const recent = (await recentFiles()).slice(0, 8).map((r) => ({ label: r.name, sub: r.path, icon: kindForName(r.name) === 'sheets' ? 'sheet' : kindForName(r.name) === 'pdf' ? 'pdf' : 'doc', run: () => openPath(r.path) }));
-    items = [...COMMANDS.filter((c) => !c.needsTab || active()).map((c) => ({ label: c.label, key: c.key, icon: c.icon, run: c.run })), ...recent]
+    items = [...COMMANDS.filter((c) => !c.needsTab || active()).map((c) => ({ label: c.label, key: c.key, icon: c.icon, run: c.run, group: c.group })), ...recent.map((r) => ({ ...r, group: 'recent' }))]
       .filter((it) => !q || it.label.toLowerCase().includes(q) || it.sub?.toLowerCase().includes(q));
     sel = Math.min(sel, Math.max(0, items.length - 1));
-    list.innerHTML = items.map((it, i) => `<button class="menu-item${i === sel ? ' sel' : ''}" data-i="${i}">${icon(it.icon, 16)}<span>${esc(it.label)}${it.sub ? `<small style="display:block;color:var(--muted)">${esc(it.sub)}</small>` : ''}</span><kbd>${esc(it.key || '')}</kbd></button>`).join('') || '<div class="empty">No matches</div>';
+    // in sections: files and PDF tools, the app, help, then recent files
+    let html = '';
+    items.forEach((it, i) => {
+      if (i === 0 || items[i - 1].group !== it.group) html += `<div class="pal-section">${PALETTE_SECTIONS[it.group] || ''}</div>`;
+      html += `<button class="menu-item${i === sel ? ' sel' : ''}" data-i="${i}">${icon(it.icon, 16)}<span>${esc(it.label)}${it.sub ? `<small style="display:block;color:var(--muted)">${esc(it.sub)}</small>` : ''}</span><kbd>${esc(it.key || '')}</kbd></button>`;
+    });
+    list.innerHTML = html || '<div class="empty">No matches</div>';
+    list.querySelector('.menu-item.sel')?.scrollIntoView({ block: 'nearest' });
   };
   input.addEventListener('input', () => { sel = 0; render(); });
   input.addEventListener('keydown', (e) => {
@@ -712,7 +720,10 @@ async function renderHome() {
           <p>Documents, spreadsheets and PDFs. All offline.</p>
           <div class="local-badge">${icon('shield-check', 15)}<span><strong>Everything stays on this computer.</strong> No account and no uploads.</span></div>
         </div>
-        <div class="kbd-hint"><kbd>Ctrl</kbd><kbd>K</kbd> for commands</div>
+        <div class="hero-side">
+          <img class="hero-logo" src="./logo.svg" alt="Kertas Office" draggable="false" />
+          <div class="kbd-hint"><kbd>Ctrl</kbd><kbd>K</kbd> for commands</div>
+        </div>
       </div>
       ${isDesktop && !defaultAsked() ? `<div class="default-offer glass">
         <div class="do-text">${icon('shield-check', 18)}<div><strong>Open your files with Kertas?</strong><span>Make Kertas the app that opens .docx, .xlsx and .pdf files when you double-click them.</span></div></div>
@@ -935,6 +946,7 @@ async function showAbout() {
   const nw = await newWriterInfo();
   const res = await formDialog({
     title: 'Kertas Office',
+    logo: './logo.svg',
     description: `Version ${APP_VERSION} · free and open source (AGPL-3.0-or-later)`,
     width: 460,
     fields: [
