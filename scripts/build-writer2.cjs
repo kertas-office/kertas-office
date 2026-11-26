@@ -1,17 +1,24 @@
 #!/usr/bin/env node
-// Builds the new Writer (trial) into electron/writer2/.
+// Builds the new editors (trial) into electron/writer2/: the new Writer, and the new
+// Sheets and PDF editors beside it (electron/writer2/sheets and /pdf).
 //
-// The editor comes from GenOffice (Apache-2.0, Copyright Mainfunc, Inc.), taken at
-// a fixed commit and changed by scripts/writer2/genoffice.patch: Kertas hosts it
-// in its own window, the AI assistant is switched off, product names are
-// Kertas's, and it keeps its files in a folder of its own. Only the Apache-2.0
+// The editors come from GenOffice (Apache-2.0, Copyright Mainfunc, Inc.), taken at
+// a fixed commit and changed by scripts/writer2/genoffice.patch: Kertas hosts them
+// as tabs of its own window, the AI assistant is left out, product names are
+// Kertas's, and they keep their files in a folder of their own. Only the Apache-2.0
 // parts are used; the separately licensed ee/ directory is deleted before
 // anything is built.
 //
 //   node scripts/build-writer2.cjs            fetch, patch, build, copy
 //   KERTAS_GENOFFICE_DIR=<checkout>           use a checkout that is already patched
+//   KERTAS_SIDECAR=<file>                     a ready-built spreadsheet helper to ship
+//                                             (when packaging for another system)
 //
-// Without this step Kertas builds and runs as before, with no new Writer.
+// The new Sheets reads and writes workbooks through a small helper program written in
+// Rust (apps/sheets/native/xlsx-engine). It is built here with cargo when cargo is
+// installed; without it the new Sheets is simply not offered.
+//
+// Without this step Kertas builds and runs as before, with none of the new editors.
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -51,9 +58,30 @@ for (const f of ['inter-latin-wght-normal.woff2', 'inter-latin-ext-wght-normal.w
 run('npx', ['electron-vite', 'build', '--config', 'kertas.vite.config.ts'], app);
 try { run('node', ['tools/gen-third-party-notices.mjs'], SRC); } catch { console.warn('Third-party notices were not regenerated'); }
 
+// The spreadsheet and PDF editors: their pages and bridges (their main-process code is in the Writer's bundle)
+for (const name of ['sheets', 'pdf']) run('npx', ['electron-vite', 'build', '--config', 'kertas.vite.config.ts'], path.join(SRC, 'apps', name));
+
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(path.join(OUT, 'wasm'), { recursive: true });
 for (const part of ['main', 'preload', 'renderer']) fs.cpSync(path.join(app, 'out-kertas', part), path.join(OUT, part), { recursive: true });
+for (const name of ['sheets', 'pdf']) {
+  for (const part of ['preload', 'renderer']) fs.cpSync(path.join(SRC, 'apps', name, 'out-kertas', part), path.join(OUT, name, part), { recursive: true });
+}
+// The spreadsheet helper, for the system this build is for
+try {
+  const engine = path.join(SRC, 'apps', 'sheets', 'native', 'xlsx-engine');
+  let helper = process.env.KERTAS_SIDECAR;
+  if (!helper) {
+    run('cargo', ['build', '--release', '--locked'], engine);
+    helper = path.join(engine, 'target', 'release', process.platform === 'win32' ? 'xlsx-sidecar.exe' : 'xlsx-sidecar');
+  }
+  fs.mkdirSync(path.join(OUT, 'native'), { recursive: true });
+  fs.copyFileSync(helper, path.join(OUT, 'native', path.basename(helper)));
+  if (process.platform !== 'win32') fs.chmodSync(path.join(OUT, 'native', path.basename(helper)), 0o755);
+  fs.copyFileSync(path.join(engine, 'Cargo.lock'), path.join(OUT, 'native', 'Cargo.lock')); // the exact libraries inside it
+} catch (e) {
+  console.warn('The spreadsheet helper was not built, so the new Sheets is left out:', e.message);
+}
 fs.copyFileSync(path.join(SRC, 'node_modules', '@embedpdf', 'pdfium', 'dist', 'pdfium.wasm'), path.join(OUT, 'wasm', 'pdfium.wasm'));
 // Spelling dictionaries, so the checker never has to fetch one: Electron's own set for the version
 // Kertas ships, of which the languages Kertas offers are kept (electron/writer2.cjs serves them
@@ -78,9 +106,9 @@ for (const f of ['LICENSE', 'NOTICE', 'LICENSE-UNICODE.txt']) fs.copyFileSync(pa
 const notices = path.join(SRC, 'apps', 'shell', 'build', 'THIRD-PARTY-NOTICES.txt');
 if (fs.existsSync(notices)) fs.copyFileSync(notices, path.join(OUT, 'THIRD-PARTY-NOTICES.txt'));
 fs.copyFileSync(path.join(app, 'src', 'renderer', 'fonts', 'README.md'), path.join(OUT, 'FONTS.md'));
-fs.writeFileSync(path.join(OUT, 'README.txt'), `The new Writer in Kertas Office is built on GenOffice (https://github.com/genspark-ai/genoffice),
+fs.writeFileSync(path.join(OUT, 'README.txt'), `The new Writer, Sheets and PDF editors in Kertas Office are built on GenOffice (https://github.com/genspark-ai/genoffice),
 commit ${COMMIT}, used under the Apache License 2.0 (see LICENSE and NOTICE here).
 Kertas changed it: see scripts/writer2/genoffice.patch in the Kertas Office source.
 Kertas Office is not affiliated with or endorsed by the authors of GenOffice.
 `);
-console.log(`New Writer built into ${path.relative(ROOT, OUT)}`);
+console.log(`New editors built into ${path.relative(ROOT, OUT)}`);

@@ -34,6 +34,8 @@ function answerHostQuestions() {
     'app:get-auto-save-default': () => ({ on: false, updatedAt: 0 }),
     'app:get-ai-panel-prefs': () => AI_OFF,
     'app:set-ai-panel-prefs': () => AI_OFF,
+    'app:get-language': () => 'en',
+    'app:get-csv-import-limit': () => null,
   };
   for (const [channel, fn] of Object.entries(answers)) ipcMain.handle(channel, fn);
 }
@@ -63,7 +65,6 @@ function start() {
     preloadPath: path.join(ROOT, 'preload', 'index.js'),
     rendererFile: path.join(ROOT, 'renderer', 'index.html'),
   });
-  host.installRendererProtocol({ docs: path.join(ROOT, 'renderer') });
   // English, like the rest of Kertas: the editor has other languages, Kertas's own parts do not yet
   host.setDocsLanguage('en');
   host.installDocsContextMenu((contents) => windows.has(contents.id));
@@ -78,6 +79,63 @@ function start() {
   host.setActiveDocsResolver(() => { const t = tabs.get(activeTab()); return t ? t.view.webContents : null; });
   host.setDocsFileSavedHook((wc, filePath) => { const id = tabOf(wc.id); if (id) tell('path', id, { path: filePath }); });
   host.setDocsFileOpenedHook((wcId, filePath) => { const id = tabOf(wcId); if (id) tell('path', id, { path: filePath }); });
+  startSheetsAndPdf();
+}
+
+// The spreadsheet and PDF editors from the same project, hosted the same way. Each is
+// there only if this build has it; the spreadsheet one also needs its helper program,
+// which reads and writes the workbook files.
+const SIDECAR = path.join(ROOT, 'native', process.platform === 'win32' ? 'xlsx-sidecar.exe' : 'xlsx-sidecar').replace('app.asar', 'app.asar.unpacked');
+const has = {
+  writer: true,
+  sheets: fs.existsSync(path.join(ROOT, 'sheets', 'renderer', 'index.html')) && fs.existsSync(SIDECAR),
+  pdf: fs.existsSync(path.join(ROOT, 'pdf', 'renderer', 'index.html')),
+};
+function startSheetsAndPdf() {
+  const openHere = (filePath) => { tell('open-path', null, { path: filePath }); return true; };
+  const roots = { docs: path.join(ROOT, 'renderer') };
+  if (has.sheets) {
+    roots.sheets = path.join(ROOT, 'sheets', 'renderer');
+    host.configureSheetsRuntime({
+      preloadPath: path.join(ROOT, 'sheets', 'preload', 'index.js'),
+      rendererFile: path.join(ROOT, 'sheets', 'renderer', 'index.html'),
+      sidecarPath: SIDECAR,
+      openGeneratedPath: openHere,
+    });
+    host.registerSheetsIpc();
+    host.setSheetsWorkbookOpenedHook((wc, filePath) => { const id = tabOf(wc.id); if (id) tell('path', id, { path: filePath }); });
+    host.setSheetsCloseTabHook(() => { const id = activeTab(); if (id) tell('close', id, {}); });
+    app.on('will-quit', () => { try { host.stopSheetsSidecar(); } catch { /* never started */ } });
+  }
+  if (has.pdf) {
+    roots.pdf = path.join(ROOT, 'pdf', 'renderer');
+    host.configurePdfRuntime({
+      preloadPath: path.join(ROOT, 'pdf', 'preload', 'index.js'),
+      rendererFile: path.join(ROOT, 'pdf', 'renderer', 'index.html'),
+      openGeneratedPath: openHere,
+    });
+    host.setPdfRenamedHook((wc, _from, to) => { const id = tabOf(wc.id); const t = tabs.get(id); if (t) { t.path = to; tell('path', id, { path: to }); } });
+    // The PDF editor's Convert menu. The file as it is on disk is converted, in the
+    // background process; a Word result opens as a document, a workbook is saved first.
+    let converting = false;
+    ipcMain.handle('pdf:convert-office', async (e, format) => {
+      const t = tabs.get(tabOf(e.sender.id));
+      if (!t || t.kind !== 'pdf' || !t.path || converting || !['docx', 'xlsx'].includes(format)) return;
+      converting = true;
+      try {
+        const out = await convertPdfForTab(await fs.promises.readFile(t.path), format);
+        if (format === 'docx') { tell('result', null, { token: out }); return; }
+        const { dialog } = require('electron');
+        const res = await dialog.showSaveDialog(mainWin, { defaultPath: t.path.replace(/\.pdf$/i, '') + '.xlsx', filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }] });
+        if (res.canceled || !res.filePath) return;
+        await fs.promises.writeFile(res.filePath, out);
+        tell('open-path', null, { path: res.filePath });
+      } catch (err) { tell('error', null, { message: `Could not convert this PDF: ${String((err && err.message) || err)}` }); }
+      finally { converting = false; tell('convert-done', null, {}); }
+    });
+    host.setPdfRedactionSavedHook((wc, filePath) => { const id = tabOf(wc.id); if (id) tell('path', id, { path: filePath }); });
+  }
+  host.installRendererProtocol(roots);
 }
 
 // ---- spelling, without the internet --------------------------------------------
@@ -124,30 +182,45 @@ let resultSeq = 0;
 
 function attach(win) {
   mainWin = win;
-  if (host) host.setDocsShellWindow(win);
+  if (!host) return;
+  host.setDocsShellWindow(win);
+  if (has.sheets) host.setSheetsShellWindow(win);
 }
 const tell = (type, id, more) => { if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('kertas:new-writer-event', { type, id, ...more }); };
 const tabOf = (wcId) => { for (const [id, t] of tabs) if (t.wcId === wcId) return id; return null; };
 const activeTab = () => { for (const [id, t] of tabs) if (t.shown) return id; return null; };
 const keepResult = (bytes) => { const token = `r${++resultSeq}`; results.set(token, Buffer.from(bytes)); return token; };
 
-function openTab(id, { filePath = null, result = null } = {}) {
-  if (!host || !mainWin || tabs.has(id)) return false;
-  const view = host.createDocsView(filePath || undefined);
+function openTab(id, { kind = 'writer', filePath = null, result = null } = {}) {
+  if (!host || !mainWin || tabs.has(id) || !has[kind]) return false;
+  let view;
+  if (kind === 'sheets') {
+    if (!filePath) host.setSheetsNewBlank();
+    view = host.createSheetsView({ includeAiHandlers: false, openingWorkbook: !!filePath });
+    if (filePath) host.queueWorkbookForView(view.webContents, filePath);
+  } else if (kind === 'pdf') view = host.createPdfView(filePath || undefined);
+  else view = host.createDocsView(filePath || undefined);
   const wc = view.webContents;
   const wcId = wc.id;
   windows.add(wcId);
-  const bytes = result && results.get(result);
-  if (bytes) { results.delete(result); host.queueDocsResultDoc(wcId, { bytes }); }
-  else if (!filePath) host.markDocsNewBlank(wcId);
+  if (kind === 'writer') {
+    const bytes = result && results.get(result);
+    if (bytes) { results.delete(result); host.queueDocsResultDoc(wcId, { bytes }); }
+    else if (!filePath) host.markDocsNewBlank(wcId);
+  }
   view.setVisible(false);
   mainWin.contentView.addChildView(view);
-  tabs.set(id, { view, wcId, shown: false });
-  wc.on('page-title-updated', (_e, title) => tell('title', id, { title }));
+  tabs.set(id, { view, wcId, kind, path: filePath, shown: false });
+  if (kind === 'writer') wc.on('page-title-updated', (_e, title) => tell('title', id, { title }));
   // Kertas's own tab keys still work while the editor has the keyboard
   wc.on('before-input-event', (e, input) => {
     if (input.type !== 'keyDown' || !(input.control || input.meta)) return;
-    if (input.key === 'Tab') { e.preventDefault(); tell(input.shift ? 'prev-tab' : 'next-tab', id, {}); }
+    if (input.key === 'Tab') { e.preventDefault(); tell(input.shift ? 'prev-tab' : 'next-tab', id, {}); return; }
+    // the spreadsheet and PDF editors leave Save, Open, Print and the rest to their host's menu
+    if (kind === 'writer' || input.alt) return;
+    const key = String(input.key).toLowerCase();
+    if (key === 'w') { e.preventDefault(); tell('close', id, {}); }
+    else if ('sopk'.includes(key) && key.length === 1 || (input.shift && (key === 'e' || key === 'n'))) { e.preventDefault(); tell('shortcut', id, { key, shift: !!input.shift }); }
   });
   wc.once('destroyed', () => { windows.delete(wcId); tabs.delete(id); });
   return true;
@@ -164,6 +237,7 @@ function layout(id, rect) {
     for (const other of tabs.values()) if (other !== t && other.shown) { other.shown = false; other.view.setVisible(false); }
     t.shown = true;
     t.view.setVisible(true);
+    if (t.kind === 'sheets') host.setActiveSheetsWebContents(t.view.webContents);
     if (rect.focus !== false) t.view.webContents.focus();
   }
 }
@@ -178,14 +252,18 @@ async function snapshot(id) {
 
 async function isDirty(id) {
   const t = tabs.get(id);
-  return t ? host.docsQueryDirty(t.view.webContents) : false;
+  if (!t) return false;
+  if (t.kind === 'sheets') return host.sheetsPendingEditCount(t.wcId) > 0;
+  if (t.kind === 'pdf') return host.pdfIsDirty(t.wcId);
+  return host.docsQueryDirty(t.view.webContents);
 }
 
 // Asks about unsaved changes (Save / Don't Save / Cancel), then removes the tab's view
 async function closeTab(id) {
   const t = tabs.get(id);
   if (!t) return true;
-  if (!(await host.requestDocsClose(t.view.webContents, mainWin))) return false;
+  const ask = t.kind === 'sheets' ? host.requestSheetsClose : t.kind === 'pdf' ? host.requestPdfClose : host.requestDocsClose;
+  if (!(await ask(t.view.webContents, mainWin))) return false;
   tabs.delete(id);
   try { mainWin.contentView.removeChildView(t.view); } catch { /* window already gone */ }
   try { t.view.webContents.close({ waitForBeforeUnload: false }); } catch { /* already closed */ }
@@ -195,13 +273,24 @@ async function closeTab(id) {
 // A menu or palette command from Kertas, run in the tab's editor
 function command(id, name) {
   const t = tabs.get(id);
-  if (t) t.view.webContents.send('menu:command', name);
+  if (!t) return;
+  if (t.kind === 'sheets') { host.setActiveSheetsWebContents(t.view.webContents); host.sendSheetsMenuAction(name); }
+  else if (t.kind === 'pdf') {
+    if (name === 'save') host.flushPdfSave(t.view.webContents, true);
+    else if (name === 'print') host.sendPdfPrintRequest(t.view.webContents);
+    else if (name === 'save-as') savePdfAs(t);
+  } else t.view.webContents.send('menu:command', name);
+}
+async function savePdfAs(t) {
+  const { dialog } = require('electron');
+  const res = await dialog.showSaveDialog(mainWin, { filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+  if (!res.canceled && res.filePath) host.requestPdfSaveAs(t.view.webContents, res.filePath);
 }
 
 // PDF to Word with the layout kept. The work runs in a process of its own (see
 // writer2-pdf-worker.cjs), so the window stays responsive however long it takes; the result
 // waits here until its tab asks for it.
-function convertPdfForTab(data) {
+function convertPdfForTab(data, format = 'docx') {
   if (!host) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
     const child = utilityProcess.fork(path.join(__dirname, 'writer2-pdf-worker.cjs'), [], { serviceName: 'Kertas PDF to Word' });
@@ -210,13 +299,13 @@ function convertPdfForTab(data) {
     // generous: a scanned book can take minutes; a process that has stopped answering is ended
     const timer = setTimeout(() => finish(reject, new Error('The conversion took too long and was stopped')), 15 * 60 * 1000);
     child.on('message', (msg) => {
-      if (msg.docx) finish(resolve, keepResult(msg.docx));
+      if (msg.docx) finish(resolve, format === 'docx' ? keepResult(msg.docx) : Buffer.from(msg.docx));
       else if (msg.error) finish(reject, new Error(msg.error));
-      else if (msg.total) tell('convert-progress', null, { page: msg.page, total: msg.total });
+      else if (msg.total) tell('convert-progress', null, { page: msg.page, total: msg.total, format });
     });
     child.on('exit', (code) => finish(reject, new Error(`The converter stopped unexpectedly (${code})`)));
-    child.once('spawn', () => child.postMessage({ pdf: Buffer.from(data), wasm: path.join(ROOT, 'wasm', 'pdfium.wasm') }));
+    child.once('spawn', () => child.postMessage({ pdf: Buffer.from(data), format, wasm: path.join(ROOT, 'wasm', 'pdfium.wasm') }));
   });
 }
 
-module.exports = { available, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };
+module.exports = { available, has, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };

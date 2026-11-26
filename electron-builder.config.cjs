@@ -32,6 +32,8 @@ module.exports = {
   // Renderer code is bundled by Vite into dist/, so only the main process's own
   // dependencies (electron-updater, word-extractor) are shipped as node_modules.
   asar: true,
+  // the new Sheets starts a helper program, and a program cannot be started from inside the archive
+  asarUnpack: ['electron/writer2/native/**'],
   icon: 'build/icon',
   fileAssociations: [
     assoc('docx', 'Word Document'),

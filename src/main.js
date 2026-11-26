@@ -4,7 +4,7 @@ if (import.meta.env?.DEV) globalThis.__kertasFreezeJson = true;
 import { userName, setUserName } from './lib/user.js';
 import './styles.css';
 import {
-  openFiles, readPath, saveFile, newWriterInfo, newWriterChosen, newWriterOn, recentFiles, pinRecent, removeRecent, confirmDialog, onNative, confirmClose,
+  openFiles, readPath, saveFile, newWriterInfo, newWriterChosen, newWriterOn, newEditorChosen, newEditorOn, recentFiles, pinRecent, removeRecent, confirmDialog, onNative, confirmClose,
   kindForName, extOf, isDesktop, platform, previewPdf, printToPdf, setNativeTheme,
   recoveryWrite, recoveryDelete, recoveryList, recoveryRead, convertLegacyNative, updates,
 } from './lib/platform.js';
@@ -97,7 +97,8 @@ function updateTab(tab) {
   if (tab.id === activeId) document.title = `${tab.name}${tab.dirty ? ' *' : ''} - Kertas Office`;
 }
 
-async function openTab(kind, { name, path = null, data = null, html = null, result = null } = {}) {
+const NEW_EDITOR_FILES = { sheets: /\.(xlsx|xlsm|csv)$/i, pdf: /\.pdf$/i };
+async function openTab(kind, { name, path = null, data = null, html = null, result = null, classic = false } = {}) {
   if (path) for (const t of tabs.values()) if (t.path === path) { activate(t.id); return t; }
   // Word documents go to the new Writer when it is switched on: a file by its path, anything
   // else (a template, a dropped file, a converted older format) by its bytes
@@ -105,6 +106,15 @@ async function openTab(kind, { name, path = null, data = null, html = null, resu
     try {
       if (!result && data && !(path && /\.docx$/i.test(path))) result = await window.kertasNative.newWriter('stash', data);
       const t = await openNativeWriter({ name, path: result ? null : path, result });
+      if (t) return t;
+    } catch (e) { console.error(e); }
+  }
+  // Spreadsheets and PDFs the same way, each when its own switch is on; these editors read
+  // the file themselves, so only a file on disk (or a new blank workbook) goes to them
+  if ((kind === 'sheets' || kind === 'pdf') && !classic && !html && !result && await newEditorOn(kind)
+    && (path ? NEW_EDITOR_FILES[kind].test(path) : kind === 'sheets' && !data)) {
+    try {
+      const t = await openNativeWriter({ kind, name, path });
       if (t) return t;
     } catch (e) { console.error(e); }
   }
@@ -213,15 +223,15 @@ if (isDesktop && window.kertasNative?.newWriter) {
   }, 1500);
 }
 
-async function openNativeWriter({ name, path = null, result = null } = {}) {
+async function openNativeWriter({ kind = 'writer', name, path = null, result = null } = {}) {
   if (path) for (const t of tabs.values()) if (t.path === path) { activate(t.id); return t; }
   const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  if (!name) name = `${MODULES.writer.newName}${++untitled.writer}.${MODULES.writer.ext}`;
+  if (!name) name = `${MODULES[kind].newName}${++untitled[kind]}.${MODULES[kind].ext}`;
 
   const tabEl = document.createElement('button');
   tabEl.className = 'tab';
   tabEl.dataset.tab = id;
-  tabEl.innerHTML = `${badge('writer')}<span class="title"></span><span class="dirty"></span><span class="close" title="Close (Ctrl+W)">${icon('close', 13)}</span>`;
+  tabEl.innerHTML = `${badge(kind)}<span class="title"></span><span class="dirty"></span><span class="close" title="Close (Ctrl+W)">${icon('close', 13)}</span>`;
   tabEl.addEventListener('click', (e) => {
     if (e.target.closest('.close')) { e.stopPropagation(); closeTab(id); } else activate(id);
   });
@@ -235,13 +245,13 @@ async function openNativeWriter({ name, path = null, result = null } = {}) {
   el.innerHTML = `<div class="loading"><div><div class="spinner"></div>Opening ${esc(name)}</div></div>`;
   viewsEl.appendChild(el);
 
-  const tab = { id, kind: 'writer', name, path, dirty: false, el, tabEl, native: true, ready: false, instance: {} };
+  const tab = { id, kind, name, path, dirty: false, el, tabEl, native: true, ready: false, instance: {} };
   tabs.set(id, tab);
   updateTab(tab);
   activate(id);
 
   let ok = false;
-  try { ok = await window.kertasNative.newWriter('open', { id, path, result }); } catch (e) { console.error(e); }
+  try { ok = await window.kertasNative.newWriter('open', { id, kind, path, result }); } catch (e) { console.error(e); }
   if (!ok) { tabEl.remove(); el.remove(); tabs.delete(id); activate('home'); return null; }
   tab.ready = true;
   syncNativeView();
@@ -258,12 +268,17 @@ onNative('new-writer', (ev) => {
     tab.name = ev.path.split(/[\\/]/).pop();
     updateTab(tab);
     if (activeId === tab.id) setStatus(tab.path);
-  } else if (ev.type === 'convert-progress') setStatus(`Converting to Word, keeping the layout: page ${ev.page} of ${ev.total}`);
+  } else if (ev.type === 'convert-progress') setStatus(`Converting to ${ev.format === 'xlsx' ? 'a workbook' : 'Word, keeping the layout'}: page ${ev.page} of ${ev.total}`);
+  else if (ev.type === 'convert-done') setStatus(active()?.path || '');
+  else if (ev.type === 'error') toast(ev.message);
   else if (ev.type === 'open-path') openPath(ev.path);
   else if (ev.type === 'new') newDocument();
   else if (ev.type === 'result') openTab('writer', { result: ev.token });
   else if (ev.type === 'close' && tab) closeTab(tab.id);
-  else if (ev.type === 'next-tab' || ev.type === 'prev-tab') {
+  else if (ev.type === 'shortcut') { // a Kertas shortcut pressed while the editor had the keyboard
+    if (ev.key === 'k') openPalette();
+    else { const cmd = shortcutCommand(ev.key, ev.shift); if (cmd) runCommand(cmd); }
+  } else if (ev.type === 'next-tab' || ev.type === 'prev-tab') {
     const ids = ['home', ...tabs.keys()];
     activate(ids[(ids.indexOf(activeId) + (ev.type === 'prev-tab' ? -1 : 1) + ids.length) % ids.length]);
   }
@@ -400,7 +415,8 @@ async function openDialog(kind = 'all') { return openFileRecords(await openFiles
 async function mergePdfs() {
   const files = await openFiles('pdf', true);
   if (!files.length) return;
-  const tab = await openTab('pdf', files[0]);
+  // Kertas's own merge and sign tools work in the current PDF editor
+  const tab = await openTab('pdf', { ...files[0], classic: true });
   if (files.length > 1) await tab.instance?.appendFiles?.(files.slice(1));
 }
 async function imagesToPdfCmd() {
@@ -419,7 +435,7 @@ async function imagesToPdfCmd() {
 async function signPdf() {
   const [file] = await openFiles('pdf', false);
   if (!file) return;
-  const tab = await openTab('pdf', file);
+  const tab = await openTab('pdf', { ...file, classic: true });
   tab.instance?.startSignature?.();
 }
 
@@ -727,12 +743,12 @@ window.addEventListener('keydown', (e) => {
     activate(ids[(i + (e.shiftKey ? -1 : 1) + ids.length) % ids.length]);
     return;
   }
-  const map = {
-    s: e.shiftKey ? 'save-as' : 'save', o: 'open', p: 'print',
-    e: e.shiftKey ? 'export-pdf' : null, n: e.shiftKey ? 'new-sheet' : null,
-  };
-  if (map[k]) { e.preventDefault(); runCommand(map[k]); }
+  const cmd = shortcutCommand(k, e.shiftKey);
+  if (cmd) { e.preventDefault(); runCommand(cmd); }
 }, true);
+function shortcutCommand(k, shift) {
+  return { s: shift ? 'save-as' : 'save', o: 'open', p: 'print', e: shift ? 'export-pdf' : null, n: shift ? 'new-sheet' : null }[k] || null;
+}
 
 if (!isDesktop) {
   window.addEventListener('beforeunload', (e) => {
@@ -858,6 +874,8 @@ async function showAbout() {
       { id: 'info', type: 'info', html: `<table class="stat-table"><tr><td>Updates</td><td>${status}</td></tr><tr><td>Older formats</td><td>${isDesktop ? (lo ? 'LibreOffice found: .doc, .xls, .rtf, .odt and .ods keep their formatting' : 'Built in: .xls and .ods, and the text of .doc. Install LibreOffice for full formatting and .rtf / .odt') : '.xls and .ods'}</td></tr><tr><td>Your files</td><td>Stay on this device</td></tr></table>` },
       { id: 'name', label: 'Your name (on tracked changes and comments)', value: userName(), placeholder: 'e.g. Aisha Rahman' },
       ...(nw.available ? [{ id: 'newWriter', type: 'checkbox', label: 'Open Word documents in the new Writer (preview)', value: newWriterChosen() }] : []),
+      ...(nw.sheets ? [{ id: 'newSheets', type: 'checkbox', label: 'Open spreadsheets in the new Sheets (preview)', value: newEditorChosen('sheets') }] : []),
+      ...(nw.pdf ? [{ id: 'newPdf', type: 'checkbox', label: 'Open PDFs in the new PDF editor (preview)', value: newEditorChosen('pdf') }] : []),
       ...(isDesktop && st.packaged ? [{ id: 'auto', type: 'checkbox', label: 'Download updates automatically', value: st.auto !== false }] : []),
       ...(SUPPORT_BUILD ? [
         { id: 'support', type: 'info', html: `<div class="support-line">${icon('coffee', 16)}<span>Kertas is free and open source. If it saves you time, you can <a href="${SUPPORT_URL}" target="_blank" rel="noopener">buy me a coffee</a>.</span></div>` },
@@ -872,6 +890,11 @@ async function showAbout() {
   if (!res) return;
   if (res.values.name !== undefined && res.values.name.trim() !== userName()) { setUserName(res.values.name); window.kertasNative?.newWriter?.('author', res.values.name.trim()); toast(res.values.name.trim() ? `Your changes and comments now show as ${res.values.name.trim()}` : 'Name cleared'); }
   if (res.values.newWriter !== undefined && res.values.newWriter !== newWriterChosen()) { try { localStorage.setItem('kertas-new-writer', res.values.newWriter ? '1' : '0'); } catch { /* private mode */ } toast(res.values.newWriter ? 'Word documents now open in the new Writer' : 'Word documents open in the current Writer again'); }
+  for (const [field, kind, what] of [['newSheets', 'sheets', 'Spreadsheets'], ['newPdf', 'pdf', 'PDFs']]) {
+    if (res.values[field] === undefined || res.values[field] === newEditorChosen(kind)) continue;
+    try { localStorage.setItem(`kertas-new-${kind}`, res.values[field] ? '1' : '0'); } catch { /* private mode */ }
+    toast(res.values[field] ? `${what} now open in the new editor` : `${what} open in the current editor again`);
+  }
   if (res.values.auto !== undefined && res.values.auto !== (st.auto !== false)) await updates('set-auto', res.values.auto);
   if (res.values.cup !== undefined) { try { localStorage.setItem('kertas-hide-coffee', res.values.cup ? '0' : '1'); } catch { /* private mode */ } showCoffee(); }
   if (res.action === 'check') checkUpdates(true);

@@ -1,14 +1,14 @@
 diff --git a/apps/docs/kertas.vite.config.ts b/apps/docs/kertas.vite.config.ts
 new file mode 100644
-index 0000000..822b24b
+index 0000000..31e9b9e
 --- /dev/null
 +++ b/apps/docs/kertas.vite.config.ts
-@@ -0,0 +1,172 @@
-+import { readdirSync, readFileSync } from 'node:fs'
-+import { join, resolve } from 'node:path'
+@@ -0,0 +1,58 @@
++import { resolve } from 'node:path'
 +import react from '@vitejs/plugin-react'
 +import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 +import type { Plugin } from 'vite'
++import { type AiModules, kertasAssetNames, kertasNoAi as noAiPlugin, kertasNoAiBridge, kertasNoAiMain, kertasNoAiStrings } from '../kertas-build'
 +
 +// Build used when Kertas Office hosts this editor. Same sources as the normal
 +// build; the main-process entry exports the hosting functions instead of
@@ -19,131 +19,18 @@ index 0000000..822b24b
 +  '@genoffice/docx-engine': resolve(__dirname, '../../packages/docx-engine/src/index.ts'),
 +}
 +
-+// Kertas Office has no AI assistant, and it is left out of the build rather than
-+// switched off: the assistant's panel, its tools and the packages that talk to AI
-+// services resolve to stand-ins, so their code never reaches the bundle.
 +const noAi = resolve(__dirname, 'src/renderer/kertas/no-ai')
-+const AI_PACKAGES = /^@genoffice\/(ai-provider|ai-search|project-store|file-parse)(\/|$)/
-+const AI_MODULES: Array<[RegExp, string]> = [
++const AI_MODULES: AiModules = [
 +  [/(^|\/)ai\/AiPanel$/, 'AiPanel.tsx'],
 +  [/(^|\/)components\/AiAskPopover$|^\.\/AiAskPopover$/, 'AiAskPopover.tsx'],
 +  [/(^|\/)mcp-bridge$/, 'mcp-bridge.ts'],
 +  [/(^|\/)ai\/tools$/, 'tools.ts'],
 +]
-+// Every name the sources import from those packages, found by reading the sources, so
-+// the stand-in can export each one. A name left out would be a build error, never a
-+// silent `undefined`.
-+const AI_STANDIN = '\0kertas-no-ai-package'
-+function importedAiNames(): string[] {
-+  const names = new Set<string>()
-+  const roots = [resolve(__dirname, 'src'), resolve(__dirname, '../../packages')]
-+  const visit = (dir: string): void => {
-+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-+      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue
-+      const full = join(dir, entry.name)
-+      if (entry.isDirectory()) visit(full)
-+      else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.|\.d\.ts$/.test(entry.name)) {
-+        const code = readFileSync(full, 'utf8')
-+        const stmt = /(?:import|export)\s+(type\s+)?\{([^}]*)\}\s*from\s*['"](@genoffice\/[^'"]+)['"]/g
-+        let m: RegExpExecArray | null
-+        while ((m = stmt.exec(code)) !== null) {
-+          if (m[1] || !AI_PACKAGES.test(m[3])) continue
-+          for (const part of m[2].split(',')) {
-+            const name = part.trim().replace(/^type\s+.*/, '').split(/\s+as\s+/)[0].trim()
-+            if (name) names.add(name)
-+          }
-+        }
-+      }
-+    }
-+  }
-+  for (const root of roots) visit(root)
-+  return [...names].sort()
-+}
-+// What each of those names is in Kertas's build: one inert value that can be called,
-+// constructed, read from and iterated (as nothing) without doing anything.
-+const standInSource = (): string =>
-+  `const inert = new Proxy(function () {}, {
-+  get: (_t, key) => key === Symbol.iterator ? function* () {} : key === Symbol.toPrimitive ? () => '' : key === 'then' ? undefined : key === 'prototype' ? Object.prototype : inert,
-+  apply: () => inert,
-+  construct: () => ({}),
-+})
-+${importedAiNames().map((name) => `export const ${name} = inert`).join('\n')}
-+export default inert
-+`
-+
-+const kertasNoAi = (): Plugin => ({
-+  name: 'kertas-no-ai',
-+  enforce: 'pre',
-+  load(id) {
-+    return id === AI_STANDIN ? standInSource() : null
-+  },
-+  resolveId(source, importer) {
-+    if (AI_PACKAGES.test(source)) return AI_STANDIN
-+    if (!importer || importer.startsWith(noAi)) return null
-+    for (const [pattern, file] of AI_MODULES) if (pattern.test(source)) return resolve(noAi, file)
-+    return null
-+  },
-+})
-+// The assistant's interface text goes too: its own string tables load empty, and
-+// the few lines about it in the shared tables (sign-in and credit messages) are
-+// taken out, so nothing in the build names an AI service.
-+const AI_STRINGS = /[\\/]renderer[\\/]i18n[\\/]ai[\\/]([\w-]+)\.ts$/
-+const STRING_TABLES = /[\\/](?:renderer[\\/]i18n[\\/](?:app|ribbon)[\\/][\w-]+|packages[\\/]i18n[\\/]src[\\/][\w-]+|main[\\/]docs-main)\.ts$/
-+const AI_ENTRY =
-+  /^[ \t]*(?:[A-Za-z_$][\w$]*|'[^'\n]+')\s*:\s*(?:\n\s*)?(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)\s*,?[ \t]*\n/gm
-+const kertasNoAiStrings = (): Plugin => ({
-+  name: 'kertas-no-ai-strings',
-+  enforce: 'pre',
-+  load(id) {
-+    const table = AI_STRINGS.exec(id.split('?')[0])
-+    if (!table) return null
-+    return `export const ${table[1].replace(/-(\w)/g, (_m, c: string) => c.toUpperCase())} = {}\n`
-+  },
-+  transform(code, id) {
-+    if (!STRING_TABLES.test(id.split('?')[0]) || !/genspark/i.test(code)) return null
-+    return { code: code.replace(AI_ENTRY, (entry) => (/genspark/i.test(entry) ? '' : entry)), map: null }
-+  },
-+})
-+// The window's bridge loses the assistant's entries as well: each member of the
-+// exposed object that talks on an assistant channel is taken out of the source.
-+const PRELOAD = /[\\/]src[\\/]preload[\\/]index\.ts$/
-+const AI_CHANNEL = /'(?:ai|kb|project):|docs:mcp-/
-+const kertasNoAiBridge = (): Plugin => ({
-+  name: 'kertas-no-ai-bridge',
-+  enforce: 'pre',
-+  transform(code, id) {
-+    if (!PRELOAD.test(id.split('?')[0])) return null
-+    const lines = code.split('\n')
-+    const out: string[] = []
-+    let member: string[] | null = null
-+    const flush = () => {
-+      if (member && !AI_CHANNEL.test(member.join('\n'))) out.push(...member)
-+      member = null
-+    }
-+    for (const line of lines) {
-+      // members of the exposed objects start at two spaces; anything at column 0 ends the object
-+      if (/^ {2}[A-Za-z_$][\w$]*\s*[:(]/.test(line)) {
-+        flush()
-+        member = [line]
-+      } else if (member && /^\S/.test(line)) {
-+        flush()
-+        out.push(line)
-+      } else if (member) member.push(line)
-+      else out.push(line)
-+    }
-+    flush()
-+    const next = out
-+      .join('\n')
-+      .replace(/^const aiNamingApi = \{\s*\}\n/m, '')
-+      .replace(/^contextBridge\.exposeInMainWorld\('aiNamingApi', aiNamingApi\)\n/m, '')
-+      .replace(/^const projectApi[^\n]*= \{\s*\}\n/m, 'const projectApi = {}\n')
-+    return { code: next, map: null }
-+  },
-+})
++const kertasNoAi = (): Plugin => noAiPlugin(noAi, AI_MODULES)
 +
 +export default defineConfig({
 +  main: {
-+    plugins: [kertasNoAi(), kertasNoAiStrings()],
++    plugins: [kertasNoAi(), kertasNoAiStrings(), kertasNoAiMain()],
 +    resolve: { alias: localAlias },
 +    build: {
 +      externalizeDeps: false,
@@ -169,8 +56,7 @@ index 0000000..822b24b
 +      outDir: 'out-kertas/renderer',
 +      rollupOptions: {
 +        output: {
-+          // the bundled fonts keep their own file names apart from the original product's name
-+          assetFileNames: (asset) => `assets/${String(asset.names?.[0] ?? asset.name ?? 'asset').replace(/^GenOffice/, 'Kertas').replace(/(\.[^.]+)$/, '-[hash]$1')}`,
++          assetFileNames: kertasAssetNames,
 +        },
 +      },
 +    },
@@ -731,10 +617,10 @@ index 8ce14e6..ad45275 100644
        try {
 diff --git a/apps/docs/src/main/kertas-entry.ts b/apps/docs/src/main/kertas-entry.ts
 new file mode 100644
-index 0000000..b91b813
+index 0000000..cf3aa6f
 --- /dev/null
 +++ b/apps/docs/src/main/kertas-entry.ts
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,76 @@
 +// Entry used when Kertas Office hosts this editor: the same main-process code,
 +// without starting an app of its own.
 +export {
@@ -779,27 +665,53 @@ index 0000000..b91b813
 +  setDocsFileSavedHook,
 +  setDocsFileOpenedHook,
 +} from './docs-main'
++
++// The spreadsheet and PDF editors are hosted the same way and share this bundle,
++// so the three keep one copy of the shared main-process state.
++export {
++  configureSheetsRuntime,
++  registerSheetsIpc,
++  createSheetsView,
++  queueWorkbookForView,
++  setSheetsNewBlank,
++  requestSheetsClose,
++  sheetsPendingEditCount,
++  sendSheetsMenuAction,
++  setActiveSheetsWebContents,
++  setSheetsShellWindow,
++  setSheetsHostWindowHook,
++  setSheetsWorkbookOpenedHook,
++  setSheetsCloseTabHook,
++  markSheetsShuttingDown,
++  resetSheetsShuttingDown,
++  stopSheetsSidecar,
++} from '../../../sheets/src/main/sheets-main'
++export {
++  configurePdfRuntime,
++  createPdfView,
++  requestPdfClose,
++  pdfIsDirty,
++  flushPdfSave,
++  sendPdfPrintRequest,
++  requestPdfSaveAs,
++  setPdfRenamedHook,
++  setPdfRedactionSavedHook,
++} from '../../../pdf/src/main/pdf-main'
 diff --git a/apps/docs/src/main/kertas-pdf-entry.ts b/apps/docs/src/main/kertas-pdf-entry.ts
 new file mode 100644
-index 0000000..9084f71
+index 0000000..370cf36
 --- /dev/null
 +++ b/apps/docs/src/main/kertas-pdf-entry.ts
-@@ -0,0 +1,32 @@
-+// Entry for Kertas Office's PDF to Word converter. It is built as a file of its
+@@ -0,0 +1,48 @@
++// Entry for Kertas Office's PDF to Word and PDF to Excel converters. It is built as a file of its
 +// own and run in a separate process, so a long conversion never holds up the
 +// window; nothing in it needs the app.
 +import { readFileSync } from 'node:fs'
-+import { convertPdfToDocx } from '../../../../packages/pdf2docx/src'
++import { convertPdfToDocx, convertPdfToXlsx } from '../../../../packages/pdf2docx/src'
 +import type { PdfiumModule } from '../../../../packages/pdf2docx/src'
 +
 +let pdfium: Promise<PdfiumModule> | null = null
-+
-+/** PDF bytes to Word bytes, on this computer. `wasmPath` is the PDFium engine file. */
-+export async function convertPdfBytesToDocx(
-+  pdf: Uint8Array,
-+  wasmPath: string,
-+  onProgress?: (page: number, total: number) => void,
-+): Promise<Uint8Array> {
++const engine = (wasmPath: string): Promise<PdfiumModule> => {
 +  pdfium ??= (async () => {
 +    const { init } = (await import('@embedpdf/pdfium')) as unknown as {
 +      init(overrides: object): Promise<object>
@@ -811,8 +723,30 @@ index 0000000..9084f71
 +    m._PDFiumExt_Init()
 +    return m
 +  })()
++  return pdfium
++}
++
++/** PDF bytes to workbook bytes, on this computer: the tables found on each page. */
++export async function convertPdfBytesToXlsx(
++  pdf: Uint8Array,
++  wasmPath: string,
++  onProgress?: (page: number, total: number) => void,
++): Promise<Uint8Array> {
++  const result = await convertPdfToXlsx(pdf, {
++    pdfium: await engine(wasmPath),
++    ...(onProgress ? { onProgress } : {}),
++  })
++  return result.xlsx
++}
++
++/** PDF bytes to Word bytes, on this computer. `wasmPath` is the PDFium engine file. */
++export async function convertPdfBytesToDocx(
++  pdf: Uint8Array,
++  wasmPath: string,
++  onProgress?: (page: number, total: number) => void,
++): Promise<Uint8Array> {
 +  const result = await convertPdfToDocx(pdf, {
-+    pdfium: await pdfium,
++    pdfium: await engine(wasmPath),
 +    ...(onProgress ? { onProgress } : {}),
 +  })
 +  return result.docx
@@ -3638,6 +3572,797 @@ index baa778a..7c770e7 100644
   * figure was reachable from the AI panel alone.
   *
   * Every no-selection case falls out of the counting rule itself: a collapsed
+diff --git a/apps/kertas-build.ts b/apps/kertas-build.ts
+new file mode 100644
+index 0000000..d33493d
+--- /dev/null
++++ b/apps/kertas-build.ts
+@@ -0,0 +1,194 @@
++import { readdirSync, readFileSync } from 'node:fs'
++import { join, resolve } from 'node:path'
++import type { Plugin } from 'vite'
++
++// Shared by the builds Kertas Office makes of the three editors.
++// Kertas Office has no AI assistant, and it is left out of the build rather than
++// switched off: the assistant's panel, its tools and the packages that talk to AI
++// services resolve to stand-ins, so their code never reaches the bundle.
++const AI_PACKAGES = /^@genoffice\/(ai-provider|ai-search|project-store|file-parse)(\/|$)/
++export type AiModules = Array<[RegExp, string]>
++// Every name the sources import from those packages, found by reading the sources, so
++// the stand-in can export each one. A name left out would be a build error, never a
++// silent `undefined`.
++const AI_STANDIN = '\0kertas-no-ai-package'
++function importedAiNames(): string[] {
++  const names = new Set<string>()
++  const roots = [...['docs', 'sheets', 'pdf'].map((app) => resolve(__dirname, app, 'src')), resolve(__dirname, '../packages')]
++  const visit = (dir: string): void => {
++    for (const entry of readdirSync(dir, { withFileTypes: true })) {
++      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue
++      const full = join(dir, entry.name)
++      if (entry.isDirectory()) visit(full)
++      else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.|\.d\.ts$/.test(entry.name)) {
++        const code = readFileSync(full, 'utf8')
++        const stmt = /(?:import|export)\s+(type\s+)?\{([^}]*)\}\s*from\s*['"](@genoffice\/[^'"]+)['"]/g
++        let m: RegExpExecArray | null
++        while ((m = stmt.exec(code)) !== null) {
++          if (m[1] || !AI_PACKAGES.test(m[3])) continue
++          for (const part of m[2].split(',')) {
++            const name = part.trim().replace(/^type\s+.*/, '').split(/\s+as\s+/)[0].trim()
++            if (name) names.add(name)
++          }
++        }
++      }
++    }
++  }
++  for (const root of roots) visit(root)
++  return [...names].sort()
++}
++// What each of those names is in Kertas's build: one inert value that can be called,
++// constructed, read from and iterated (as nothing) without doing anything.
++const standInSource = (): string =>
++  `const inert = new Proxy(function () {}, {
++  get: (_t, key) => key === Symbol.iterator ? function* () {} : key === Symbol.toPrimitive ? () => '' : key === 'then' ? undefined : key === 'prototype' ? Object.prototype : inert,
++  apply: () => inert,
++  construct: () => ({}),
++})
++${importedAiNames().map((name) => `export const ${name} = inert`).join('\n')}
++export default inert
++`
++
++export const kertasNoAi = (noAi: string, AI_MODULES: AiModules): Plugin => ({
++  name: 'kertas-no-ai',
++  enforce: 'pre',
++  load(id) {
++    return id === AI_STANDIN ? standInSource() : null
++  },
++  resolveId(source, importer) {
++    if (AI_PACKAGES.test(source)) return AI_STANDIN
++    if (!importer || importer.startsWith(noAi)) return null
++    for (const [pattern, file] of AI_MODULES) if (pattern.test(source)) return resolve(noAi, file)
++    return null
++  },
++})
++// The assistant's interface text goes too: its own string tables load empty, and
++// the few lines about it in the shared tables (sign-in and credit messages) are
++// taken out, so nothing in the build names an AI service.
++const AI_STRINGS = /[\\/]renderer[\\/]i18n[\\/]ai[\\/]([\w-]+)\.ts$/
++const STRING_TABLES = /[\\/](?:renderer[\\/]i18n[\\/](?:app|ribbon)[\\/][\w-]+|packages[\\/]i18n[\\/]src[\\/][\w-]+|main[\\/](?:docs|sheets|pdf)-main|renderer[\\/]i18n[\\/][\w-]+|renderer[\\/]i18n[\\/]dialogs[\\/][\w-]+)\.ts$/
++const AI_ENTRY =
++  /^[ \t]*(?:[A-Za-z_$][\w$]*|'[^'\n]+')\s*:\s*(?:\n\s*)?(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)\s*,?[ \t]*\n/gm
++export const kertasNoAiStrings = (): Plugin => ({
++  name: 'kertas-no-ai-strings',
++  enforce: 'pre',
++  load(id) {
++    const table = AI_STRINGS.exec(id.split('?')[0])
++    if (!table) return null
++    return `export const ${table[1].replace(/-(\w)/g, (_m, c: string) => c.toUpperCase())} = {}\n`
++  },
++  transform(code, id) {
++    if (!STRING_TABLES.test(id.split('?')[0]) || !/genspark|GenOffice/i.test(code)) return null
++    // and what is left names the app it is now part of
++    const kept = code.replace(AI_ENTRY, (entry) => (/genspark/i.test(entry) ? '' : entry))
++    return { code: kept.replace(/GenOffice(?= |[^\w./-]|$)/gm, 'Kertas Office'), map: null }
++  },
++})
++// The window's bridge loses the assistant's entries as well: each member of the
++// exposed object that talks on an assistant channel is taken out of the source.
++const PRELOAD = /[\\/]src[\\/]preload[\\/]index\.ts$/
++const AI_CHANNEL = /'(?:ai|kb|project):|docs:mcp-/
++// The page's own title is the editor's name in Kertas
++export const kertasTitle = (title: string): Plugin => ({
++  name: 'kertas-title',
++  transformIndexHtml: (html) => html.replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`),
++})
++export const kertasNoAiBridge = (): Plugin => ({
++  name: 'kertas-no-ai-bridge',
++  enforce: 'pre',
++  transform(code, id) {
++    if (!PRELOAD.test(id.split('?')[0])) return null
++    const lines = code.split('\n')
++    const out: string[] = []
++    let member: string[] | null = null
++    const flush = () => {
++      if (member && !AI_CHANNEL.test(member.join('\n'))) out.push(...member)
++      member = null
++    }
++    for (const line of lines) {
++      // members of the exposed objects start at two spaces; anything at column 0 ends the object
++      if (/^ {2}[A-Za-z_$][\w$]*\s*[:(]/.test(line)) {
++        flush()
++        member = [line]
++      } else if (member && /^\S/.test(line)) {
++        flush()
++        out.push(line)
++      } else if (member) member.push(line)
++      else out.push(line)
++    }
++    flush()
++    const next = out
++      .join('\n')
++      .replace(/^const aiNamingApi = \{\s*\}\n/m, '')
++      .replace(/^contextBridge\.exposeInMainWorld\('aiNamingApi', aiNamingApi\)\n/m, '')
++      .replace(/^const projectApi[^\n]*= \{\s*\}\n/m, 'const projectApi = {}\n')
++    return { code: next, map: null }
++  },
++})
++
++
++// the bundled fonts keep their own file names apart from the original product's name
++export const kertasAssetNames = (asset: { names?: string[]; name?: string }): string =>
++  `assets/${String(asset.names?.[0] ?? asset.name ?? 'asset').replace(/^GenOffice/, 'Kertas').replace(/(\.[^.]+)$/, '-[hash]$1')}`
++
++// The spreadsheet and PDF pages call their bridge in too many places to take the
++// assistant's entries out one by one, so their bridge is closed to the assistant's
++// channels instead: a call on one never leaves the page (it answers with nothing),
++// and nothing on such a channel is ever listened for.
++const QUIET = String.raw`/^(?:ai|kb|project):|:(?:mcp-|ai-|files-)|^pdf:(?:create-document|generate-image)$/`
++export const kertasQuietBridge = (): Plugin => ({
++  name: 'kertas-quiet-bridge',
++  enforce: 'pre',
++  transform(code, id) {
++    if (!PRELOAD.test(id.split('?')[0])) return null
++    const from = /import \{([^}]*)\bipcRenderer\b([^}]*)\} from 'electron'/
++    if (!from.test(code)) throw new Error('kertas-quiet-bridge: the bridge no longer imports ipcRenderer this way')
++    const next = code.replace(
++      from,
++      (_m, a: string, b: string) => `import {${a}ipcRenderer as kertasIpc${b}} from 'electron'
++const kertasQuiet = ${QUIET}
++const ipcRenderer = new Proxy(kertasIpc, {
++  get(target, key) {
++    const real = Reflect.get(target, key)
++    if (typeof real !== 'function') return real
++    return (channel: string, ...rest: unknown[]) => {
++      // (an assistant channel whose name was taken out of the tables arrives as undefined)
++      if (typeof channel !== 'string' || kertasQuiet.test(channel)) {
++        return key === 'invoke' ? Promise.resolve(undefined) : key === 'sendSync' ? undefined : target
++      }
++      return (real as (...args: unknown[]) => unknown).call(target, channel, ...rest)
++    }
++  },
++}) as typeof kertasIpc`,
++    )
++    // the channel names the bridge spells out itself go too
++    return { code: next.replace(/'(?:ai|kb|project):[\w-]+'/g, 'undefined'), map: null }
++  },
++})
++
++// The assistant's part of the main-process code of the spreadsheet and PDF editors:
++// the function that sets up the assistant's handlers does nothing, and the tables of
++// channel names lose the assistant's entries, so neither the handlers nor the names
++// are in the build.
++const SHEETS_MAIN = /[\\/]sheets[\\/]src[\\/]main[\\/]sheets-main\.ts$/
++const CHANNEL_TABLES = /[\\/](?:sheets[\\/]src[\\/]shared[\\/]ipc-channels|pdf[\\/]src[\\/]shared[\\/]ipc)\.ts$/
++export const kertasNoAiMain = (): Plugin => ({
++  name: 'kertas-no-ai-main',
++  enforce: 'pre',
++  transform(code, id) {
++    const file = id.split('?')[0]
++    if (CHANNEL_TABLES.test(file)) {
++      return { code: code.replace(/^[ \t]*\w+: '(?:ai|kb|project):[\w-]+',[ \t]*\n/gm, ''), map: null }
++    }
++    if (!SHEETS_MAIN.test(file)) return null
++    let next = code
++    for (const name of ['registerSheetsAiIpc', 'registerProjectIpc']) {
++      const head = `export function ${name}(): void {\n`
++      const from = next.indexOf(head)
++      const to = from < 0 ? -1 : next.indexOf('\n}\n', from)
++      if (to < 0) throw new Error(`kertas-no-ai-main: ${name} is not where it was`)
++      next = `${next.slice(0, from + head.length)}${next.slice(to + 1)}`
++    }
++    return { code: next, map: null }
++  },
++})
+diff --git a/apps/kertas-skin.css b/apps/kertas-skin.css
+new file mode 100644
+index 0000000..2cf0b23
+--- /dev/null
++++ b/apps/kertas-skin.css
+@@ -0,0 +1,88 @@
++/* Kertas Office look shared by the spreadsheet and PDF editors: Kertas's font and
++ * neutral colours laid over the editors' tokens. Each editor's own skin adds its
++ * accent. Document content (cells, pages) is untouched. */
++@font-face {
++  font-family: 'Inter Variable';
++  font-style: normal;
++  font-display: swap;
++  font-weight: 100 900;
++  src: url('./docs/src/renderer/kertas/inter-latin-ext-wght-normal.woff2') format('woff2-variations');
++  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
++    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
++    U+2C60-2C7F, U+A720-A7FF;
++}
++@font-face {
++  font-family: 'Inter Variable';
++  font-style: normal;
++  font-display: swap;
++  font-weight: 100 900;
++  src: url('./docs/src/renderer/kertas/inter-latin-wght-normal.woff2') format('woff2-variations');
++  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
++    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
++}
++
++:root {
++  --kertas-font: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
++
++  --surface: #ffffff;
++  --surface-subtle: #f6f8fc;
++  --chrome-bg: #f6f8fc;
++  --canvas: #e7eaf1;
++  --border: #e2e6ee;
++  --border-subtle: #eceff5;
++  --border-strong: #d5dae4;
++  --border-hover: #c5ccd9;
++  --text: #0f172a;
++  --text-primary: #0f172a;
++  --text-secondary: #334155;
++  --text-tertiary: #64748b;
++  --text-muted: #64748b;
++  --text-dim: #475569;
++  --hover: #e9edf5;
++  --pressed: #dde3ee;
++  --active-bg: #e3ebfd;
++  --bg-hover: #e9edf5;
++  --bg-hover-subtle: #eef1f7;
++  --bg-hover-strong: #dde3ee;
++  --bg-content: #f6f8fc;
++  --icon-muted: #94a3b8;
++  --shadow-menu: 0 10px 30px -12px rgb(15 23 42 / 25%), 0 2px 6px rgb(15 23 42 / 6%);
++}
++
++[data-theme='dark'] {
++  --surface: #151a27;
++  --surface-subtle: #1a2030;
++  --chrome-bg: #111624;
++  --canvas: #0f1420;
++  --border: #252c3d;
++  --border-subtle: #1e2534;
++  --border-strong: #2f384c;
++  --border-hover: #3a4459;
++  --text: #e8ecf5;
++  --text-primary: #e8ecf5;
++  --text-secondary: #c3cad8;
++  --text-tertiary: #8a94a8;
++  --text-muted: #8a94a8;
++  --text-dim: #a5aec0;
++  --hover: #1f2637;
++  --pressed: #283044;
++  --active-bg: #1c2a4a;
++  --bg-hover: #1f2637;
++  --bg-hover-subtle: #1a2030;
++  --bg-hover-strong: #283044;
++  --bg-content: #111624;
++  --icon-muted: #5b657a;
++}
++
++body,
++button,
++input,
++select,
++textarea {
++  font-family: var(--kertas-font);
++}
++
++/* Kertas's tab strip is the window's title bar; this row is not a drag area */
++.ribbon-tabs {
++  -webkit-app-region: no-drag;
++}
+diff --git a/apps/pdf/kertas.vite.config.ts b/apps/pdf/kertas.vite.config.ts
+new file mode 100644
+index 0000000..98aa098
+--- /dev/null
++++ b/apps/pdf/kertas.vite.config.ts
+@@ -0,0 +1,47 @@
++import { createRequire } from 'node:module'
++import { dirname, join, resolve } from 'node:path'
++import react from '@vitejs/plugin-react'
++import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
++import { normalizePath, type Plugin } from 'vite'
++import { viteStaticCopy } from 'vite-plugin-static-copy'
++import { type AiModules, kertasAssetNames, kertasNoAi as noAiPlugin, kertasNoAiMain, kertasNoAiStrings, kertasQuietBridge, kertasTitle } from '../kertas-build'
++
++// Build used when Kertas Office hosts this editor: the window's bridge and the
++// page. The main-process code is built with the Writer's (apps/docs).
++const require = createRequire(import.meta.url)
++const pdfjsRoot = dirname(dirname(require.resolve('pdfjs-dist/package.json')))
++const pdfjsDir = (sub: string) => normalizePath(join(pdfjsRoot, 'pdfjs-dist', sub))
++
++const noAi = resolve(__dirname, 'src/renderer/kertas/no-ai')
++const AI_MODULES: AiModules = [
++  [/(^|\/)ai\/AiPanel$/, 'AiPanel.tsx'],
++  [/^\.\/AiAskPopover$/, 'AiAskPopover.tsx'],
++]
++const kertasNoAi = (): Plugin => noAiPlugin(noAi, AI_MODULES)
++
++export default defineConfig({
++  preload: {
++    plugins: [kertasNoAi(), kertasNoAiMain(), kertasQuietBridge(), externalizeDepsPlugin({ exclude: ['@genoffice/i18n', '@genoffice/electron-utils'] })],
++    build: { outDir: 'out-kertas/preload' },
++  },
++  renderer: {
++    plugins: [
++      kertasNoAi(),
++      kertasNoAiMain(),
++      kertasNoAiStrings(),
++      kertasTitle('PDF'),
++      react(),
++      viteStaticCopy({
++        targets: [
++          { src: pdfjsDir('cmaps'), dest: 'pdfjs' },
++          { src: pdfjsDir('standard_fonts'), dest: 'pdfjs' },
++          { src: pdfjsDir('wasm'), dest: 'pdfjs' },
++        ],
++      }),
++    ],
++    build: {
++      outDir: 'out-kertas/renderer',
++      rollupOptions: { output: { assetFileNames: kertasAssetNames } },
++    },
++  },
++})
+diff --git a/apps/pdf/src/renderer/App.tsx b/apps/pdf/src/renderer/App.tsx
+index 32f6de1..8040f11 100644
+--- a/apps/pdf/src/renderer/App.tsx
++++ b/apps/pdf/src/renderer/App.tsx
+@@ -8,6 +8,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
+ import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
+ import { AiPanel, GensparkMark } from './ai/AiPanel'
+ import { AiAskPopover, type AskAnchorRect } from './AiAskPopover'
++import { KERTAS_AI, KERTAS_HOST } from './kertas'
+ import {
+   createSavedAnnotCountsLoader,
+   loadSavedAnnots,
+@@ -8142,7 +8143,8 @@ export default function App() {
+         <div className="ribbon-body" data-ribbon-body="">
+           {ribbonTab === 'home' && (
+             <>
+-              {/* ---- Genspark AI (first slot: entry + one-click AI actions, docs parity) ---- */}
++              {KERTAS_AI && (
++              <>
+               <div className="ribbon-group">
+                 <div className="ribbon-group-items">
+                   <button
+@@ -8190,6 +8192,8 @@ export default function App() {
+                 </div>
+               </div>
+               <div className="ribbon-sep" />
++              </>
++              )}
+               {markupGroup}
+               <div className="ribbon-sep" />
+               {/* Edit entries lead; Search moved after page/zoom (⌘F is the common path) */}
+@@ -8221,11 +8225,15 @@ export default function App() {
+                         <button onClick={() => void convertTo('xlsx')}>
+                           {t('convertToExcel')}
+                         </button>
++                        {!KERTAS_HOST && (
++                          <>
+                         <button onClick={() => void convertTo('pptx')}>{t('convertToPpt')}</button>
+                         <button onClick={() => void convertTo('md')}>
+                           {t('convertToMarkdown')}
+                         </button>
+                         <button onClick={() => void convertTo('html')}>{t('convertToHtml')}</button>
++                          </>
++                        )}
+                         <div className="rb-menu-sep" />
+                         <button
+                           title={t('exportImagesAll')}
+@@ -8283,6 +8291,8 @@ export default function App() {
+           )}
+           {ribbonTab === 'annotate' && (
+             <>
++              {KERTAS_AI && (
++              <>
+               <div className="ribbon-group">
+                 <div className="ribbon-group-items">
+                   <button
+@@ -8313,6 +8323,8 @@ export default function App() {
+                 </div>
+               </div>
+               <div className="ribbon-sep" />
++              </>
++              )}
+               {markupGroup}
+               <div className="ribbon-sep" />
+               <div className="ribbon-group">
+@@ -8566,6 +8578,7 @@ export default function App() {
+             <>
+               <div className="ribbon-group">
+                 <div className="ribbon-group-items">
++                  {KERTAS_AI && (
+                   <button
+                     className="rb-big ai-entry"
+                     disabled={readOnly}
+@@ -8577,6 +8590,7 @@ export default function App() {
+                     </span>
+                     <span>{t('aiFillFormBtn')}</span>
+                   </button>
++                  )}
+                   <button
+                     className={`rb-big${pendingStaticFill === 'text' ? ' active' : ''}`}
+                     disabled={readOnly}
+@@ -9085,6 +9099,7 @@ export default function App() {
+       <div className="app-main">
+         {/* dock wrapper animates the width between panel and rail (docs-style 180ms ease);
+               the panel stays mounted while collapsed so the chat history survives */}
++        {KERTAS_AI && (
+         <div
+           className={`ai-dock${aiCollapsed ? ' collapsed' : ''}${
+             !aiSidebarEnabled && aiCollapsed ? ' ai-dock-off' : ''
+@@ -9109,6 +9124,7 @@ export default function App() {
+             onClearSelection={() => setAiSelection(null)}
+           />
+         </div>
++        )}
+         <div className="app-content">
+           {digitalSignatures.length > 0 && (
+             <div className={`pdf-sig-banner ${overallSignatureStatus(digitalSignatures)}`}>
+@@ -10821,7 +10837,7 @@ export default function App() {
+                 </button>
+               </div>
+             )}
+-            {selPopup && (
++            {selPopup && (KERTAS_AI || !readOnly) && (
+               <div
+                 className="pdf-sel-popup"
+                 style={{ left: selPopup.x, top: selPopup.y }}
+@@ -10895,9 +10911,10 @@ export default function App() {
+                     >
+                       <span className="sel-swatch sel-swatch-st">S</span>
+                     </button>
+-                    <span className="pdf-sel-popup-sep" aria-hidden />
++                    {KERTAS_AI && <span className="pdf-sel-popup-sep" aria-hidden />}
+                   </>
+                 )}
++                {KERTAS_AI && (
+                 <button
+                   type="button"
+                   className="pdf-sel-ask"
+@@ -10913,9 +10930,10 @@ export default function App() {
+                   </svg>
+                   {t('aiAskBtn')}
+                 </button>
++                )}
+               </div>
+             )}
+-            {askPop && (
++            {KERTAS_AI && askPop && (
+               <AiAskPopover
+                 rect={askPop.rect}
+                 excerpt={askPop.excerpt}
+diff --git a/apps/pdf/src/renderer/kertas.ts b/apps/pdf/src/renderer/kertas.ts
+new file mode 100644
+index 0000000..3dae050
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas.ts
+@@ -0,0 +1,7 @@
++/** Kertas Office hosts this editor without the AI assistant: nothing of it is
++ * shown, and nothing is sent anywhere. */
++export const KERTAS_AI: boolean = false
++
++/** Kertas Office is the host: what only the original suite's other apps could
++ * open (presentations, Markdown, web pages) is not offered. */
++export const KERTAS_HOST: boolean = true
+diff --git a/apps/pdf/src/renderer/kertas/no-ai/AiAskPopover.tsx b/apps/pdf/src/renderer/kertas/no-ai/AiAskPopover.tsx
+new file mode 100644
+index 0000000..ef69c84
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/no-ai/AiAskPopover.tsx
+@@ -0,0 +1,4 @@
++// Kertas Office has no AI assistant: no "ask about the selection" popover.
++export function AiAskPopover(): null {
++  return null
++}
+diff --git a/apps/pdf/src/renderer/kertas/no-ai/AiPanel.tsx b/apps/pdf/src/renderer/kertas/no-ai/AiPanel.tsx
+new file mode 100644
+index 0000000..cf5096a
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/no-ai/AiPanel.tsx
+@@ -0,0 +1,9 @@
++// Kertas Office has no AI assistant. This stands in for the assistant's panel
++// when Kertas builds the editor (see kertas.vite.config.ts), so none of the
++// panel's code, prompts or tools are part of the build.
++export function AiPanel(): null {
++  return null
++}
++export function GensparkMark(): null {
++  return null
++}
+diff --git a/apps/pdf/src/renderer/kertas/skin.css b/apps/pdf/src/renderer/kertas/skin.css
+new file mode 100644
+index 0000000..e854766
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/skin.css
+@@ -0,0 +1,19 @@
++/* Kertas Office look for the PDF editor: the shared skin plus Kertas's PDF red.
++ * Loaded last so it wins. */
++@import '../../../../kertas-skin.css';
++
++:root {
++  --accent: #e11d48;
++  --accent-dark: #be123c;
++  --accent-soft: #fde7ec;
++  --pdf-select: #e11d48;
++  --pdf-statusbar-bg: var(--surface-subtle);
++  --pdf-statusbar-border: var(--border);
++}
++
++[data-theme='dark'] {
++  --accent: #fb7185;
++  --accent-dark: #f43f5e;
++  --accent-soft: #3b1420;
++  --pdf-select: #fb7185;
++}
+diff --git a/apps/pdf/src/renderer/main.tsx b/apps/pdf/src/renderer/main.tsx
+index 3188d6c..2d675fb 100644
+--- a/apps/pdf/src/renderer/main.tsx
++++ b/apps/pdf/src/renderer/main.tsx
+@@ -16,6 +16,7 @@ import '@genoffice/ui/markdown.css'
+ import '@genoffice/ui/ai-panel-prefs.css'
+ import '@genoffice/ui/ai-scope-quote.css'
+ import './styles.css'
++import './kertas/skin.css'
+ import { applyAiPanelPrefs, installScreenTips } from '@genoffice/ui'
+ 
+ installScreenTips()
+diff --git a/apps/sheets/kertas.vite.config.ts b/apps/sheets/kertas.vite.config.ts
+new file mode 100644
+index 0000000..468a656
+--- /dev/null
++++ b/apps/sheets/kertas.vite.config.ts
+@@ -0,0 +1,31 @@
++import { resolve } from 'node:path'
++import react from '@vitejs/plugin-react'
++import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
++import type { Plugin } from 'vite'
++import { type AiModules, kertasAssetNames, kertasNoAi as noAiPlugin, kertasNoAiMain, kertasNoAiStrings, kertasQuietBridge, kertasTitle } from '../kertas-build'
++
++// Build used when Kertas Office hosts this editor: the window's bridge and the
++// page. The main-process code is built with the Writer's (apps/docs), so the
++// three editors share one bundle there.
++const noAi = resolve(__dirname, 'src/renderer/kertas/no-ai')
++const AI_MODULES: AiModules = [
++  [/(^|\/)ai\/AiChatPanel$/, 'AiChatPanel.tsx'],
++  [/(^|\/)ai\/AiSelectionAsk$/, 'AiSelectionAsk.tsx'],
++  [/(^|\/)mcp-bridge$/, 'mcp-bridge.ts'],
++  [/(^|\/)ai\/transport$/, 'transport.ts'],
++]
++const kertasNoAi = (): Plugin => noAiPlugin(noAi, AI_MODULES)
++
++export default defineConfig({
++  preload: {
++    plugins: [kertasNoAi(), kertasNoAiMain(), kertasQuietBridge(), externalizeDepsPlugin({ exclude: ['@genoffice/electron-utils', '@genoffice/ui'] })],
++    build: { outDir: 'out-kertas/preload' },
++  },
++  renderer: {
++    plugins: [kertasNoAi(), kertasNoAiMain(), kertasNoAiStrings(), kertasTitle('Sheets'), react()],
++    build: {
++      outDir: 'out-kertas/renderer',
++      rollupOptions: { output: { assetFileNames: kertasAssetNames } },
++    },
++  },
++})
+diff --git a/apps/sheets/src/renderer/App.tsx b/apps/sheets/src/renderer/App.tsx
+index f7fd122..eb00434 100644
+--- a/apps/sheets/src/renderer/App.tsx
++++ b/apps/sheets/src/renderer/App.tsx
+@@ -2254,7 +2254,7 @@ export function App({
+   }
+ 
+   useEffect(() => {
+-    const loadSettings = () => void window.desktopApi.getAiSettings().then(setAiSettingsState)
++    const loadSettings = () => void window.desktopApi.getAiSettings().then(setAiSettingsState, () => {})
+     loadSettings()
+     return window.desktopApi.onAiSettingsChanged?.(loadSettings)
+   }, [])
+diff --git a/apps/sheets/src/renderer/ExcelShell.tsx b/apps/sheets/src/renderer/ExcelShell.tsx
+index 245d16d..b63d92e 100644
+--- a/apps/sheets/src/renderer/ExcelShell.tsx
++++ b/apps/sheets/src/renderer/ExcelShell.tsx
+@@ -86,6 +86,7 @@ import type {
+ } from '../shared/desktop-api'
+ import { AiChatPanel, type AiChatMessage } from './ai/AiChatPanel'
+ import { AiSelectionAsk } from './ai/AiSelectionAsk'
++import { KERTAS_AI } from './kertas'
+ import type { SelectionAskAnchor } from './ai/selection-ask'
+ import {
+   PivotDialog,
+@@ -933,6 +934,7 @@ export function ExcelShell({
+           >
+             <SaveAsIcon />
+           </button>
++          {KERTAS_AI && (
+           <button
+             type="button"
+             className="qa-btn qa-name-with-ai"
+@@ -943,6 +945,7 @@ export function ExcelShell({
+           >
+             <GensparkMark />
+           </button>
++          )}
+           <button
+             type="button"
+             className="qa-btn"
+@@ -1038,6 +1041,7 @@ export function ExcelShell({
+ 
+       {/* AI panel docks on the left, full height under the ribbon (unified with docs) */}
+       <div className="sheet-body">
++        {KERTAS_AI && (
+         <AiChatPanel
+           isOpen={isCopilotOpen}
+           hideRail={!aiSidebarEnabled}
+@@ -1074,6 +1078,7 @@ export function ExcelShell({
+           onExpand={() => setIsCopilotOpen(true)}
+           onCollapse={() => setIsCopilotOpen(false)}
+         />
++        )}
+         <div className="sheet-main">
+           <section className="workbook-area">
+             <div id="univer-container" className="spreadsheet" />
+@@ -1094,7 +1099,7 @@ export function ExcelShell({
+               </div>
+             )}
+           </section>
+-          {aiSelectionAskAnchor && aiScopeRange && !aiBusy && (
++          {KERTAS_AI && aiSelectionAskAnchor && aiScopeRange && !aiBusy && (
+             <AiSelectionAsk
+               anchor={aiSelectionAskAnchor}
+               range={aiScopeRange}
+@@ -3414,6 +3419,7 @@ function Ribbon({
+             </button>
+           </div>
+         </RibbonGroup>
++        {KERTAS_AI && (
+         <RibbonGroup label={t('appGroupLanguage')}>
+           <div className="ribbon-tool large" data-tip={t('appTranslateTitle')}>
+             <span className="tool-icon-row">
+@@ -3434,6 +3440,7 @@ function Ribbon({
+             />
+           </div>
+         </RibbonGroup>
++        )}
+         <RibbonGroup label={t('appGroupComments')}>
+           <RibbonButton
+             large
+@@ -3539,6 +3546,7 @@ function Ribbon({
+     : [...fontSizes, echoSize].sort((a, b) => a - b)
+   return (
+     <div className="ribbon" data-ribbon-body="">
++      {KERTAS_AI && (
+       <RibbonGroup label={t('appGroupAiAssistant')}>
+         <button
+           className={`ribbon-tool as-button large ai-entry ${aiOpen ? 'active' : ''}`}
+@@ -3610,6 +3618,7 @@ function Ribbon({
+           </span>
+         </button>
+       </RibbonGroup>
++      )}
+       <RibbonGroup label={t('appGroupClipboard')}>
+         <button
+           className="ribbon-tool as-button large"
+diff --git a/apps/sheets/src/renderer/kertas.ts b/apps/sheets/src/renderer/kertas.ts
+new file mode 100644
+index 0000000..3dae050
+--- /dev/null
++++ b/apps/sheets/src/renderer/kertas.ts
+@@ -0,0 +1,7 @@
++/** Kertas Office hosts this editor without the AI assistant: nothing of it is
++ * shown, and nothing is sent anywhere. */
++export const KERTAS_AI: boolean = false
++
++/** Kertas Office is the host: what only the original suite's other apps could
++ * open (presentations, Markdown, web pages) is not offered. */
++export const KERTAS_HOST: boolean = true
+diff --git a/apps/sheets/src/renderer/kertas/no-ai/AiChatPanel.tsx b/apps/sheets/src/renderer/kertas/no-ai/AiChatPanel.tsx
+new file mode 100644
+index 0000000..b32fb5c
+--- /dev/null
++++ b/apps/sheets/src/renderer/kertas/no-ai/AiChatPanel.tsx
+@@ -0,0 +1,7 @@
++// Kertas Office has no AI assistant. This stands in for the assistant's panel
++// when Kertas builds the editor (see kertas.vite.config.ts), so none of the
++// panel's code or prompts are part of the build.
++export function AiChatPanel(): null {
++  return null
++}
++export const scopeLabel = (range: string): string => range
+diff --git a/apps/sheets/src/renderer/kertas/no-ai/AiSelectionAsk.tsx b/apps/sheets/src/renderer/kertas/no-ai/AiSelectionAsk.tsx
+new file mode 100644
+index 0000000..af602a7
+--- /dev/null
++++ b/apps/sheets/src/renderer/kertas/no-ai/AiSelectionAsk.tsx
+@@ -0,0 +1,4 @@
++// Kertas Office has no AI assistant: no "ask about the selection" popover.
++export function AiSelectionAsk(): null {
++  return null
++}
+diff --git a/apps/sheets/src/renderer/kertas/no-ai/mcp-bridge.ts b/apps/sheets/src/renderer/kertas/no-ai/mcp-bridge.ts
+new file mode 100644
+index 0000000..449501f
+--- /dev/null
++++ b/apps/sheets/src/renderer/kertas/no-ai/mcp-bridge.ts
+@@ -0,0 +1,4 @@
++// Kertas Office has no AI assistant: nothing outside the app drives the editor.
++export function installSheetsMcpBridge(): () => void {
++  return () => {}
++}
+diff --git a/apps/sheets/src/renderer/kertas/no-ai/transport.ts b/apps/sheets/src/renderer/kertas/no-ai/transport.ts
+new file mode 100644
+index 0000000..8642570
+--- /dev/null
++++ b/apps/sheets/src/renderer/kertas/no-ai/transport.ts
+@@ -0,0 +1,9 @@
++// Kertas Office has no AI assistant: there is no connection to an AI service.
++export function createElectronTransport(): { stream: () => AsyncGenerator<never> } {
++  return {
++    // eslint-disable-next-line require-yield
++    async *stream() {
++      throw new Error('The assistant is not part of this build')
++    },
++  }
++}
+diff --git a/apps/sheets/src/renderer/kertas/skin.css b/apps/sheets/src/renderer/kertas/skin.css
+new file mode 100644
+index 0000000..13e7da9
+--- /dev/null
++++ b/apps/sheets/src/renderer/kertas/skin.css
+@@ -0,0 +1,25 @@
++/* Kertas Office look for the spreadsheet editor: the shared skin plus Kertas's
++ * Sheets green. Loaded last so it wins. */
++@import '../../../../kertas-skin.css';
++
++:root {
++  --excel-green: #059669;
++  --excel-green-dark: #047857;
++  --excel-green-soft: #dff5ec;
++  --accent: #059669;
++  --accent-dark: #047857;
++  --accent-soft: #dff5ec;
++  --focus: rgb(5 150 105 / 24%);
++  --ribbon-hover: var(--hover);
++  --ribbon-active: var(--pressed);
++  --surface-hover: var(--hover);
++}
++
++[data-theme='dark'] {
++  --accent: #34d399;
++  --accent-dark: #6ee7b7;
++  --accent-soft: #12332a;
++  --ribbon-hover: var(--hover);
++  --ribbon-active: var(--pressed);
++  --surface-hover: var(--hover);
++}
+diff --git a/apps/sheets/src/renderer/main.tsx b/apps/sheets/src/renderer/main.tsx
+index 66f509f..cda88d2 100644
+--- a/apps/sheets/src/renderer/main.tsx
++++ b/apps/sheets/src/renderer/main.tsx
+@@ -27,6 +27,7 @@ import { connectMeasurementUnit } from '@genoffice/ui/use-measurement-unit'
+ import { LocaleProvider, setModuleLang } from './i18n/locale'
+ import type { DocTheme, UiTheme } from '../shared/desktop-api'
+ import './styles.css'
++import './kertas/skin.css'
+ 
+ if (import.meta.hot) {
+   import.meta.hot.on('vite:beforeUpdate', ({ updates }) => {
 diff --git a/packages/docx-engine/src/blank.ts b/packages/docx-engine/src/blank.ts
 index 38c383d..dd068c8 100644
 --- a/packages/docx-engine/src/blank.ts

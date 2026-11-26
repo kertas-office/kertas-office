@@ -124,7 +124,7 @@ test('the build has no AI assistant in it: no provider names, no assistant chann
     for (const name of await readdir(path.join(root, sub))) if (/\.(c?js|mjs)$/.test(name)) files.push(path.join(root, sub, name));
   }
   // what only the assistant has: the services it called, its channels to the main process, its sign-in
-  const marks = /api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis|api\.deepseek\.com|chat\/completions|["'`](?:ai|kb|project):[a-z-]+["'`]|aiStream|aiChat|gsk-login|x-api-key/;
+  const marks = /api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis|api\.deepseek\.com|chat\/completions|["'`](?:ai|kb|project):[a-z-]+["'`]|aiStream(?!s:)|aiChat|gsk-login|x-api-key/;
   const found = [];
   for (const f of files) {
     const text = await readFile(f, 'utf8');

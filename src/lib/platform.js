@@ -245,3 +245,10 @@ export async function newWriterOn() {
   const st = await newWriterInfo();
   return !!st.available && (st.forced || newWriterChosen());
 }
+// The same for spreadsheets and PDFs, each with a switch of its own
+export const newEditorChosen = (kind) => { try { return localStorage.getItem(`kertas-new-${kind}`) === '1'; } catch { return false; } };
+export async function newEditorOn(kind) {
+  if (kind === 'writer') return newWriterOn();
+  const st = await newWriterInfo();
+  return !!st[kind] && (st[`${kind}Forced`] || newEditorChosen(kind));
+}

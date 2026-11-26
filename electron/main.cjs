@@ -410,20 +410,26 @@ async function makeDefaultApp() {
   const ok = await new Promise((resolve) => execFile('xdg-mime', ['default', desktop, ...DEFAULT_MIMES], { timeout: 15000 }, (err) => resolve(!err)));
   return { how: ok ? 'done' : 'manual' };
 }
+const NEW_EDITOR_FILES = { writer: /\.docx$/i, sheets: /\.(xlsx|xlsm|csv)$/i, pdf: /\.pdf$/i };
 // The new Writer (trial): whether this build has it, and opening a document in it.
 // It reads the file itself, so the path gets the same checks as any other open.
 ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
-  if (op === 'state') return { available: writer2.available, forced: process.env.KERTAS_NEW_WRITER === '1' };
+  if (op === 'state') return {
+    available: writer2.available, forced: process.env.KERTAS_NEW_WRITER === '1',
+    sheets: writer2.available && writer2.has.sheets, sheetsForced: process.env.KERTAS_NEW_SHEETS === '1',
+    pdf: writer2.available && writer2.has.pdf, pdfForced: process.env.KERTAS_NEW_PDF === '1',
+  };
   if (!writer2.available) return false;
   if (op === 'open') { // { id, path? , result? }: a tab for a file, a converted document, or a blank one
     const { id, path: filePath = null, result = null } = arg || {};
+    const kind = ['sheets', 'pdf'].includes(arg && arg.kind) ? arg.kind : 'writer';
     if (filePath != null) {
       assertReadable(filePath);
-      if (!/\.docx$/i.test(filePath)) return false;
+      if (!NEW_EDITOR_FILES[kind].test(filePath)) return false;
       grant(filePath);
       await addRecent(filePath);
     }
-    return writer2.openTab(String(id), { filePath, result });
+    return writer2.openTab(String(id), { kind, filePath, result });
   }
   if (op === 'layout') return writer2.layout(String(arg.id), arg.rect);
   if (op === 'snapshot') return writer2.snapshot(String(arg));
@@ -464,7 +470,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('open-file', (e, filePath) => { e.preventDefault(); sendOpen(filePath); }); // macOS
   // No page gets camera, microphone, location, notifications or similar. The app's own
   // pages may use the clipboard (Paste buttons); nothing else is ever granted.
-  const trusted = (url) => String(url || '').startsWith('app://kertas/') || (writer2.available && String(url || '').startsWith('kertas-writer://docs/')) || (DEV_URL && String(url).startsWith(DEV_URL));
+  const trusted = (url) => String(url || '').startsWith('app://kertas/') || (writer2.available && /^kertas-writer:\/\/(docs|sheets|pdf)\//.test(String(url || ''))) || (DEV_URL && String(url).startsWith(DEV_URL));
   const CLIPBOARD = new Set(['clipboard-read', 'clipboard-sanitized-write']);
   app.on('web-contents-created', (_e, contents) => {
     contents.on('will-attach-webview', (ev) => ev.preventDefault());
