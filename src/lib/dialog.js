@@ -1,7 +1,7 @@
 // Small form-dialog builder shared by every module.
 //
 // openDialog({
-//   title, description, width,
+//   title, description, width, logo (a picture shown centred above the title),
 //   fields: [{ id, label, type: 'text'|'password'|'number'|'textarea'|'select'|'checkbox'|'color'|'range'|'segmented'|'info',
 //              value, options: [{value,label}], placeholder, hint, min, max, step, show(values) }],
 //   actions: [{ id, label, primary, danger }],      // last one is used for Escape when it is 'cancel'
@@ -35,13 +35,14 @@ function fieldHtml(f) {
   }
 }
 
-export function openDialog({ title, description, fields = [], actions, validate, width = 480, onChange }) {
+export function openDialog({ title, description, fields = [], actions, validate, width = 480, onChange, logo }) {
   const acts = actions || [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'OK', primary: true }];
   return new Promise((resolve) => {
     const back = document.createElement('div');
     back.className = 'modal-backdrop';
     back.innerHTML = `
-      <form class="modal glass dialog" style="width:min(${width}px,92vw)" novalidate>
+      <form class="modal glass dialog${logo ? ' has-logo' : ''}" style="width:min(${width}px,92vw)" novalidate>
+        ${logo ? `<img class="dlg-logo" src="${esc(logo)}" alt="" draggable="false" />` : ''}
         <h3>${esc(title)}</h3>
         ${description ? `<p>${description}</p>` : ''}
         <div class="dlg-fields">${fields.map(fieldHtml).join('')}</div>
