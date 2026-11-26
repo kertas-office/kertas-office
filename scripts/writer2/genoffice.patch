@@ -3922,16 +3922,16 @@ index 0000000..98aa098
 +})
 diff --git a/apps/pdf/src/main/kertas-pdf.ts b/apps/pdf/src/main/kertas-pdf.ts
 new file mode 100644
-index 0000000..6ce53e8
+index 0000000..20c43de
 --- /dev/null
 +++ b/apps/pdf/src/main/kertas-pdf.ts
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,308 @@
 +// Kertas Office's additions to the PDF editor's main process: duplicating a page,
 +// flattening a form, and saving which layers a file opens with. Each works on the file on
 +// disk (the editor saves pending edits first) and the editor reloads it afterwards.
 +import { readFile } from 'node:fs/promises'
 +import { BrowserWindow, dialog, ipcMain } from 'electron'
-+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRef } from 'pdf-lib'
++import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, PDFRef, PDFString } from 'pdf-lib'
 +import { writePdfAtomically } from './atomic-write'
 +
 +/** Text recognition supplied by Kertas Office (its own engine, which reads many languages on
@@ -3961,6 +3961,7 @@ index 0000000..6ce53e8
 +}
 +
 +export function registerKertasPdfIpc(granted: (wcId: number, path: string) => boolean): void {
++  registerKertasObjectIpc(granted)
 +  ipcMain.handle('pdf:kertas-ocr-langs', (_e, langs: unknown) => {
 +    if (Array.isArray(langs) && langs.length && langs.every((l) => typeof l === 'string' && /^[a-z_]{2,10}$/.test(l))) ocrLangs = langs.slice(0, 8)
 +  })
@@ -4036,6 +4037,198 @@ index 0000000..6ce53e8
 +      d.set(PDFName.of('OFF'), doc.context.obj(offRefs))
 +      await writePdfAtomically(path, await doc.save({ useObjectStreams: true }))
 +      return { ok: true }
++    } catch (err) {
++      return failed(err)
++    }
++  })
++}
++
++// ---- page items: the annotations on a page (shapes, drawings, stamps, notes, text boxes) ----
++// Moved, resized, put in front of or behind each other, deleted, and put on a layer. Each change
++// is written to the file at once, and the editor reloads it (so Undo works as for page edits).
++
++type Rect = [number, number, number, number]
++export type KertasObjectOp =
++  | { type: 'move'; id: string; rect: Rect; to: Rect }
++  | { type: 'order'; id: string; rect: Rect; where: 'front' | 'back' }
++  | { type: 'delete'; id: string; rect: Rect }
++  | { type: 'layer'; id: string; rect: Rect; layer: string | null }
++  | { type: 'newLayer'; id: string | null; rect: Rect | null; name: string }
++  | { type: 'stamp'; rect: Rect; png: string; label: string; author: string }
++
++const refId = (ref: PDFRef): string => `${ref.objectNumber}R${ref.generationNumber ? ref.generationNumber : ''}`
++const num = (v: unknown): number => (v instanceof PDFNumber ? v.asNumber() : NaN)
++const rectOf = (dict: PDFDict): Rect | null => {
++  const r = dict.lookupMaybe(PDFName.of('Rect'), PDFArray)
++  if (!r || r.size() < 4) return null
++  const [a, b, c, d] = [0, 1, 2, 3].map((i) => num(r.lookup(i)))
++  return [Math.min(a!, c!), Math.min(b!, d!), Math.max(a!, c!), Math.max(b!, d!)]
++}
++
++/** The annotation on this page by its reference, or by its box when the file was renumbered */
++function findAnnot(doc: PDFDocument, pageIndex: number, id: string, rect: Rect | null) {
++  const page = doc.getPage(pageIndex)
++  const annots = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray)
++  if (!annots) return null
++  let byRect: { index: number; ref: PDFRef; dict: PDFDict } | null = null
++  for (let i = 0; i < annots.size(); i++) {
++    const ref = annots.get(i)
++    if (!(ref instanceof PDFRef)) continue
++    const dict = doc.context.lookup(ref)
++    if (!(dict instanceof PDFDict)) continue
++    if (refId(ref) === id) return { annots, index: i, ref, dict }
++    const r = rectOf(dict)
++    if (rect && r && !byRect && r.every((v, k) => Math.abs(v - rect[k]!) < 0.5)) byRect = { index: i, ref, dict }
++  }
++  return byRect ? { annots, ...byRect } : null
++}
++
++/** Every point of the annotation's shape, through x' = ax + b, y' = cy + d */
++function mapAnnotPoints(dict: PDFDict, f: (x: number, y: number) => [number, number]): void {
++  const mapFlat = (arr: PDFArray): void => {
++    for (let i = 0; i + 1 < arr.size(); i += 2) {
++      const [x, y] = f(num(arr.lookup(i)), num(arr.lookup(i + 1)))
++      arr.set(i, PDFNumber.of(x))
++      arr.set(i + 1, PDFNumber.of(y))
++    }
++  }
++  for (const key of ['QuadPoints', 'L', 'Vertices', 'CL']) {
++    const arr = dict.lookupMaybe(PDFName.of(key), PDFArray)
++    if (arr) mapFlat(arr)
++  }
++  const ink = dict.lookupMaybe(PDFName.of('InkList'), PDFArray)
++  if (ink) for (let i = 0; i < ink.size(); i++) {
++    const path = ink.lookup(i)
++    if (path instanceof PDFArray) mapFlat(path)
++  }
++}
++
++function layerProps(doc: PDFDocument): PDFDict {
++  let props = doc.catalog.lookupMaybe(PDFName.of('OCProperties'), PDFDict)
++  if (!props) {
++    props = doc.context.obj({ OCGs: [], D: { Order: [], ON: [], OFF: [] } }) as PDFDict
++    doc.catalog.set(PDFName.of('OCProperties'), props)
++  }
++  if (!props.lookupMaybe(PDFName.of('OCGs'), PDFArray)) props.set(PDFName.of('OCGs'), doc.context.obj([]))
++  let d = props.lookupMaybe(PDFName.of('D'), PDFDict)
++  if (!d) {
++    d = doc.context.obj({}) as PDFDict
++    props.set(PDFName.of('D'), d)
++  }
++  return props
++}
++
++export async function applyObjectOp(bytes: Uint8Array, pageIndex: number, op: KertasObjectOp): Promise<{ bytes: Uint8Array; layer?: string }> {
++  const doc = await PDFDocument.load(bytes, { updateMetadata: false })
++  if (pageIndex < 0 || pageIndex >= doc.getPageCount()) throw new Error('There is no such page')
++  let layer: string | undefined
++  if (op.type === 'stamp') {
++    const [x1, y1, x2, y2] = op.rect
++    const w = x2 - x1
++    const h = y2 - y1
++    const img = await doc.embedPng(Buffer.from(op.png, 'base64'))
++    const ap = doc.context.register(
++      doc.context.stream(`q ${w} 0 0 ${h} 0 0 cm /Im0 Do Q`, {
++        Type: 'XObject',
++        Subtype: 'Form',
++        BBox: [0, 0, w, h],
++        Resources: { XObject: { Im0: img.ref } },
++      }),
++    )
++    const annot = doc.context.register(
++      doc.context.obj({
++        Type: 'Annot',
++        Subtype: 'Stamp',
++        Rect: [x1, y1, x2, y2],
++        F: 4,
++        Name: op.label.replace(/[^A-Za-z]/g, '') || 'Stamp',
++        Contents: PDFHexString.fromText(op.label),
++        ...(op.author ? { T: PDFHexString.fromText(op.author) } : {}),
++        M: PDFString.fromDate(new Date()),
++        AP: { N: ap },
++      }),
++    )
++    doc.getPage(pageIndex).node.addAnnot(annot)
++  } else if (op.type === 'newLayer') {
++    const props = layerProps(doc)
++    const ocg = doc.context.register(doc.context.obj({ Type: 'OCG', Name: PDFHexString.fromText(op.name.trim() || 'New layer') }))
++    props.lookup(PDFName.of('OCGs'), PDFArray).push(ocg)
++    const d = props.lookup(PDFName.of('D'), PDFDict)
++    for (const key of ['Order', 'ON']) {
++      let arr = d.lookupMaybe(PDFName.of(key), PDFArray)
++      if (!arr) {
++        arr = doc.context.obj([]) as PDFArray
++        d.set(PDFName.of(key), arr)
++      }
++      arr.push(ocg)
++    }
++    layer = refId(ocg)
++    if (op.id && op.rect) {
++      const found = findAnnot(doc, pageIndex, op.id, op.rect)
++      if (!found) throw new Error('That item is no longer on the page')
++      found.dict.set(PDFName.of('OC'), ocg)
++    }
++  } else {
++    const found = findAnnot(doc, pageIndex, op.id, op.rect)
++    if (!found) throw new Error('That item is no longer on the page')
++    const { annots, index, ref, dict } = found
++    if (op.type === 'move') {
++      const [a1, b1, a2, b2] = op.rect
++      const [c1, d1, c2, d2] = op.to
++      const sx = a2 - a1 > 0.01 ? (c2 - c1) / (a2 - a1) : 1
++      const sy = b2 - b1 > 0.01 ? (d2 - d1) / (b2 - b1) : 1
++      const f = (x: number, y: number): [number, number] => [c1 + (x - a1) * sx, d1 + (y - b1) * sy]
++      dict.set(PDFName.of('Rect'), doc.context.obj([c1, d1, c2, d2]))
++      mapAnnotPoints(dict, f)
++      // a comment's pop-up travels with it
++      const popup = dict.lookupMaybe(PDFName.of('Popup'), PDFDict)
++      const pr = popup && rectOf(popup)
++      if (popup && pr) popup.set(PDFName.of('Rect'), doc.context.obj([pr[0] + c1 - a1, pr[1] + d1 - b1, pr[2] + c1 - a1, pr[3] + d1 - b1]))
++    } else if (op.type === 'order') {
++      annots.remove(index)
++      if (op.where === 'front') annots.push(ref)
++      else annots.insert(0, ref)
++    } else if (op.type === 'delete') {
++      annots.remove(index)
++      const popup = dict.get(PDFName.of('Popup'))
++      if (popup instanceof PDFRef) for (let i = annots.size() - 1; i >= 0; i--) {
++        const r = annots.get(i)
++        if (r instanceof PDFRef && r.objectNumber === popup.objectNumber) annots.remove(i)
++      }
++    } else if (op.type === 'layer') {
++      if (op.layer === null) dict.delete(PDFName.of('OC'))
++      else {
++        const target = /^(\d+)R(\d*)$/.exec(op.layer)
++        if (!target) throw new Error('No such layer')
++        dict.set(PDFName.of('OC'), PDFRef.of(Number(target[1]), target[2] ? Number(target[2]) : 0))
++      }
++    }
++  }
++  return { bytes: await doc.save({ useObjectStreams: true }), ...(layer ? { layer } : {}) }
++}
++
++export function registerKertasObjectIpc(granted: (wcId: number, path: string) => boolean): void {
++  ipcMain.handle('pdf:kertas-annot-layer', async (e, req: unknown): Promise<string | null> => {
++    const { path, pageIndex, id, rect } = (req ?? {}) as { path?: unknown; pageIndex?: unknown; id?: unknown; rect?: unknown }
++    if (typeof path !== 'string' || !granted(e.sender.id, path) || typeof pageIndex !== 'number' || typeof id !== 'string') return null
++    try {
++      const doc = await PDFDocument.load(new Uint8Array(await readFile(path)), { updateMetadata: false })
++      const found = findAnnot(doc, pageIndex, id, Array.isArray(rect) ? (rect as Rect) : null)
++      const oc = found?.dict.get(PDFName.of('OC'))
++      return oc instanceof PDFRef ? refId(oc) : null
++    } catch {
++      return null
++    }
++  })
++
++  ipcMain.handle('pdf:kertas-object-op', async (e, req: unknown): Promise<Result & { layer?: string }> => {
++    const { path, pageIndex, op } = (req ?? {}) as { path?: unknown; pageIndex?: unknown; op?: KertasObjectOp }
++    if (typeof path !== 'string' || !granted(e.sender.id, path)) return { ok: false, error: 'pdf: path not granted to this view' }
++    if (typeof pageIndex !== 'number' || !op || typeof op !== 'object') return { ok: false, error: 'pdf: bad request' }
++    try {
++      const out = await applyObjectOp(new Uint8Array(await readFile(path)), Math.trunc(pageIndex), op)
++      await writePdfAtomically(path, out.bytes)
++      return { ok: true, ...(out.layer ? { layer: out.layer } : {}) }
 +    } catch (err) {
 +      return failed(err)
 +    }
@@ -4120,10 +4313,10 @@ index 75f46f2..63d093c 100644
    try {
      // harfbuzzjs ≤0.10 ships hb-subset.wasm at the package root with no exports map
 diff --git a/apps/pdf/src/preload/index.ts b/apps/pdf/src/preload/index.ts
-index e799e6b..3fcecf3 100644
+index e799e6b..c8cea57 100644
 --- a/apps/pdf/src/preload/index.ts
 +++ b/apps/pdf/src/preload/index.ts
-@@ -36,6 +36,14 @@ const api: PdfApi = {
+@@ -36,6 +36,18 @@ const api: PdfApi = {
      ipcRenderer.invoke(PDF_CHANNELS.compareReadOpen, path, password),
    reduceFileSize: (path) => ipcRenderer.invoke(PDF_CHANNELS.reduceFileSize, path),
    insertBlankPage: (request) => ipcRenderer.invoke(PDF_CHANNELS.insertBlankPage, request),
@@ -4135,14 +4328,18 @@ index e799e6b..3fcecf3 100644
 +    ipcRenderer.invoke('pdf:kertas-layer-defaults', { path, hidden }),
 +  kertasCompress: (path: string) => ipcRenderer.invoke('pdf:kertas-compress', { path }),
 +  kertasOcrLangs: (langs: string[]) => ipcRenderer.invoke('pdf:kertas-ocr-langs', langs),
++  kertasAnnotLayer: (path: string, pageIndex: number, id: string, rect: number[]) =>
++    ipcRenderer.invoke('pdf:kertas-annot-layer', { path, pageIndex, id, rect }),
++  kertasObjectOp: (path: string, pageIndex: number, op: unknown) =>
++    ipcRenderer.invoke('pdf:kertas-object-op', { path, pageIndex, op }),
    splitPdf: (request) => ipcRenderer.invoke(PDF_CHANNELS.splitPdf, request),
    mergePdf: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePdf, request),
    mergePages: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePages, request),
 diff --git a/apps/pdf/src/renderer/App.tsx b/apps/pdf/src/renderer/App.tsx
-index 32f6de1..97cee97 100644
+index 32f6de1..74ce27d 100644
 --- a/apps/pdf/src/renderer/App.tsx
 +++ b/apps/pdf/src/renderer/App.tsx
-@@ -8,6 +8,11 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
+@@ -8,6 +8,13 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
  import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
  import { AiPanel, GensparkMark } from './ai/AiPanel'
  import { AiAskPopover, type AskAnchorRect } from './AiAskPopover'
@@ -4151,10 +4348,12 @@ index 32f6de1..97cee97 100644
 +import { renderStamp, STAMP_PX_PER_PT } from './kertas/stamps'
 +import { LayersPanel } from './kertas/LayersPanel'
 +import { OcrLanguages } from './kertas/OcrLanguages'
++import { ObjectLayer, type ObjectOp } from './kertas/ObjectLayer'
++import type { StampKind } from './kertas/stamps'
  import {
    createSavedAnnotCountsLoader,
    loadSavedAnnots,
-@@ -479,8 +484,10 @@ export default function App() {
+@@ -479,8 +486,12 @@ export default function App() {
    const [currentPage, setCurrentPage] = useState(1)
    const [pageInput, setPageInput] = useState('1')
    const [sidebar, setSidebar] = useState<
@@ -4162,21 +4361,26 @@ index 32f6de1..97cee97 100644
 +    'thumbs' | 'outline' | 'comments' | 'compare' | 'attachments' | 'layers' | null
    >('thumbs')
 +  /** the picture being placed is a stamp: real size, above the text (Kertas Office) */
-+  const [stampPlacing, setStampPlacing] = useState(false)
++  const [stampPlacing, setStampPlacing] = useState<StampKind | null>(null)
++  /** Select mode: the page's items can be moved, arranged, put on layers (Kertas Office) */
++  const [objectMode, setObjectMode] = useState(false)
    const [compareResult, setCompareResult] = useState<CompareResult | null>(null)
    const [compareName, setCompareName] = useState<string | null>(null)
    const [compareBusy, setCompareBusy] = useState(false)
-@@ -864,6 +871,9 @@ export default function App() {
+@@ -864,6 +875,12 @@ export default function App() {
    const [savedStaticFormFills, setSavedStaticFormFills] = useState<StaticFormFillRecord[]>([])
    /** Picked image awaiting click-to-place (same overlay flow as signatures) */
    const [imagePick, setImagePick] = useState<Extract<SignatureData, { kind: 'image' }> | null>(null)
 +  useEffect(() => {
-+    if (!imagePick) setStampPlacing(false)
++    if (!imagePick) setStampPlacing(null)
 +  }, [imagePick])
++  useEffect(() => {
++    if (imagePick || editImageMode) setObjectMode(false)
++  }, [imagePick, editImageMode])
    const [pendingStaticFill, setPendingStaticFill] = useState<StaticFormFillKind | null>(null)
    const [staticTextDialog, setStaticTextDialog] = useState(false)
    const [staticTextPurpose, setStaticTextPurpose] = useState<'form' | 'insert'>('form')
-@@ -5322,7 +5332,22 @@ export default function App() {
+@@ -5322,7 +5339,22 @@ export default function App() {
    }
  
    /** Ribbon button → file picker; the picked image then enters click-to-place mode */
@@ -4191,22 +4395,22 @@ index 32f6de1..97cee97 100644
 +    setPendingStaticFill(null)
 +    replaceTargetRef.current = null
 +    setImagePick(renderStamp(kind, noteAuthor))
-+    setStampPlacing(true)
++    setStampPlacing(kind)
 +  }
 +
    const pickInsertImage = () => {
-+    setStampPlacing(false)
++    setStampPlacing(null)
      setEditTextMode(false)
      setTextDraft(null)
      setPendingTextInsert(null)
-@@ -5417,8 +5442,20 @@ export default function App() {
+@@ -5417,8 +5449,22 @@ export default function App() {
      const pick = imagePick
      if (!pick) return
      const fill = pendingStaticFill
 +    const stamp = stampPlacing
      setImagePick(null)
      setPendingStaticFill(null)
-+    setStampPlacing(false)
++    setStampPlacing(null)
 +    if (stamp) {
 +      const geom = pageGeom(origIdx)
 +      const disp = geomDispSize(geom)
@@ -4214,13 +4418,15 @@ index 32f6de1..97cee97 100644
 +      const h = pick.height / STAMP_PX_PER_PT
 +      const left = Math.min(Math.max(vx - w / 2, 0), Math.max(disp.width - w, 0))
 +      const top = Math.min(Math.max(vy - h / 2, 0), Math.max(disp.height - h, 0))
-+      commitPlacedImage(origIdx, pick.image, pdfRectFromView(geom, left, top, w, h), null, true)
++      // a real stamp annotation: it stays an item that can be moved, arranged and layered
++      const rect = pdfRectFromView(geom, left, top, w, h)
++      void applyObjectOp(origIdx, { type: 'stamp', rect, png: pick.image, label: stamp.label, author: noteAuthor })
 +      return
 +    }
      if (fill === 'check' || fill === 'cross') {
        void placeFormMark(fill, pick, origIdx, vx, vy)
        return
-@@ -5439,6 +5476,7 @@ export default function App() {
+@@ -5439,6 +5485,7 @@ export default function App() {
      image: string,
      rect: [number, number, number, number],
      fill: StaticFormFillKind | null,
@@ -4228,7 +4434,7 @@ index 32f6de1..97cee97 100644
    ) => {
      const id = newId()
      const staticFill: StaticFormFillRecord | undefined = fill
-@@ -5466,7 +5504,7 @@ export default function App() {
+@@ -5466,7 +5513,7 @@ export default function App() {
            pageIndex: origIdx,
            image,
            rect,
@@ -4237,7 +4443,7 @@ index 32f6de1..97cee97 100644
            rotate: ((pageGeom(origIdx).rot % 360) + 360) % 360,
          },
          staticFill,
-@@ -6557,6 +6595,11 @@ export default function App() {
+@@ -6557,6 +6604,11 @@ export default function App() {
  
    const reduceFileSize = async (): Promise<void> => {
      if (!filePath) return
@@ -4249,10 +4455,28 @@ index 32f6de1..97cee97 100644
      const outcome = await window.pdfApi.reduceFileSize(filePath)
      if (!outcome.ok) {
        if (!('canceled' in outcome)) showNotice(outcome.reason)
-@@ -6569,6 +6612,46 @@ export default function App() {
+@@ -6569,6 +6621,64 @@ export default function App() {
      showNotice(savedPct > 0 ? t('reduceDone', { pct: savedPct }) : t('reduceAlreadySmall'))
    }
  
++  /** Kertas Office: a change to a page item (or a new stamp), written to the file, then reloaded */
++  const applyObjectOp = (
++    origIdx: number,
++    op: ObjectOp | { type: 'stamp'; rect: [number, number, number, number]; png: string; label: string; author: string },
++  ) => {
++    const pageIndex = visListOf(orderRef.current).indexOf(origIdx)
++    if (pageIndex < 0) return
++    return flushThen(async () => {
++      const before = await readFileBytes(window.pdfApi, filePath)
++      const result = await window.pdfApi.kertasObjectOp(filePath, pageIndex, op)
++      if (!result.ok) {
++        opFailed(result.error)
++        return
++      }
++      await reloadWritten(before)
++    })
++  }
++
 +  /** Kertas Office: a copy of the page right after it */
 +  const duplicatePage = (origIdx: number) => {
 +    const pageIndex = visListOf(orderRef.current).indexOf(origIdx)
@@ -4296,7 +4520,7 @@ index 32f6de1..97cee97 100644
    const insertPdf = (afterOrigIdx: number) => {
      // the flush bakes the visible order into the file, so the anchor becomes its visible position
      const afterPageIndex = visListOf(orderRef.current).indexOf(afterOrigIdx)
-@@ -7640,7 +7723,12 @@ export default function App() {
+@@ -7640,7 +7750,12 @@ export default function App() {
      if (convertBusy) return
      setConvertBusy(true)
      try {
@@ -4310,7 +4534,7 @@ index 32f6de1..97cee97 100644
      } catch {
        // No shell conversion flow in standalone mode; shell-side errors show their own dialogs
      } finally {
-@@ -8026,6 +8114,23 @@ export default function App() {
+@@ -8026,6 +8141,23 @@ export default function App() {
            </span>
            <span>{t('attachments')}</span>
          </button>
@@ -4334,7 +4558,7 @@ index 32f6de1..97cee97 100644
          {searchBtn}
          <button
            className={`rb-big${spread === 2 ? ' active' : ''}`}
-@@ -8142,7 +8247,8 @@ export default function App() {
+@@ -8142,7 +8274,8 @@ export default function App() {
          <div className="ribbon-body" data-ribbon-body="">
            {ribbonTab === 'home' && (
              <>
@@ -4344,7 +4568,7 @@ index 32f6de1..97cee97 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8190,6 +8296,8 @@ export default function App() {
+@@ -8190,6 +8323,8 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -4353,7 +4577,7 @@ index 32f6de1..97cee97 100644
                {markupGroup}
                <div className="ribbon-sep" />
                {/* Edit entries lead; Search moved after page/zoom (⌘F is the common path) */}
-@@ -8221,11 +8329,15 @@ export default function App() {
+@@ -8221,11 +8356,15 @@ export default function App() {
                          <button onClick={() => void convertTo('xlsx')}>
                            {t('convertToExcel')}
                          </button>
@@ -4369,7 +4593,7 @@ index 32f6de1..97cee97 100644
                          <div className="rb-menu-sep" />
                          <button
                            title={t('exportImagesAll')}
-@@ -8283,6 +8395,8 @@ export default function App() {
+@@ -8283,6 +8422,8 @@ export default function App() {
            )}
            {ribbonTab === 'annotate' && (
              <>
@@ -4378,7 +4602,7 @@ index 32f6de1..97cee97 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8313,6 +8427,8 @@ export default function App() {
+@@ -8313,10 +8454,41 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -4387,13 +4611,54 @@ index 32f6de1..97cee97 100644
                {markupGroup}
                <div className="ribbon-sep" />
                <div className="ribbon-group">
-@@ -8346,6 +8462,13 @@ export default function App() {
+                 <div className="ribbon-group-items">
++                  {KERTAS_HOST && (
++                    <button
++                      className={`rb-big${objectMode ? ' active' : ''}`}
++                      disabled={status !== 'ready'}
++                      data-tip="Select: move, resize and arrange shapes, drawings, stamps and comments; put them on layers"
++                      onClick={() => {
++                        if (objectMode) {
++                          setObjectMode(false)
++                          return
++                        }
++                        setDrawTool(null)
++                        setEditTextMode(false)
++                        setTextDraft(null)
++                        setPendingTextInsert(null)
++                        setImagePick(null)
++                        setEditImageMode(false)
++                        setSelected(null)
++                        // pending edits are saved first, so the items match the file
++                        void flushThen(async () => setObjectMode(true))
++                      }}
++                    >
++                      <span className="rb-big-icon">
++                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" aria-hidden="true">
++                          <path d="M6 3.5v15l4-3.6 2.6 5.6 2.4-1.1-2.6-5.5 5.3-.4z" />
++                        </svg>
++                      </span>
++                      <span>Select</span>
++                    </button>
++                  )}
+                   {DRAW_TOOLS.map(({ tool, icon: DrawIcon, key }) => (
+                     <button
+                       key={tool}
+@@ -8329,6 +8501,7 @@ export default function App() {
+                         setPendingTextInsert(null)
+                         setImagePick(null)
+                         setEditImageMode(false)
++                        setObjectMode(false)
+                         if (tool === 'measure' && drawTool === 'measure') {
+                           // a second click disarms the tool like every other
+                           // one and asks the next measure line to re-open the
+@@ -8346,6 +8519,13 @@ export default function App() {
                        <span>{t(key)}</span>
                      </button>
                    ))}
 +                  {KERTAS_HOST && (
 +                    <StampButton
-+                      active={!!imagePick && stampPlacing}
++                      active={!!imagePick && !!stampPlacing}
 +                      disabled={readOnly}
 +                      onPick={pickStamp}
 +                    />
@@ -4401,7 +4666,7 @@ index 32f6de1..97cee97 100644
                    <button
                      className={`rb-big${drawTool === 'redact' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8566,6 +8689,7 @@ export default function App() {
+@@ -8566,6 +8746,7 @@ export default function App() {
              <>
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
@@ -4409,7 +4674,7 @@ index 32f6de1..97cee97 100644
                    <button
                      className="rb-big ai-entry"
                      disabled={readOnly}
-@@ -8577,6 +8701,7 @@ export default function App() {
+@@ -8577,6 +8758,7 @@ export default function App() {
                      </span>
                      <span>{t('aiFillFormBtn')}</span>
                    </button>
@@ -4417,7 +4682,7 @@ index 32f6de1..97cee97 100644
                    <button
                      className={`rb-big${pendingStaticFill === 'text' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8697,6 +8822,23 @@ export default function App() {
+@@ -8697,6 +8879,23 @@ export default function App() {
                      </span>
                      <span>{t('formComplete')}</span>
                    </button>
@@ -4441,7 +4706,7 @@ index 32f6de1..97cee97 100644
                  </div>
                </div>
              </>
-@@ -8945,6 +9087,22 @@ export default function App() {
+@@ -8945,6 +9144,22 @@ export default function App() {
                      </span>
                      <span>{t('insertBlankPage')}</span>
                    </button>
@@ -4464,7 +4729,7 @@ index 32f6de1..97cee97 100644
                    <button
                      className="rb-big"
                      disabled={readOnly || pageCount === 0}
-@@ -9063,6 +9221,7 @@ export default function App() {
+@@ -9063,6 +9278,7 @@ export default function App() {
                      </span>
                      <span>{t('ocrRecognize')}</span>
                    </button>
@@ -4472,7 +4737,7 @@ index 32f6de1..97cee97 100644
                  </div>
                </div>
                <div className="ribbon-sep" />
-@@ -9085,6 +9244,7 @@ export default function App() {
+@@ -9085,6 +9301,7 @@ export default function App() {
        <div className="app-main">
          {/* dock wrapper animates the width between panel and rail (docs-style 180ms ease);
                the panel stays mounted while collapsed so the chat history survives */}
@@ -4480,7 +4745,7 @@ index 32f6de1..97cee97 100644
          <div
            className={`ai-dock${aiCollapsed ? ' collapsed' : ''}${
              !aiSidebarEnabled && aiCollapsed ? ' ai-dock-off' : ''
-@@ -9109,6 +9269,7 @@ export default function App() {
+@@ -9109,6 +9326,7 @@ export default function App() {
              onClearSelection={() => setAiSelection(null)}
            />
          </div>
@@ -4488,7 +4753,7 @@ index 32f6de1..97cee97 100644
          <div className="app-content">
            {digitalSignatures.length > 0 && (
              <div className={`pdf-sig-banner ${overallSignatureStatus(digitalSignatures)}`}>
-@@ -9258,6 +9419,22 @@ export default function App() {
+@@ -9258,6 +9476,22 @@ export default function App() {
                  />
                </div>
              )}
@@ -4511,7 +4776,7 @@ index 32f6de1..97cee97 100644
              {sidebar === 'attachments' && (
                <div className="pdf-thumbs" style={{ width: sidebarW }}>
                  <div className="pdf-outline-header">
-@@ -9620,7 +9797,13 @@ export default function App() {
+@@ -9620,7 +9854,13 @@ export default function App() {
                                  pendingStaticFill ? t('formPlaceStaticHint') : t('imagePlaceHint')
                                }
                                onPlace={(vx, vy) => placeImage(origIdx, vx, vy)}
@@ -4526,7 +4791,32 @@ index 32f6de1..97cee97 100644
                              />
                            )}
                            {/* Paragraph boxes (WPS-style): every text block outlined while
-@@ -10617,6 +10800,7 @@ export default function App() {
+@@ -10537,6 +10777,24 @@ export default function App() {
+                                 onMove={readOnly ? undefined : moveDrawing}
+                                 onResize={readOnly ? undefined : resizeDrawing}
+                               />
++                              {KERTAS_HOST && objectMode && !drawTool && doc && origIdx < doc.numPages && (
++                                <ObjectLayer
++                                  doc={doc}
++                                  pageNo={origIdx + 1}
++                                  geom={geom}
++                                  scale={scale}
++                                  readOnly={readOnly}
++                                  onApply={(op) => void applyObjectOp(origIdx, op)}
++                                  layerOf={(id, rect) =>
++                                    window.pdfApi.kertasAnnotLayer(
++                                      filePath,
++                                      visListOf(orderRef.current).indexOf(origIdx),
++                                      id,
++                                      rect,
++                                    )
++                                  }
++                                />
++                              )}
+                               <RedactionLayer
+                                 active={
+                                   !readOnly && !redactionCopyInFlight && drawTool === 'redact'
+@@ -10617,6 +10875,7 @@ export default function App() {
                                        labels={{
                                          required: t('formDesignRequired'),
                                          multiLine: t('formDesignMultiLine'),
@@ -4534,7 +4824,7 @@ index 32f6de1..97cee97 100644
                                          defaultValue: t('formDesignDefaultValue'),
                                          defaultChecked: t('formDesignDefaultChecked'),
                                          remove: t('formDesignDelete'),
-@@ -10821,7 +11005,7 @@ export default function App() {
+@@ -10821,7 +11080,7 @@ export default function App() {
                  </button>
                </div>
              )}
@@ -4543,7 +4833,7 @@ index 32f6de1..97cee97 100644
                <div
                  className="pdf-sel-popup"
                  style={{ left: selPopup.x, top: selPopup.y }}
-@@ -10895,9 +11079,10 @@ export default function App() {
+@@ -10895,9 +11154,10 @@ export default function App() {
                      >
                        <span className="sel-swatch sel-swatch-st">S</span>
                      </button>
@@ -4555,7 +4845,7 @@ index 32f6de1..97cee97 100644
                  <button
                    type="button"
                    className="pdf-sel-ask"
-@@ -10913,9 +11098,10 @@ export default function App() {
+@@ -10913,9 +11173,10 @@ export default function App() {
                    </svg>
                    {t('aiAskBtn')}
                  </button>
@@ -4567,7 +4857,7 @@ index 32f6de1..97cee97 100644
                <AiAskPopover
                  rect={askPop.rect}
                  excerpt={askPop.excerpt}
-@@ -11170,6 +11356,16 @@ export default function App() {
+@@ -11170,6 +11431,16 @@ export default function App() {
                  >
                    {t('insertBlankPage')}
                  </button>
@@ -4752,6 +5042,268 @@ index 0000000..e0e8140
 +      >
 +        Open the file like this
 +      </button>
++    </div>
++  )
++}
+diff --git a/apps/pdf/src/renderer/kertas/ObjectLayer.tsx b/apps/pdf/src/renderer/kertas/ObjectLayer.tsx
+new file mode 100644
+index 0000000..92e309e
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/ObjectLayer.tsx
+@@ -0,0 +1,256 @@
++// Select mode (Kertas Office): the items on a page (shapes, drawings, stamps, comments, text
++// boxes) can be picked, dragged to move, resized from a corner, put in front of or behind each
++// other, put on a layer, or deleted. Every change goes to the file through the host and the
++// page reloads, so Undo takes it back like any page edit.
++import { useEffect, useRef, useState, type ReactElement, type PointerEvent as RPointerEvent } from 'react'
++import type { PDFDocumentProxy } from 'pdfjs-dist'
++import { pdfRectToCss, viewToPdf, type PageGeom } from '../annotations'
++import { listLayers, type LayerRow } from './layers'
++
++type Rect = [number, number, number, number]
++export type ObjectOp =
++  | { type: 'move'; id: string; rect: Rect; to: Rect }
++  | { type: 'order'; id: string; rect: Rect; where: 'front' | 'back' }
++  | { type: 'delete'; id: string; rect: Rect }
++  | { type: 'layer'; id: string; rect: Rect; layer: string | null }
++  | { type: 'newLayer'; id: string; rect: Rect; name: string }
++
++interface Item {
++  id: string
++  subtype: string
++  rect: Rect
++  layer: string | null
++}
++
++const KINDS: Record<string, string> = {
++  Square: 'Rectangle',
++  Circle: 'Ellipse',
++  Line: 'Line',
++  Ink: 'Drawing',
++  Polygon: 'Polygon',
++  PolyLine: 'Line',
++  FreeText: 'Text box',
++  Stamp: 'Stamp',
++  Text: 'Comment',
++  FileAttachment: 'Attachment',
++  Caret: 'Caret',
++}
++
++const cache = new WeakMap<PDFDocumentProxy, Map<number, Promise<Item[]>>>()
++function itemsOf(doc: PDFDocumentProxy, pageNo: number): Promise<Item[]> {
++  let byPage = cache.get(doc)
++  if (!byPage) cache.set(doc, (byPage = new Map()))
++  let p = byPage.get(pageNo)
++  if (!p) {
++    p = doc.getPage(pageNo).then(async (page) => {
++      const annots = (await page.getAnnotations({ intent: 'display' })) as Array<{
++        id?: string
++        subtype?: string
++        rect?: number[]
++      }>
++      return annots
++        .filter((a) => a.id && a.subtype && KINDS[a.subtype] && a.rect?.length === 4)
++        .map((a) => {
++          const [x1, y1, x2, y2] = a.rect as Rect
++          return {
++            id: a.id!,
++            subtype: a.subtype!,
++            rect: [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)] as Rect,
++            layer: null,
++          }
++        })
++    })
++    byPage.set(pageNo, p)
++  }
++  return p
++}
++
++type Drag = { mode: 'move' | 'resize'; corner?: number; x: number; y: number; dx: number; dy: number }
++
++export function ObjectLayer({
++  doc,
++  pageNo,
++  geom,
++  scale,
++  readOnly,
++  onApply,
++  layerOf,
++}: {
++  doc: PDFDocumentProxy
++  pageNo: number
++  geom: PageGeom
++  scale: number
++  readOnly: boolean
++  onApply: (op: ObjectOp) => void
++  /** the layer the item is on, read from the file */
++  layerOf: (id: string, rect: Rect) => Promise<string | null>
++}): ReactElement {
++  const [items, setItems] = useState<Item[]>([])
++  const [sel, setSel] = useState<string | null>(null)
++  const [drag, setDrag] = useState<Drag | null>(null)
++  const [layers, setLayers] = useState<LayerRow[] | null>(null)
++  const [naming, setNaming] = useState(false)
++  const [name, setName] = useState('')
++  const rootRef = useRef<HTMLDivElement>(null)
++  useEffect(() => {
++    let stale = false
++    void itemsOf(doc, pageNo).then((r) => {
++      if (!stale) setItems(r)
++    })
++    return () => {
++      stale = true
++    }
++  }, [doc, pageNo])
++  useEffect(() => {
++    setLayers(null)
++    setNaming(false)
++  }, [sel])
++  useEffect(() => {
++    if (!sel) return
++    const key = (e: KeyboardEvent): void => {
++      const it = items.find((i) => i.id === sel)
++      if (!it || readOnly) return
++      const target = e.target as HTMLElement
++      if (target.closest('input, textarea')) return
++      if (e.key === 'Delete' || e.key === 'Backspace') {
++        e.preventDefault()
++        onApply({ type: 'delete', id: it.id, rect: it.rect })
++      } else if (e.key === 'Escape') setSel(null)
++    }
++    window.addEventListener('keydown', key)
++    return () => window.removeEventListener('keydown', key)
++  }, [sel, items, readOnly, onApply])
++
++  // a change seen on screen (css px) as the item's new box in PDF space
++  const moved = (it: Item, d: Drag): Rect => {
++    const box = pdfRectToCss(geom, it.rect, scale)
++    let { left, top, width, height } = box
++    if (d.mode === 'move') {
++      left += d.dx
++      top += d.dy
++    } else {
++      const c = d.corner ?? 2 // 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left
++      if (c === 0 || c === 3) { left += d.dx; width -= d.dx } else width += d.dx
++      if (c === 0 || c === 1) { top += d.dy; height -= d.dy } else height += d.dy
++      width = Math.max(width, 6)
++      height = Math.max(height, 6)
++    }
++    const [ax, ay] = viewToPdf(geom, left / scale, top / scale)
++    const [bx, by] = viewToPdf(geom, (left + width) / scale, (top + height) / scale)
++    return [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)]
++  }
++
++  const start = (e: RPointerEvent, it: Item, mode: Drag['mode'], corner?: number): void => {
++    e.preventDefault()
++    e.stopPropagation()
++    setSel(it.id)
++    if (readOnly) return
++    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
++    setDrag({ mode, ...(corner !== undefined ? { corner } : {}), x: e.clientX, y: e.clientY, dx: 0, dy: 0 })
++  }
++  const moveDrag = (e: RPointerEvent): void => {
++    if (drag) setDrag({ ...drag, dx: e.clientX - drag.x, dy: e.clientY - drag.y })
++  }
++  const endDrag = (it: Item): void => {
++    const d = drag
++    setDrag(null)
++    if (!d || (Math.abs(d.dx) < 2 && Math.abs(d.dy) < 2)) return
++    onApply({ type: 'move', id: it.id, rect: it.rect, to: moved(it, d) })
++  }
++
++  const selected = items.find((i) => i.id === sel) ?? null
++  return (
++    <div
++      ref={rootRef}
++      className="kertas-objects"
++      onPointerDown={(e) => {
++        if (e.target === rootRef.current) setSel(null)
++      }}
++    >
++      {items.map((it) => {
++        const live = drag && sel === it.id ? pdfRectToCss(geom, moved(it, drag), scale) : pdfRectToCss(geom, it.rect, scale)
++        const on = sel === it.id
++        return (
++          <div
++            key={it.id}
++            className={`kertas-object${on ? ' is-selected' : ''}`}
++            style={live}
++            title={KINDS[it.subtype]}
++            onPointerDown={(e) => start(e, it, 'move')}
++            onPointerMove={moveDrag}
++            onPointerUp={() => endDrag(it)}
++          >
++            {on && !readOnly &&
++              [0, 1, 2, 3].map((c) => (
++                <span
++                  key={c}
++                  className={`kertas-object-grip g${c}`}
++                  onPointerDown={(e) => start(e, it, 'resize', c)}
++                  onPointerMove={moveDrag}
++                  onPointerUp={() => endDrag(it)}
++                />
++              ))}
++          </div>
++        )
++      })}
++      {selected && !drag && !readOnly && (() => {
++        const box = pdfRectToCss(geom, selected.rect, scale)
++        return (
++          <div className="kertas-object-menu" style={{ left: box.left, top: box.top + box.height + 8 }} onPointerDown={(e) => e.stopPropagation()}>
++            <span className="kertas-object-kind">{KINDS[selected.subtype]}</span>
++            <button type="button" title="Bring to front" onClick={() => onApply({ type: 'order', id: selected.id, rect: selected.rect, where: 'front' })}>
++              Bring to front
++            </button>
++            <button type="button" title="Send to back" onClick={() => onApply({ type: 'order', id: selected.id, rect: selected.rect, where: 'back' })}>
++              Send to back
++            </button>
++            <button
++              type="button"
++              onClick={() =>
++                void Promise.all([listLayers(doc), layerOf(selected.id, selected.rect)]).then(([rows, on]) => {
++                  selected.layer = on
++                  setLayers(rows)
++                })
++              }
++            >
++              Layer
++            </button>
++            <button type="button" className="is-danger" onClick={() => onApply({ type: 'delete', id: selected.id, rect: selected.rect })}>
++              Delete
++            </button>
++            {layers && (
++              <div className="kertas-object-layers">
++                <label className="kertas-layer-row">
++                  <input type="radio" checked={selected.layer === null} onChange={() => onApply({ type: 'layer', id: selected.id, rect: selected.rect, layer: null })} />
++                  <span>No layer</span>
++                </label>
++                {layers.map((l) => (
++                  <label key={l.id} className="kertas-layer-row">
++                    <input type="radio" checked={selected.layer === l.id} onChange={() => onApply({ type: 'layer', id: selected.id, rect: selected.rect, layer: l.id })} />
++                    <span>{l.name}</span>
++                  </label>
++                ))}
++                {naming ? (
++                  <form
++                    className="kertas-object-newlayer"
++                    onSubmit={(e) => {
++                      e.preventDefault()
++                      if (name.trim()) onApply({ type: 'newLayer', id: selected.id, rect: selected.rect, name: name.trim() })
++                    }}
++                  >
++                    <input autoFocus value={name} placeholder="Layer name" onChange={(e) => setName(e.target.value)} />
++                    <button type="submit">Add</button>
++                  </form>
++                ) : (
++                  <button type="button" onClick={() => { setName(''); setNaming(true) }}>
++                    New layer...
++                  </button>
++                )}
++              </div>
++            )}
++          </div>
++        )
++      })()}
 +    </div>
 +  )
 +}
@@ -5004,10 +5556,10 @@ index 0000000..cf5096a
 +}
 diff --git a/apps/pdf/src/renderer/kertas/skin.css b/apps/pdf/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..5c68353
+index 0000000..5e63a99
 --- /dev/null
 +++ b/apps/pdf/src/renderer/kertas/skin.css
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,186 @@
 +/* Kertas Office look for the PDF editor: the shared skin plus Kertas's PDF red.
 + * Loaded last so it wins. */
 +@import '../../../../kertas-skin.css';
@@ -5084,6 +5636,115 @@ index 0000000..5c68353
 +.kertas-ocr-langs {
 +  min-width: 200px;
 +  padding: 6px;
++}
++
++/* ---- Select mode (kertas/ObjectLayer.tsx) ---- */
++.kertas-objects {
++  position: absolute;
++  inset: 0;
++  z-index: 30;
++  cursor: default;
++}
++
++.kertas-object {
++  position: absolute;
++  border: 1px dashed transparent;
++  border-radius: 2px;
++  cursor: move;
++  touch-action: none;
++}
++
++.kertas-object:hover {
++  border-color: var(--accent);
++  background: rgb(225 29 72 / 5%);
++}
++
++.kertas-object.is-selected {
++  border: 1.5px solid var(--accent);
++  background: rgb(225 29 72 / 6%);
++}
++
++.kertas-object-grip {
++  position: absolute;
++  width: 9px;
++  height: 9px;
++  background: var(--surface);
++  border: 1.5px solid var(--accent);
++  border-radius: 2px;
++}
++
++.kertas-object-grip.g0 { left: -5px; top: -5px; cursor: nwse-resize; }
++.kertas-object-grip.g1 { right: -5px; top: -5px; cursor: nesw-resize; }
++.kertas-object-grip.g2 { right: -5px; bottom: -5px; cursor: nwse-resize; }
++.kertas-object-grip.g3 { left: -5px; bottom: -5px; cursor: nesw-resize; }
++
++.kertas-object-menu {
++  position: absolute;
++  z-index: 40;
++  display: flex;
++  flex-wrap: wrap;
++  align-items: center;
++  gap: 4px;
++  max-width: 460px;
++  padding: 5px;
++  background: var(--surface);
++  color: var(--text);
++  border: 1px solid var(--border);
++  border-radius: 10px;
++  box-shadow: var(--shadow-menu);
++  font-size: 12px;
++}
++
++.kertas-object-menu button {
++  padding: 5px 9px;
++  border: none;
++  border-radius: 6px;
++  background: none;
++  color: inherit;
++  font: inherit;
++  cursor: pointer;
++}
++
++.kertas-object-menu button:hover {
++  background: var(--hover);
++}
++
++.kertas-object-menu button.is-danger {
++  color: #dc2626;
++}
++
++.kertas-object-kind {
++  padding: 0 6px;
++  color: var(--text-tertiary);
++  font-weight: 600;
++}
++
++.kertas-object-layers {
++  flex-basis: 100%;
++  display: flex;
++  flex-direction: column;
++  border-top: 1px solid var(--border-subtle);
++  padding-top: 4px;
++}
++
++.kertas-object-layers > button {
++  align-self: flex-start;
++}
++
++.kertas-object-newlayer {
++  display: flex;
++  gap: 4px;
++  padding: 4px;
++}
++
++.kertas-object-newlayer input {
++  flex: 1;
++  padding: 4px 7px;
++  border: 1px solid var(--border-strong);
++  border-radius: 6px;
++  background: var(--surface);
++  color: var(--text);
++  font: inherit;
 +}
 diff --git a/apps/pdf/src/renderer/kertas/stamps.ts b/apps/pdf/src/renderer/kertas/stamps.ts
 new file mode 100644
@@ -5173,7 +5834,7 @@ index 3188d6c..2d675fb 100644
  
  installScreenTips()
 diff --git a/apps/pdf/src/shared/ipc.ts b/apps/pdf/src/shared/ipc.ts
-index bab2848..0cf6645 100644
+index bab2848..1173154 100644
 --- a/apps/pdf/src/shared/ipc.ts
 +++ b/apps/pdf/src/shared/ipc.ts
 @@ -702,6 +702,9 @@ export interface FormValueInput {
@@ -5195,7 +5856,7 @@ index bab2848..0cf6645 100644
    /** text only; 0 or absent = no limit */
    maxLen?: number
    /** text only; absent = auto size */
-@@ -1179,6 +1184,11 @@ export interface PdfApi {
+@@ -1179,6 +1184,13 @@ export interface PdfApi {
    extractPages(request: ExtractPagesRequest): Promise<ExtractPagesResult>
    insertPdf(request: InsertPdfRequest): Promise<InsertPdfResult>
    insertBlankPage(request: InsertBlankPageRequest): Promise<InsertBlankPageResult>
@@ -5204,6 +5865,8 @@ index bab2848..0cf6645 100644
 +  kertasLayerDefaults(path: string, hidden: string[]): Promise<KertasOpResult>
 +  kertasCompress(path: string): Promise<void>
 +  kertasOcrLangs(langs: string[]): Promise<void>
++  kertasAnnotLayer(path: string, pageIndex: number, id: string, rect: number[]): Promise<string | null>
++  kertasObjectOp(path: string, pageIndex: number, op: unknown): Promise<KertasOpResult & { layer?: string }>
    splitPdf(request: SplitPdfRequest): Promise<SplitPdfResult>
    mergePdf(request: MergePdfRequest): Promise<MergePdfResult>
    mergePages(request: MergePagesRequest): Promise<MergePagesResult>

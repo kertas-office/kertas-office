@@ -292,28 +292,26 @@ test('Duplicate page puts a copy of the page right after it, in the file', pdfOp
   assert.deepEqual(w.errors, []);
 });
 
-test('a stamp is placed where clicked and saved into the page', pdfOpts, async () => {
+test('a stamp is placed where clicked and saved as a stamp on the page', pdfOpts, async () => {
   await open('sample.pdf', 'pdf');
-  const xobjects = async () => {
-    const doc = await PDFDocument.load(await readFile(file));
-    const res = doc.getPage(0).node.Resources();
-    const xo = res?.lookup((await import('@cantoo/pdf-lib')).PDFName.of('XObject'));
-    return xo ? xo.keys().length : 0;
-  };
-  const had = await xobjects();
   await pdfTab('Annotate');
   await w.getByText('Stamp', { exact: true }).click();
   await w.locator('.kertas-stamp-menu button', { hasText: 'APPROVED' }).click();
   await sleep(300);
-  const page = w.locator('.pdf-page').first();
-  const box = await page.boundingBox();
-  await w.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.2);
+  const box = await w.locator('.pdf-page').first().boundingBox();
+  await w.mouse.move(box.x + box.width * 0.7, box.y + 300);
   await sleep(200);
-  await w.mouse.click(box.x + box.width * 0.7, box.y + box.height * 0.2);
-  await sleep(800);
-  await press('pdf', 'S');
-  await sleep(4000);
-  assert.ok(await xobjects() > had, 'the page holds one more picture');
+  await w.mouse.click(box.x + box.width * 0.7, box.y + 300);
+  const { PDFName, PDFArray } = await import('@cantoo/pdf-lib');
+  const stamps = async () => {
+    const doc = await PDFDocument.load(await readFile(file));
+    const annots = doc.getPage(0).node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+    return annots ? annots.asArray().map((r) => doc.context.lookup(r)).filter((d) => d.get(PDFName.of('Subtype'))?.toString() === '/Stamp') : [];
+  };
+  for (let i = 0; i < 40 && !(await stamps()).length; i++) await sleep(250);
+  const [stamp] = await stamps();
+  assert.ok(stamp, 'a stamp annotation is on the page');
+  assert.match(stamp.get(PDFName.of('Contents')).decodeText(), /APPROVED/);
   assert.deepEqual(w.errors, []);
 });
 
@@ -433,4 +431,119 @@ test('an older .xls workbook opens in the new Sheets when LibreOffice is not ins
   await k.keyboard.press('Control+o');
   for (let i = 0; i < 80 && editors('sheets').length === had; i++) await sleep(250);
   assert.equal(editors('sheets').length, had + 1);
+});
+
+// ---------------------------------------------- page items: move, arrange, layers (Select mode)
+
+/** A one-page PDF with two rectangles drawn as annotations (a red one under a blue one) */
+async function itemsPdf() {
+  const { PDFDocument: Doc, PDFName } = await import('@cantoo/pdf-lib');
+  const doc = await Doc.create();
+  const page = doc.addPage([595, 842]);
+  const square = (rect, rgb) => {
+    const [x1, y1, x2, y2] = rect;
+    const ap = doc.context.register(doc.context.stream(`${rgb} rg 0 0 ${x2 - x1} ${y2 - y1} re f`, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, x2 - x1, y2 - y1] }));
+    const ref = doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Square', Rect: rect, F: 4, AP: { N: ap } }));
+    page.node.addAnnot(ref);
+    return ref;
+  };
+  square([100, 600, 250, 700], '1 0 0');
+  square([180, 560, 330, 660], '0 0 1');
+  const out = path.join(dir, `${++n}-items.pdf`);
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(out, await doc.save());
+  return { out, PDFName };
+}
+
+async function openItems() {
+  const { out, PDFName } = await itemsPdf();
+  await closeAll();
+  file = out;
+  await answerDialogs([file]);
+  const had = new Set(editors('pdf'));
+  await k.locator('#tabs .tab').first().click();
+  await k.keyboard.press('Control+o');
+  w = null;
+  for (let i = 0; i < 80 && !w; i++) { w = editors('pdf').find((p) => !had.has(p)); if (!w) await sleep(250); }
+  w.setDefaultTimeout(15000);
+  w.errors = [];
+  w.on('pageerror', (e) => w.errors.push(String(e.message || e)));
+  await w.waitForSelector('.ribbon-tabs');
+  await sleep(2500);
+  await pdfTab('Annotate');
+  await w.getByText('Select', { exact: true }).click();
+  await w.waitForSelector('.kertas-object');
+  return PDFName;
+}
+const annotsOf = async (PDFName) => {
+  const doc = await PDFDocument.load(await readFile(file));
+  const arr = doc.getPage(0).node.Annots();
+  return { doc, list: arr ? arr.asArray().map((r) => doc.context.lookup(r)) : [] };
+};
+const rectOf = (d, PDFName) => d.get(PDFName.of('Rect')).asArray().map((v) => v.asNumber());
+const fileChange = async (before) => { for (let i = 0; i < 40; i++) { if (!(await readFile(file)).equals(before)) return; await sleep(250); } };
+
+test('Select mode: an item is dragged to a new place and the file keeps it there', pdfOpts, async () => {
+  const PDFName = await openItems();
+  assert.equal(await w.locator('.kertas-object').count(), 2);
+  const red = w.locator('.kertas-object').first();
+  const b = await red.boundingBox();
+  const before = await readFile(file);
+  await w.mouse.move(b.x + 20, b.y + 20);
+  await w.mouse.down();
+  await w.mouse.move(b.x + 80, b.y + 60, { steps: 6 });
+  await w.mouse.up();
+  await fileChange(before);
+  const { list } = await annotsOf(PDFName);
+  const r = rectOf(list[0], PDFName);
+  assert.ok(r[0] > 110 && r[1] < 595, `moved right and down: ${r}`);
+  assert.ok(Math.abs((r[2] - r[0]) - 150) < 1, 'same size');
+  assert.deepEqual(w.errors, []);
+});
+
+test('Select mode: Bring to front, Send to back and Delete change the file', pdfOpts, async () => {
+  const PDFName = await openItems();
+  const first = async () => rectOf((await annotsOf(PDFName)).list[0], PDFName)[0];
+  assert.equal(await first(), 100, 'red is first (behind)');
+  let before = await readFile(file);
+  await w.locator('.kertas-object').first().click({ position: { x: 10, y: 10 } });
+  await w.getByText('Bring to front', { exact: true }).click();
+  await fileChange(before);
+  assert.equal(await first(), 180, 'red went to the front, blue is first now');
+  await w.waitForSelector('.kertas-object');
+  before = await readFile(file);
+  // the blue one is first now; its lower right corner is clear of the red one
+  const blue = w.locator('.kertas-object').first();
+  const bb = await blue.boundingBox();
+  await blue.click({ position: { x: bb.width - 10, y: bb.height - 10 } });
+  await w.getByText('Delete', { exact: true }).click();
+  await fileChange(before);
+  assert.equal((await annotsOf(PDFName)).list.length, 1);
+});
+
+test('Select mode: an item goes on a new layer, and hiding that layer hides it', pdfOpts, async () => {
+  const PDFName = await openItems();
+  const before = await readFile(file);
+  await w.locator('.kertas-object').first().click({ position: { x: 10, y: 10 } });
+  await w.getByText('Layer', { exact: true }).click();
+  await w.getByText('New layer...', { exact: true }).click();
+  await w.getByPlaceholder('Layer name').fill('Markings');
+  await w.getByText('Add', { exact: true }).click();
+  await fileChange(before);
+  const { doc, list } = await annotsOf(PDFName);
+  const oc = list[0].get(PDFName.of('OC'));
+  assert.ok(oc, 'the item is on a layer');
+  assert.equal(doc.context.lookup(oc).get(PDFName.of('Name')).decodeText(), 'Markings');
+  await sleep(1500);
+  await pdfTab('View');
+  await w.getByText('Layers', { exact: true }).first().click();
+  await w.waitForSelector('.kertas-layers .kertas-layer-row');
+  assert.deepEqual(await w.locator('.kertas-layers .kertas-layer-row span').allInnerTexts(), ['Markings']);
+  // hiding the layer redraws the page without the item: the red is gone from that spot
+  const box = await w.locator('.pdf-page').first().boundingBox();
+  const shot = async () => w.screenshot({ clip: { x: box.x + 110 * (box.width / 595), y: box.y + (842 - 690) * (box.width / 595), width: 20, height: 20 } });
+  const shown = await shot();
+  await w.locator('.kertas-layers .kertas-layer-row input').first().uncheck();
+  await sleep(1200);
+  assert.ok(!(await shot()).equals(shown), 'the page changed where the item was');
 });
