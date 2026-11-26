@@ -82,6 +82,12 @@ function start() {
   host.setDocsFileSavedHook((wc, filePath) => { const id = tabOf(wc.id); if (id) tell('path', id, { path: filePath }); });
   host.setDocsFileOpenedHook((wcId, filePath) => { const id = tabOf(wcId); if (id) tell('path', id, { path: filePath }); });
   startSheetsAndPdf();
+  // the File button of the spreadsheet and PDF editors: Kertas carries out the command
+  const FILE_ACTIONS = new Set(['new-doc', 'new-sheet', 'open', 'save', 'save-as', 'export-pdf', 'export-csv', 'print', 'close-tab']);
+  ipcMain.handle('kertas:editor-file', (e, action) => {
+    const id = tabOf(e.sender.id);
+    if (id && FILE_ACTIONS.has(action)) tell('file', id, { action });
+  });
 }
 
 // The spreadsheet and PDF editors from the same project, hosted the same way. Each is

@@ -331,6 +331,11 @@ onNative('new-writer', (ev) => {
   else if (ev.type === 'error') toast(ev.message);
   else if (ev.type === 'compress' && ev.path) compressPdfFile(ev.path);
   else if (ev.type === 'ocr') ocrForEditor(ev.req, ev.png, ev.langs);
+  else if (ev.type === 'file' && tab) { // the File button of the new Sheets and PDF editors
+    if (activeId !== tab.id) activate(tab.id);
+    if (ev.action === 'export-csv') window.kertasNative.newWriter('command', { id: tab.id, name: 'export-csv' });
+    else runCommand(ev.action);
+  }
   else if (ev.type === 'open-path') openPath(ev.path);
   else if (ev.type === 'new') newDocument();
   else if (ev.type === 'result') openTab('writer', { result: ev.token });

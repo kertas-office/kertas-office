@@ -547,3 +547,26 @@ test('Select mode: an item goes on a new layer, and hiding that layer hides it',
   await sleep(1200);
   assert.ok(!(await shot()).equals(shown), 'the page changed where the item was');
 });
+
+test('the File button in Sheets and PDF opens Kertas\'s file menu, and its Save works', pdfOpts, async () => {
+  await open('sample.pdf', 'pdf');
+  await w.locator('.kertas-file-tab').click();
+  const items = (await w.locator('.kertas-file-menu button span').allInnerTexts()).map((s) => s.trim());
+  assert.deepEqual(items, ['New document', 'New spreadsheet', 'Open...', 'Save', 'Save as...', 'Print...', 'Close tab']);
+  await w.keyboard.press('Escape');
+  if (!hasSheets) return;
+  await open('sample.xlsx', 'sheets');
+  await goTo('G3');
+  await w.keyboard.type('From the File menu');
+  await w.keyboard.press('Enter');
+  await sleep(2200);
+  assert.equal(await dirtyTabs(), 1);
+  await w.locator('.kertas-file-tab').click();
+  assert.ok((await w.locator('.kertas-file-menu').innerText()).includes('Export as CSV'));
+  await w.locator('.kertas-file-menu button').filter({ has: w.locator('span', { hasText: /^Save$/ }) }).click();
+  for (let i = 0; i < 40 && await dirtyTabs(); i++) await sleep(250);
+  assert.equal(await dirtyTabs(), 0, 'saved');
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(file);
+  assert.equal(wb.getWorksheet('Sales').getCell('G3').value, 'From the File menu');
+});

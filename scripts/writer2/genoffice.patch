@@ -3897,12 +3897,117 @@ index 0000000..d33493d
 +    return { code: next, map: null }
 +  },
 +})
+diff --git a/apps/kertas-file-button.tsx b/apps/kertas-file-button.tsx
+new file mode 100644
+index 0000000..0737698
+--- /dev/null
++++ b/apps/kertas-file-button.tsx
+@@ -0,0 +1,99 @@
++// The File button at the start of the tab row, as in Kertas's own Sheets and PDF editors:
++// a pill in the app's colour, opening the same file menu as Kertas's (new, open, save,
++// export, print, close). Each item is carried out by Kertas, so it behaves as everywhere else.
++import { useEffect, useRef, useState, type ReactElement } from 'react'
++
++export interface FileMenuItem {
++  id: string
++  label: string
++  key?: string
++  icon: string
++}
++
++const ICONS: Record<string, string> = {
++  doc: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6',
++  sheet: 'M4 4h16v16H4zM4 10h16M4 15h16M10 4v16',
++  open: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H7.5a2 2 0 0 0-1.9 1.4L3 19zM3 19l2.6-7.6A2 2 0 0 1 7.5 10H21l-2.7 8.1A2 2 0 0 1 16.4 19z',
++  save: 'M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM7 3v5h8V3M7 21v-7h10v7',
++  saveAs: 'M5 3h11l3 3v5M7 3v5h8V3M7 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2M13 21l1-3 5-5 2 2-5 5z',
++  export: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M12 18v-6M9 15l3 3 3-3',
++  csv: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M8 13h8M8 17h8M12 11v8',
++  print: 'M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7z',
++  close: 'M6 6l12 12M18 6L6 18',
++}
++
++export function KertasFileButton({
++  items,
++  onPick,
++}: {
++  /** null is a separator */
++  items: Array<FileMenuItem | null>
++  onPick: (id: string) => void
++}): ReactElement {
++  const [open, setOpen] = useState(false)
++  const wrap = useRef<HTMLDivElement>(null)
++  useEffect(() => {
++    if (!open) return
++    const away = (e: PointerEvent): void => {
++      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
++    }
++    const key = (e: KeyboardEvent): void => {
++      if (e.key === 'Escape') setOpen(false)
++    }
++    window.addEventListener('pointerdown', away, true)
++    window.addEventListener('keydown', key)
++    return () => {
++      window.removeEventListener('pointerdown', away, true)
++      window.removeEventListener('keydown', key)
++    }
++  }, [open])
++  return (
++    <div className="kertas-file-wrap" ref={wrap}>
++      <button type="button" className={`kertas-file-tab${open ? ' open' : ''}`} onClick={() => setOpen((v) => !v)}>
++        File
++      </button>
++      {open && (
++        <div className="kertas-file-menu" role="menu">
++          {items.map((it, i) =>
++            it ? (
++              <button
++                key={it.id}
++                type="button"
++                role="menuitem"
++                onClick={() => {
++                  setOpen(false)
++                  onPick(it.id)
++                }}
++              >
++                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
++                  <path d={ICONS[it.icon] ?? ''} />
++                </svg>
++                <span>{it.label}</span>
++                {it.key && <kbd>{it.key}</kbd>}
++              </button>
++            ) : (
++              <div key={`sep-${i}`} className="kertas-file-sep" />
++            ),
++          )}
++        </div>
++      )}
++    </div>
++  )
++}
++
++/** The items every Kertas editor's File menu has, around the editor's own (`extra`) */
++export function fileMenuItems(extra: FileMenuItem[] = [], { exportPdf = true } = {}): Array<FileMenuItem | null> {
++  return [
++    { id: 'new-doc', label: 'New document', key: 'Ctrl+N', icon: 'doc' },
++    { id: 'new-sheet', label: 'New spreadsheet', key: 'Ctrl+Shift+N', icon: 'sheet' },
++    { id: 'open', label: 'Open...', key: 'Ctrl+O', icon: 'open' },
++    null,
++    { id: 'save', label: 'Save', key: 'Ctrl+S', icon: 'save' },
++    { id: 'save-as', label: 'Save as...', key: 'Ctrl+Shift+S', icon: 'saveAs' },
++    ...(exportPdf ? [{ id: 'export-pdf', label: 'Export as PDF...', key: 'Ctrl+Shift+E', icon: 'export' }] : []),
++    ...extra,
++    { id: 'print', label: 'Print...', key: 'Ctrl+P', icon: 'print' },
++    null,
++    { id: 'close-tab', label: 'Close tab', key: 'Ctrl+W', icon: 'close' },
++  ]
++}
 diff --git a/apps/kertas-skin.css b/apps/kertas-skin.css
 new file mode 100644
-index 0000000..d279ad3
+index 0000000..580ca34
 --- /dev/null
 +++ b/apps/kertas-skin.css
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,288 @@
 +/* Kertas Office look shared by the spreadsheet and PDF editors: Kertas's font and
 + * neutral colours laid over the editors' tokens. Each editor's own skin adds its
 + * accent. Document content (cells, pages) is untouched. */
@@ -4114,6 +4219,82 @@ index 0000000..d279ad3
 +
 +.rb-big-split-caret {
 +  font-size: 11.5px;
++}
++
++/* ---- the File button (kertas-file-button.tsx) ---- */
++.kertas-file-wrap {
++  position: relative;
++  -webkit-app-region: no-drag;
++  margin-right: 6px;
++}
++
++.kertas-file-tab {
++  border: none;
++  border-radius: 9px;
++  padding: 6px 15px;
++  background: var(--kertas-grad);
++  color: #ffffff;
++  font: 600 13px var(--kertas-font);
++  cursor: pointer;
++  box-shadow: 0 1px 2px var(--kertas-grad-shadow);
++}
++
++.kertas-file-tab:hover,
++.kertas-file-tab.open {
++  filter: brightness(1.07);
++}
++
++.kertas-file-menu {
++  position: absolute;
++  top: calc(100% + 6px);
++  left: 0;
++  z-index: 2000;
++  min-width: 250px;
++  padding: 5px;
++  background: var(--surface);
++  color: var(--text);
++  border: 1px solid var(--border);
++  border-radius: 10px;
++  box-shadow: var(--shadow-menu);
++}
++
++.kertas-file-menu button {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  width: 100%;
++  padding: 7px 10px;
++  border: none;
++  border-radius: 6px;
++  background: none;
++  color: inherit;
++  font: 13px var(--kertas-font);
++  text-align: left;
++  cursor: pointer;
++}
++
++.kertas-file-menu button:hover {
++  background: var(--hover);
++}
++
++.kertas-file-menu button svg {
++  color: var(--kertas-rb-ink);
++  flex: none;
++}
++
++.kertas-file-menu button span {
++  flex: 1;
++}
++
++.kertas-file-menu kbd {
++  color: var(--text-tertiary);
++  font: 11.5px var(--kertas-font);
++}
++
++.kertas-file-sep {
++  height: 1px;
++  margin: 4px 6px;
++  background: var(--border-subtle);
 +}
 diff --git a/apps/pdf/kertas.vite.config.ts b/apps/pdf/kertas.vite.config.ts
 new file mode 100644
@@ -4561,10 +4742,10 @@ index 75f46f2..63d093c 100644
    try {
      // harfbuzzjs ≤0.10 ships hb-subset.wasm at the package root with no exports map
 diff --git a/apps/pdf/src/preload/index.ts b/apps/pdf/src/preload/index.ts
-index e799e6b..c8cea57 100644
+index e799e6b..912e8ef 100644
 --- a/apps/pdf/src/preload/index.ts
 +++ b/apps/pdf/src/preload/index.ts
-@@ -36,6 +36,18 @@ const api: PdfApi = {
+@@ -36,6 +36,19 @@ const api: PdfApi = {
      ipcRenderer.invoke(PDF_CHANNELS.compareReadOpen, path, password),
    reduceFileSize: (path) => ipcRenderer.invoke(PDF_CHANNELS.reduceFileSize, path),
    insertBlankPage: (request) => ipcRenderer.invoke(PDF_CHANNELS.insertBlankPage, request),
@@ -4574,6 +4755,7 @@ index e799e6b..c8cea57 100644
 +  kertasFlatten: (path: string) => ipcRenderer.invoke('pdf:kertas-flatten', { path }),
 +  kertasLayerDefaults: (path: string, hidden: string[]) =>
 +    ipcRenderer.invoke('pdf:kertas-layer-defaults', { path, hidden }),
++  kertasFile: (action: string) => ipcRenderer.invoke('kertas:editor-file', action),
 +  kertasCompress: (path: string) => ipcRenderer.invoke('pdf:kertas-compress', { path }),
 +  kertasOcrLangs: (langs: string[]) => ipcRenderer.invoke('pdf:kertas-ocr-langs', langs),
 +  kertasAnnotLayer: (path: string, pageIndex: number, id: string, rect: number[]) =>
@@ -4584,14 +4766,15 @@ index e799e6b..c8cea57 100644
    mergePdf: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePdf, request),
    mergePages: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePages, request),
 diff --git a/apps/pdf/src/renderer/App.tsx b/apps/pdf/src/renderer/App.tsx
-index 32f6de1..74ce27d 100644
+index 32f6de1..05490a0 100644
 --- a/apps/pdf/src/renderer/App.tsx
 +++ b/apps/pdf/src/renderer/App.tsx
-@@ -8,6 +8,13 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
+@@ -8,6 +8,14 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
  import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
  import { AiPanel, GensparkMark } from './ai/AiPanel'
  import { AiAskPopover, type AskAnchorRect } from './AiAskPopover'
 +import { KERTAS_AI, KERTAS_HOST } from './kertas'
++import { KertasFileButton, fileMenuItems } from '../../../kertas-file-button'
 +import { StampButton } from './kertas/StampButton'
 +import { renderStamp, STAMP_PX_PER_PT } from './kertas/stamps'
 +import { LayersPanel } from './kertas/LayersPanel'
@@ -4601,7 +4784,7 @@ index 32f6de1..74ce27d 100644
  import {
    createSavedAnnotCountsLoader,
    loadSavedAnnots,
-@@ -479,8 +486,12 @@ export default function App() {
+@@ -479,8 +487,12 @@ export default function App() {
    const [currentPage, setCurrentPage] = useState(1)
    const [pageInput, setPageInput] = useState('1')
    const [sidebar, setSidebar] = useState<
@@ -4615,7 +4798,7 @@ index 32f6de1..74ce27d 100644
    const [compareResult, setCompareResult] = useState<CompareResult | null>(null)
    const [compareName, setCompareName] = useState<string | null>(null)
    const [compareBusy, setCompareBusy] = useState(false)
-@@ -864,6 +875,12 @@ export default function App() {
+@@ -864,6 +876,12 @@ export default function App() {
    const [savedStaticFormFills, setSavedStaticFormFills] = useState<StaticFormFillRecord[]>([])
    /** Picked image awaiting click-to-place (same overlay flow as signatures) */
    const [imagePick, setImagePick] = useState<Extract<SignatureData, { kind: 'image' }> | null>(null)
@@ -4628,7 +4811,7 @@ index 32f6de1..74ce27d 100644
    const [pendingStaticFill, setPendingStaticFill] = useState<StaticFormFillKind | null>(null)
    const [staticTextDialog, setStaticTextDialog] = useState(false)
    const [staticTextPurpose, setStaticTextPurpose] = useState<'form' | 'insert'>('form')
-@@ -5322,7 +5339,22 @@ export default function App() {
+@@ -5322,7 +5340,22 @@ export default function App() {
    }
  
    /** Ribbon button → file picker; the picked image then enters click-to-place mode */
@@ -4651,7 +4834,7 @@ index 32f6de1..74ce27d 100644
      setEditTextMode(false)
      setTextDraft(null)
      setPendingTextInsert(null)
-@@ -5417,8 +5449,22 @@ export default function App() {
+@@ -5417,8 +5450,22 @@ export default function App() {
      const pick = imagePick
      if (!pick) return
      const fill = pendingStaticFill
@@ -4674,7 +4857,7 @@ index 32f6de1..74ce27d 100644
      if (fill === 'check' || fill === 'cross') {
        void placeFormMark(fill, pick, origIdx, vx, vy)
        return
-@@ -5439,6 +5485,7 @@ export default function App() {
+@@ -5439,6 +5486,7 @@ export default function App() {
      image: string,
      rect: [number, number, number, number],
      fill: StaticFormFillKind | null,
@@ -4682,7 +4865,7 @@ index 32f6de1..74ce27d 100644
    ) => {
      const id = newId()
      const staticFill: StaticFormFillRecord | undefined = fill
-@@ -5466,7 +5513,7 @@ export default function App() {
+@@ -5466,7 +5514,7 @@ export default function App() {
            pageIndex: origIdx,
            image,
            rect,
@@ -4691,7 +4874,7 @@ index 32f6de1..74ce27d 100644
            rotate: ((pageGeom(origIdx).rot % 360) + 360) % 360,
          },
          staticFill,
-@@ -6557,6 +6604,11 @@ export default function App() {
+@@ -6557,6 +6605,11 @@ export default function App() {
  
    const reduceFileSize = async (): Promise<void> => {
      if (!filePath) return
@@ -4703,7 +4886,7 @@ index 32f6de1..74ce27d 100644
      const outcome = await window.pdfApi.reduceFileSize(filePath)
      if (!outcome.ok) {
        if (!('canceled' in outcome)) showNotice(outcome.reason)
-@@ -6569,6 +6621,64 @@ export default function App() {
+@@ -6569,6 +6622,64 @@ export default function App() {
      showNotice(savedPct > 0 ? t('reduceDone', { pct: savedPct }) : t('reduceAlreadySmall'))
    }
  
@@ -4768,7 +4951,7 @@ index 32f6de1..74ce27d 100644
    const insertPdf = (afterOrigIdx: number) => {
      // the flush bakes the visible order into the file, so the anchor becomes its visible position
      const afterPageIndex = visListOf(orderRef.current).indexOf(afterOrigIdx)
-@@ -7640,7 +7750,12 @@ export default function App() {
+@@ -7640,7 +7751,12 @@ export default function App() {
      if (convertBusy) return
      setConvertBusy(true)
      try {
@@ -4782,7 +4965,7 @@ index 32f6de1..74ce27d 100644
      } catch {
        // No shell conversion flow in standalone mode; shell-side errors show their own dialogs
      } finally {
-@@ -8026,6 +8141,23 @@ export default function App() {
+@@ -8026,6 +8142,23 @@ export default function App() {
            </span>
            <span>{t('attachments')}</span>
          </button>
@@ -4806,7 +4989,20 @@ index 32f6de1..74ce27d 100644
          {searchBtn}
          <button
            className={`rb-big${spread === 2 ? ' active' : ''}`}
-@@ -8142,7 +8274,8 @@ export default function App() {
+@@ -8053,6 +8186,12 @@ export default function App() {
+     <div className="app" inert={redactionCopyInFlight} aria-busy={redactionCopyInFlight}>
+       <div className={`ribbon ${collapse.rootClass}`} ref={collapse.rootRef}>
+         <div className="ribbon-tabs" onDoubleClick={collapse.onTabsDoubleClick}>
++          {KERTAS_HOST && (
++            <KertasFileButton
++              items={fileMenuItems([], { exportPdf: false })}
++              onPick={(id) => void window.pdfApi.kertasFile(id)}
++            />
++          )}
+           <button
+             className="qa-btn"
+             data-tip={`${t('save')} (${platformShortcuts('⌘S')})`}
+@@ -8142,7 +8281,8 @@ export default function App() {
          <div className="ribbon-body" data-ribbon-body="">
            {ribbonTab === 'home' && (
              <>
@@ -4816,7 +5012,7 @@ index 32f6de1..74ce27d 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8190,6 +8323,8 @@ export default function App() {
+@@ -8190,6 +8330,8 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -4825,7 +5021,7 @@ index 32f6de1..74ce27d 100644
                {markupGroup}
                <div className="ribbon-sep" />
                {/* Edit entries lead; Search moved after page/zoom (⌘F is the common path) */}
-@@ -8221,11 +8356,15 @@ export default function App() {
+@@ -8221,11 +8363,15 @@ export default function App() {
                          <button onClick={() => void convertTo('xlsx')}>
                            {t('convertToExcel')}
                          </button>
@@ -4841,7 +5037,7 @@ index 32f6de1..74ce27d 100644
                          <div className="rb-menu-sep" />
                          <button
                            title={t('exportImagesAll')}
-@@ -8283,6 +8422,8 @@ export default function App() {
+@@ -8283,6 +8429,8 @@ export default function App() {
            )}
            {ribbonTab === 'annotate' && (
              <>
@@ -4850,7 +5046,7 @@ index 32f6de1..74ce27d 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8313,10 +8454,41 @@ export default function App() {
+@@ -8313,10 +8461,41 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -4892,7 +5088,7 @@ index 32f6de1..74ce27d 100644
                    {DRAW_TOOLS.map(({ tool, icon: DrawIcon, key }) => (
                      <button
                        key={tool}
-@@ -8329,6 +8501,7 @@ export default function App() {
+@@ -8329,6 +8508,7 @@ export default function App() {
                          setPendingTextInsert(null)
                          setImagePick(null)
                          setEditImageMode(false)
@@ -4900,7 +5096,7 @@ index 32f6de1..74ce27d 100644
                          if (tool === 'measure' && drawTool === 'measure') {
                            // a second click disarms the tool like every other
                            // one and asks the next measure line to re-open the
-@@ -8346,6 +8519,13 @@ export default function App() {
+@@ -8346,6 +8526,13 @@ export default function App() {
                        <span>{t(key)}</span>
                      </button>
                    ))}
@@ -4914,7 +5110,7 @@ index 32f6de1..74ce27d 100644
                    <button
                      className={`rb-big${drawTool === 'redact' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8566,6 +8746,7 @@ export default function App() {
+@@ -8566,6 +8753,7 @@ export default function App() {
              <>
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
@@ -4922,7 +5118,7 @@ index 32f6de1..74ce27d 100644
                    <button
                      className="rb-big ai-entry"
                      disabled={readOnly}
-@@ -8577,6 +8758,7 @@ export default function App() {
+@@ -8577,6 +8765,7 @@ export default function App() {
                      </span>
                      <span>{t('aiFillFormBtn')}</span>
                    </button>
@@ -4930,7 +5126,7 @@ index 32f6de1..74ce27d 100644
                    <button
                      className={`rb-big${pendingStaticFill === 'text' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8697,6 +8879,23 @@ export default function App() {
+@@ -8697,6 +8886,23 @@ export default function App() {
                      </span>
                      <span>{t('formComplete')}</span>
                    </button>
@@ -4954,7 +5150,7 @@ index 32f6de1..74ce27d 100644
                  </div>
                </div>
              </>
-@@ -8945,6 +9144,22 @@ export default function App() {
+@@ -8945,6 +9151,22 @@ export default function App() {
                      </span>
                      <span>{t('insertBlankPage')}</span>
                    </button>
@@ -4977,7 +5173,7 @@ index 32f6de1..74ce27d 100644
                    <button
                      className="rb-big"
                      disabled={readOnly || pageCount === 0}
-@@ -9063,6 +9278,7 @@ export default function App() {
+@@ -9063,6 +9285,7 @@ export default function App() {
                      </span>
                      <span>{t('ocrRecognize')}</span>
                    </button>
@@ -4985,7 +5181,7 @@ index 32f6de1..74ce27d 100644
                  </div>
                </div>
                <div className="ribbon-sep" />
-@@ -9085,6 +9301,7 @@ export default function App() {
+@@ -9085,6 +9308,7 @@ export default function App() {
        <div className="app-main">
          {/* dock wrapper animates the width between panel and rail (docs-style 180ms ease);
                the panel stays mounted while collapsed so the chat history survives */}
@@ -4993,7 +5189,7 @@ index 32f6de1..74ce27d 100644
          <div
            className={`ai-dock${aiCollapsed ? ' collapsed' : ''}${
              !aiSidebarEnabled && aiCollapsed ? ' ai-dock-off' : ''
-@@ -9109,6 +9326,7 @@ export default function App() {
+@@ -9109,6 +9333,7 @@ export default function App() {
              onClearSelection={() => setAiSelection(null)}
            />
          </div>
@@ -5001,7 +5197,7 @@ index 32f6de1..74ce27d 100644
          <div className="app-content">
            {digitalSignatures.length > 0 && (
              <div className={`pdf-sig-banner ${overallSignatureStatus(digitalSignatures)}`}>
-@@ -9258,6 +9476,22 @@ export default function App() {
+@@ -9258,6 +9483,22 @@ export default function App() {
                  />
                </div>
              )}
@@ -5024,7 +5220,7 @@ index 32f6de1..74ce27d 100644
              {sidebar === 'attachments' && (
                <div className="pdf-thumbs" style={{ width: sidebarW }}>
                  <div className="pdf-outline-header">
-@@ -9620,7 +9854,13 @@ export default function App() {
+@@ -9620,7 +9861,13 @@ export default function App() {
                                  pendingStaticFill ? t('formPlaceStaticHint') : t('imagePlaceHint')
                                }
                                onPlace={(vx, vy) => placeImage(origIdx, vx, vy)}
@@ -5039,7 +5235,7 @@ index 32f6de1..74ce27d 100644
                              />
                            )}
                            {/* Paragraph boxes (WPS-style): every text block outlined while
-@@ -10537,6 +10777,24 @@ export default function App() {
+@@ -10537,6 +10784,24 @@ export default function App() {
                                  onMove={readOnly ? undefined : moveDrawing}
                                  onResize={readOnly ? undefined : resizeDrawing}
                                />
@@ -5064,7 +5260,7 @@ index 32f6de1..74ce27d 100644
                                <RedactionLayer
                                  active={
                                    !readOnly && !redactionCopyInFlight && drawTool === 'redact'
-@@ -10617,6 +10875,7 @@ export default function App() {
+@@ -10617,6 +10882,7 @@ export default function App() {
                                        labels={{
                                          required: t('formDesignRequired'),
                                          multiLine: t('formDesignMultiLine'),
@@ -5072,7 +5268,7 @@ index 32f6de1..74ce27d 100644
                                          defaultValue: t('formDesignDefaultValue'),
                                          defaultChecked: t('formDesignDefaultChecked'),
                                          remove: t('formDesignDelete'),
-@@ -10821,7 +11080,7 @@ export default function App() {
+@@ -10821,7 +11087,7 @@ export default function App() {
                  </button>
                </div>
              )}
@@ -5081,7 +5277,7 @@ index 32f6de1..74ce27d 100644
                <div
                  className="pdf-sel-popup"
                  style={{ left: selPopup.x, top: selPopup.y }}
-@@ -10895,9 +11154,10 @@ export default function App() {
+@@ -10895,9 +11161,10 @@ export default function App() {
                      >
                        <span className="sel-swatch sel-swatch-st">S</span>
                      </button>
@@ -5093,7 +5289,7 @@ index 32f6de1..74ce27d 100644
                  <button
                    type="button"
                    className="pdf-sel-ask"
-@@ -10913,9 +11173,10 @@ export default function App() {
+@@ -10913,9 +11180,10 @@ export default function App() {
                    </svg>
                    {t('aiAskBtn')}
                  </button>
@@ -5105,7 +5301,7 @@ index 32f6de1..74ce27d 100644
                <AiAskPopover
                  rect={askPop.rect}
                  excerpt={askPop.excerpt}
-@@ -11170,6 +11431,16 @@ export default function App() {
+@@ -11170,6 +11438,16 @@ export default function App() {
                  >
                    {t('insertBlankPage')}
                  </button>
@@ -5804,15 +6000,17 @@ index 0000000..cf5096a
 +}
 diff --git a/apps/pdf/src/renderer/kertas/skin.css b/apps/pdf/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..c1f6fe8
+index 0000000..b9630ac
 --- /dev/null
 +++ b/apps/pdf/src/renderer/kertas/skin.css
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,196 @@
 +/* Kertas Office look for the PDF editor: the shared skin plus Kertas's PDF red.
 + * Loaded last so it wins. */
 +@import '../../../../kertas-skin.css';
 +
 +:root {
++  --kertas-grad: linear-gradient(135deg, #f43f5e 0%, #e11d48 50%, #f97316 100%);
++  --kertas-grad-shadow: rgb(225 29 72 / 35%);
 +  --accent: #e11d48;
 +  --accent-dark: #be123c;
 +  --accent-soft: #fde7ec;
@@ -6090,7 +6288,7 @@ index 3188d6c..2d675fb 100644
  
  installScreenTips()
 diff --git a/apps/pdf/src/shared/ipc.ts b/apps/pdf/src/shared/ipc.ts
-index bab2848..1173154 100644
+index bab2848..5644b87 100644
 --- a/apps/pdf/src/shared/ipc.ts
 +++ b/apps/pdf/src/shared/ipc.ts
 @@ -702,6 +702,9 @@ export interface FormValueInput {
@@ -6112,7 +6310,7 @@ index bab2848..1173154 100644
    /** text only; 0 or absent = no limit */
    maxLen?: number
    /** text only; absent = auto size */
-@@ -1179,6 +1184,13 @@ export interface PdfApi {
+@@ -1179,6 +1184,14 @@ export interface PdfApi {
    extractPages(request: ExtractPagesRequest): Promise<ExtractPagesResult>
    insertPdf(request: InsertPdfRequest): Promise<InsertPdfResult>
    insertBlankPage(request: InsertBlankPageRequest): Promise<InsertBlankPageResult>
@@ -6120,6 +6318,7 @@ index bab2848..1173154 100644
 +  kertasFlatten(path: string): Promise<KertasOpResult>
 +  kertasLayerDefaults(path: string, hidden: string[]): Promise<KertasOpResult>
 +  kertasCompress(path: string): Promise<void>
++  kertasFile(action: string): Promise<void>
 +  kertasOcrLangs(langs: string[]): Promise<void>
 +  kertasAnnotLayer(path: string, pageIndex: number, id: string, rect: number[]): Promise<string | null>
 +  kertasObjectOp(path: string, pageIndex: number, op: unknown): Promise<KertasOpResult & { layer?: string }>
@@ -6163,6 +6362,19 @@ index 0000000..468a656
 +    },
 +  },
 +})
+diff --git a/apps/sheets/src/preload/index.ts b/apps/sheets/src/preload/index.ts
+index 6a8e706..87887bb 100644
+--- a/apps/sheets/src/preload/index.ts
++++ b/apps/sheets/src/preload/index.ts
+@@ -84,6 +84,8 @@ import {
+ import { installDropOpenBridge } from '@genoffice/electron-utils/drop-open'
+ 
+ const desktopApi: DesktopApi = {
++  // Kertas Office: the File menu's commands are carried out by Kertas
++  kertasFile: (action: string) => ipcRenderer.invoke('kertas:editor-file', action),
+   getLanguage: () => ipcRenderer.invoke('app:get-language'),
+   openSourcePath: (path: string) => ipcRenderer.invoke('home:open-path', path),
+   onLanguageChanged(handler) {
 diff --git a/apps/sheets/src/renderer/App.tsx b/apps/sheets/src/renderer/App.tsx
 index f7fd122..eb00434 100644
 --- a/apps/sheets/src/renderer/App.tsx
@@ -6177,18 +6389,32 @@ index f7fd122..eb00434 100644
      return window.desktopApi.onAiSettingsChanged?.(loadSettings)
    }, [])
 diff --git a/apps/sheets/src/renderer/ExcelShell.tsx b/apps/sheets/src/renderer/ExcelShell.tsx
-index 245d16d..b63d92e 100644
+index 245d16d..9fd87ac 100644
 --- a/apps/sheets/src/renderer/ExcelShell.tsx
 +++ b/apps/sheets/src/renderer/ExcelShell.tsx
-@@ -86,6 +86,7 @@ import type {
+@@ -86,6 +86,8 @@ import type {
  } from '../shared/desktop-api'
  import { AiChatPanel, type AiChatMessage } from './ai/AiChatPanel'
  import { AiSelectionAsk } from './ai/AiSelectionAsk'
 +import { KERTAS_AI } from './kertas'
++import { KertasFileButton, fileMenuItems } from '../../../kertas-file-button'
  import type { SelectionAskAnchor } from './ai/selection-ask'
  import {
    PivotDialog,
-@@ -933,6 +934,7 @@ export function ExcelShell({
+@@ -913,6 +915,12 @@ export function ExcelShell({
+           aria-label={t('appScopeWorkbook')}
+           onDoubleClick={collapse.onTabsDoubleClick}
+         >
++          {window.desktopApi.kertasFile && (
++            <KertasFileButton
++              items={fileMenuItems([{ id: 'export-csv', label: 'Export as CSV...', icon: 'csv' }])}
++              onPick={(id) => void window.desktopApi.kertasFile?.(id)}
++            />
++          )}
+           <button
+             type="button"
+             className="qa-btn"
+@@ -933,6 +941,7 @@ export function ExcelShell({
            >
              <SaveAsIcon />
            </button>
@@ -6196,7 +6422,7 @@ index 245d16d..b63d92e 100644
            <button
              type="button"
              className="qa-btn qa-name-with-ai"
-@@ -943,6 +945,7 @@ export function ExcelShell({
+@@ -943,6 +952,7 @@ export function ExcelShell({
            >
              <GensparkMark />
            </button>
@@ -6204,7 +6430,7 @@ index 245d16d..b63d92e 100644
            <button
              type="button"
              className="qa-btn"
-@@ -1038,6 +1041,7 @@ export function ExcelShell({
+@@ -1038,6 +1048,7 @@ export function ExcelShell({
  
        {/* AI panel docks on the left, full height under the ribbon (unified with docs) */}
        <div className="sheet-body">
@@ -6212,7 +6438,7 @@ index 245d16d..b63d92e 100644
          <AiChatPanel
            isOpen={isCopilotOpen}
            hideRail={!aiSidebarEnabled}
-@@ -1074,6 +1078,7 @@ export function ExcelShell({
+@@ -1074,6 +1085,7 @@ export function ExcelShell({
            onExpand={() => setIsCopilotOpen(true)}
            onCollapse={() => setIsCopilotOpen(false)}
          />
@@ -6220,7 +6446,7 @@ index 245d16d..b63d92e 100644
          <div className="sheet-main">
            <section className="workbook-area">
              <div id="univer-container" className="spreadsheet" />
-@@ -1094,7 +1099,7 @@ export function ExcelShell({
+@@ -1094,7 +1106,7 @@ export function ExcelShell({
                </div>
              )}
            </section>
@@ -6229,7 +6455,7 @@ index 245d16d..b63d92e 100644
              <AiSelectionAsk
                anchor={aiSelectionAskAnchor}
                range={aiScopeRange}
-@@ -3414,6 +3419,7 @@ function Ribbon({
+@@ -3414,6 +3426,7 @@ function Ribbon({
              </button>
            </div>
          </RibbonGroup>
@@ -6237,7 +6463,7 @@ index 245d16d..b63d92e 100644
          <RibbonGroup label={t('appGroupLanguage')}>
            <div className="ribbon-tool large" data-tip={t('appTranslateTitle')}>
              <span className="tool-icon-row">
-@@ -3434,6 +3440,7 @@ function Ribbon({
+@@ -3434,6 +3447,7 @@ function Ribbon({
              />
            </div>
          </RibbonGroup>
@@ -6245,7 +6471,7 @@ index 245d16d..b63d92e 100644
          <RibbonGroup label={t('appGroupComments')}>
            <RibbonButton
              large
-@@ -3539,6 +3546,7 @@ function Ribbon({
+@@ -3539,6 +3553,7 @@ function Ribbon({
      : [...fontSizes, echoSize].sort((a, b) => a - b)
    return (
      <div className="ribbon" data-ribbon-body="">
@@ -6253,7 +6479,7 @@ index 245d16d..b63d92e 100644
        <RibbonGroup label={t('appGroupAiAssistant')}>
          <button
            className={`ribbon-tool as-button large ai-entry ${aiOpen ? 'active' : ''}`}
-@@ -3610,6 +3618,7 @@ function Ribbon({
+@@ -3610,6 +3625,7 @@ function Ribbon({
            </span>
          </button>
        </RibbonGroup>
@@ -6324,15 +6550,17 @@ index 0000000..8642570
 +}
 diff --git a/apps/sheets/src/renderer/kertas/skin.css b/apps/sheets/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..c6c3777
+index 0000000..15edd2b
 --- /dev/null
 +++ b/apps/sheets/src/renderer/kertas/skin.css
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,34 @@
 +/* Kertas Office look for the spreadsheet editor: the shared skin plus Kertas's
 + * Sheets green. Loaded last so it wins. */
 +@import '../../../../kertas-skin.css';
 +
 +:root {
++  --kertas-grad: linear-gradient(135deg, #10b981 0%, #059669 50%, #14b8a6 100%);
++  --kertas-grad-shadow: rgb(5 150 105 / 35%);
 +  --excel-green: #059669;
 +  --excel-green-dark: #047857;
 +  --excel-green-soft: #dff5ec;
@@ -6372,6 +6600,19 @@ index 66f509f..cda88d2 100644
  
  if (import.meta.hot) {
    import.meta.hot.on('vite:beforeUpdate', ({ updates }) => {
+diff --git a/apps/sheets/src/shared/desktop-api.ts b/apps/sheets/src/shared/desktop-api.ts
+index 9e11080..8213d13 100644
+--- a/apps/sheets/src/shared/desktop-api.ts
++++ b/apps/sheets/src/shared/desktop-api.ts
+@@ -3537,6 +3537,8 @@ export interface McpCommandResult {
+ }
+ 
+ export interface DesktopApi {
++  /** Kertas Office: a File menu command, carried out by Kertas */
++  kertasFile?(action: string): Promise<void>
+   /** open any shell-routed document path (an AI answer's filenav citation) */
+   openSourcePath(path: string): Promise<void>
+   /** current UI language (persisted by the shell in app-settings.json) */
 diff --git a/packages/docx-engine/src/blank.ts b/packages/docx-engine/src/blank.ts
 index 38c383d..dd068c8 100644
 --- a/packages/docx-engine/src/blank.ts
