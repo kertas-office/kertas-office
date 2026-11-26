@@ -2724,10 +2724,10 @@ index 0000000..cc37f40
 +export function markDocSeen(): void {}
 diff --git a/apps/docs/src/renderer/kertas/skin.css b/apps/docs/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..401f799
+index 0000000..731de2f
 --- /dev/null
 +++ b/apps/docs/src/renderer/kertas/skin.css
-@@ -0,0 +1,579 @@
+@@ -0,0 +1,599 @@
 +/* Kertas Office look for the editor: Kertas's own font, colours and shapes laid
 + * over the editor's tokens. Loaded last so it wins; document content (the page,
 + * its text and pictures) is untouched. The two Inter files are copied in by
@@ -2875,6 +2875,26 @@ index 0000000..401f799
 +.rb-icon,
 +.rb-select {
 +  border-radius: 7px;
++}
++
++/* font name and size: input and arrow read as one box */
++.rb-select.rb-font-family,
++.rb-select.rb-font-size {
++  border-radius: 7px 0 0 7px;
++}
++
++.rb-caret.rb-combo-caret {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  width: 20px;
++  height: 28px;
++  border-radius: 0 7px 7px 0;
++  color: var(--kertas-rb-ink);
++}
++
++.rb-caret.rb-combo-caret svg {
++  display: block;
 +}
 +
 +.status-bar {
