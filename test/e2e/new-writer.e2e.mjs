@@ -30,7 +30,7 @@ before(async () => {
   app = await _electron.launch({
     executablePath: require('electron'),
     args: [ROOT, '--no-sandbox', '--window-size=1400,1000'],
-    env: { ...process.env, XDG_CONFIG_HOME: path.join(dir, 'config'), NODE_ENV: 'production', KERTAS_NEW_WRITER: '1' },
+    env: { ...process.env, XDG_CONFIG_HOME: path.join(dir, 'config'), NODE_ENV: 'production', KERTAS_NEW_WRITER: '1', KERTAS_NEW_PDF: '0' },
   });
   k = await app.firstWindow();
   k.setDefaultTimeout(15000);

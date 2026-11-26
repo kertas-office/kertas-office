@@ -6,6 +6,8 @@ scratch/
 website/dist/
 Claude outputs/
 
-# the new Writer (trial) is built by scripts/build-writer2.cjs
+# the new editors are built by scripts/build-writer2.cjs, their spreadsheet helper by
+# scripts/build-sidecars.cjs
 electron/writer2/
+build/sidecar/
 .cache/

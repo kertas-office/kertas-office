@@ -99,6 +99,8 @@ function start() {
     if (!windows.has(e.sender.id) || !Array.isArray(paths)) return;
     for (const p of paths.slice(0, 20)) if (typeof p === 'string' && path.isAbsolute(p) && fs.existsSync(p)) tell('open-path', null, { path: p });
   });
+  // a command waiting for a PDF tab (Sign a PDF), taken once the document is ready
+  ipcMain.handle('kertas:pdf-pending', (e) => { const name = pdfPending.get(e.sender.id) || null; pdfPending.delete(e.sender.id); return name; });
   // the File button of the spreadsheet and PDF editors: Kertas carries out the command
   const FILE_ACTIONS = new Set(['new-doc', 'new-sheet', 'open', 'save', 'save-as', 'export-pdf', 'export-csv', 'print', 'close-tab']);
   ipcMain.handle('kertas:editor-file', (e, action) => {
@@ -110,7 +112,10 @@ function start() {
 // The spreadsheet and PDF editors from the same project, hosted the same way. Each is
 // there only if this build has it; the spreadsheet one also needs its helper program,
 // which reads and writes the workbook files.
-const SIDECAR = path.join(ROOT, 'native', process.platform === 'win32' ? 'xlsx-sidecar.exe' : 'xlsx-sidecar').replace('app.asar', 'app.asar.unpacked');
+// The installed app carries the helper built for its own processor (resources/sidecar, see
+// scripts/build-sidecars.cjs); a development copy uses the one the build script made here.
+const SIDECAR_EXE = process.platform === 'win32' ? 'xlsx-sidecar.exe' : 'xlsx-sidecar';
+const SIDECAR = app.isPackaged ? path.join(process.resourcesPath, 'sidecar', SIDECAR_EXE) : path.join(ROOT, 'native', SIDECAR_EXE);
 const has = {
   writer: true,
   sheets: fs.existsSync(path.join(ROOT, 'sheets', 'renderer', 'index.html')) && fs.existsSync(SIDECAR),
@@ -219,6 +224,7 @@ function serveDictionaries() {
 // window. Kertas's page says where the pane is and when it shows; the view follows.
 let mainWin = null;
 let ocrAnswer = () => {};
+const pdfPending = new Map(); // webContents id -> command
 const tabs = new Map(); // tab id -> { view, wcId, rect }
 const results = new Map(); // token -> bytes of a document made here, waiting for its tab
 let resultSeq = 0;
@@ -345,6 +351,7 @@ function command(id, name) {
     if (name === 'save') host.flushPdfSave(t.view.webContents, true);
     else if (name === 'print') host.sendPdfPrintRequest(t.view.webContents);
     else if (name === 'save-as') savePdfAs(t);
+    else if (name === 'sign') { pdfPending.set(t.wcId, 'sign'); t.view.webContents.send('kertas:pdf-command', 'sign'); }
   } else t.view.webContents.send('menu:command', name);
 }
 async function savePdfAs(t) {
@@ -374,5 +381,16 @@ function convertPdfForTab(data, format = 'docx') {
   });
 }
 
+// The licence, notice and third-party notice files of the editors, opened in a folder the
+// system can show (they are inside the app's archive otherwise)
+async function openLicences() {
+  const { shell } = require('electron');
+  const dir = path.join(app.getPath('userData'), 'licences');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const f of ['LICENSE', 'NOTICE', 'LICENSE-UNICODE.txt', 'THIRD-PARTY-NOTICES.txt', 'FONTS.md', 'README.txt']) {
+    try { fs.copyFileSync(path.join(ROOT, f), path.join(dir, f === 'LICENSE' ? 'LICENSE-editors.txt' : f === 'NOTICE' ? 'NOTICE-editors.txt' : f)); } catch { /* not in this build */ }
+  }
+  return shell.openPath(dir);
+}
 const ocrResult = (arg) => ocrAnswer(Number(arg && arg.req), arg && arg.lines);
-module.exports = { available, has, ocrResult, sheetRecoveries, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };
+module.exports = { available, has, ocrResult, sheetRecoveries, openLicences, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };

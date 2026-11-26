@@ -4747,10 +4747,10 @@ index 75f46f2..63d093c 100644
    try {
      // harfbuzzjs ≤0.10 ships hb-subset.wasm at the package root with no exports map
 diff --git a/apps/pdf/src/preload/index.ts b/apps/pdf/src/preload/index.ts
-index e799e6b..912e8ef 100644
+index e799e6b..6591e76 100644
 --- a/apps/pdf/src/preload/index.ts
 +++ b/apps/pdf/src/preload/index.ts
-@@ -36,6 +36,19 @@ const api: PdfApi = {
+@@ -36,6 +36,29 @@ const api: PdfApi = {
      ipcRenderer.invoke(PDF_CHANNELS.compareReadOpen, path, password),
    reduceFileSize: (path) => ipcRenderer.invoke(PDF_CHANNELS.reduceFileSize, path),
    insertBlankPage: (request) => ipcRenderer.invoke(PDF_CHANNELS.insertBlankPage, request),
@@ -4761,6 +4761,16 @@ index e799e6b..912e8ef 100644
 +  kertasLayerDefaults: (path: string, hidden: string[]) =>
 +    ipcRenderer.invoke('pdf:kertas-layer-defaults', { path, hidden }),
 +  kertasFile: (action: string) => ipcRenderer.invoke('kertas:editor-file', action),
++  kertasPending: () => ipcRenderer.invoke('kertas:pdf-pending') as Promise<string | null>,
++  onKertasCommand: (cb: (name: string) => void) => {
++    const listener = (_e: unknown, name: unknown) => {
++      if (typeof name === 'string') cb(name)
++    }
++    ipcRenderer.on('kertas:pdf-command', listener)
++    return () => {
++      ipcRenderer.removeListener('kertas:pdf-command', listener)
++    }
++  },
 +  kertasCompress: (path: string) => ipcRenderer.invoke('pdf:kertas-compress', { path }),
 +  kertasOcrLangs: (langs: string[]) => ipcRenderer.invoke('pdf:kertas-ocr-langs', langs),
 +  kertasAnnotLayer: (path: string, pageIndex: number, id: string, rect: number[]) =>
@@ -4771,7 +4781,7 @@ index e799e6b..912e8ef 100644
    mergePdf: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePdf, request),
    mergePages: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePages, request),
 diff --git a/apps/pdf/src/renderer/App.tsx b/apps/pdf/src/renderer/App.tsx
-index 32f6de1..05490a0 100644
+index 32f6de1..5022941 100644
 --- a/apps/pdf/src/renderer/App.tsx
 +++ b/apps/pdf/src/renderer/App.tsx
 @@ -8,6 +8,14 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
@@ -4803,7 +4813,7 @@ index 32f6de1..05490a0 100644
    const [compareResult, setCompareResult] = useState<CompareResult | null>(null)
    const [compareName, setCompareName] = useState<string | null>(null)
    const [compareBusy, setCompareBusy] = useState(false)
-@@ -864,6 +876,12 @@ export default function App() {
+@@ -864,6 +876,30 @@ export default function App() {
    const [savedStaticFormFills, setSavedStaticFormFills] = useState<StaticFormFillRecord[]>([])
    /** Picked image awaiting click-to-place (same overlay flow as signatures) */
    const [imagePick, setImagePick] = useState<Extract<SignatureData, { kind: 'image' }> | null>(null)
@@ -4813,10 +4823,28 @@ index 32f6de1..05490a0 100644
 +  useEffect(() => {
 +    if (imagePick || editImageMode) setObjectMode(false)
 +  }, [imagePick, editImageMode])
++  // Kertas's "Sign a PDF": the file opens here with the signature step started
++  const kertasCommandRef = useRef<(name: string) => void>(() => undefined)
++  // the command waits in the host until the document is ready, and is taken once
++  const takeKertasCommand = useCallback(() => {
++    void window.pdfApi.kertasPending?.().then((name) => {
++      if (name) kertasCommandRef.current(name)
++    })
++  }, [])
++  useEffect(() => window.pdfApi.onKertasCommand?.(() => takeKertasCommand()), [takeKertasCommand])
++  useEffect(() => {
++    if (status === 'ready') takeKertasCommand()
++  }, [status, takeKertasCommand])
++  // assigned on every render; runs later, when every function below exists
++  kertasCommandRef.current = (name: string) => {
++    if (name !== 'sign' || readOnly || status !== 'ready') return
++    setRibbonTab('annotate')
++    openSignatureDialog(null)
++  }
    const [pendingStaticFill, setPendingStaticFill] = useState<StaticFormFillKind | null>(null)
    const [staticTextDialog, setStaticTextDialog] = useState(false)
    const [staticTextPurpose, setStaticTextPurpose] = useState<'form' | 'insert'>('form')
-@@ -5322,7 +5340,22 @@ export default function App() {
+@@ -5322,7 +5358,22 @@ export default function App() {
    }
  
    /** Ribbon button → file picker; the picked image then enters click-to-place mode */
@@ -4839,7 +4867,7 @@ index 32f6de1..05490a0 100644
      setEditTextMode(false)
      setTextDraft(null)
      setPendingTextInsert(null)
-@@ -5417,8 +5450,22 @@ export default function App() {
+@@ -5417,8 +5468,22 @@ export default function App() {
      const pick = imagePick
      if (!pick) return
      const fill = pendingStaticFill
@@ -4862,7 +4890,7 @@ index 32f6de1..05490a0 100644
      if (fill === 'check' || fill === 'cross') {
        void placeFormMark(fill, pick, origIdx, vx, vy)
        return
-@@ -5439,6 +5486,7 @@ export default function App() {
+@@ -5439,6 +5504,7 @@ export default function App() {
      image: string,
      rect: [number, number, number, number],
      fill: StaticFormFillKind | null,
@@ -4870,7 +4898,7 @@ index 32f6de1..05490a0 100644
    ) => {
      const id = newId()
      const staticFill: StaticFormFillRecord | undefined = fill
-@@ -5466,7 +5514,7 @@ export default function App() {
+@@ -5466,7 +5532,7 @@ export default function App() {
            pageIndex: origIdx,
            image,
            rect,
@@ -4879,7 +4907,7 @@ index 32f6de1..05490a0 100644
            rotate: ((pageGeom(origIdx).rot % 360) + 360) % 360,
          },
          staticFill,
-@@ -6557,6 +6605,11 @@ export default function App() {
+@@ -6557,6 +6623,11 @@ export default function App() {
  
    const reduceFileSize = async (): Promise<void> => {
      if (!filePath) return
@@ -4891,7 +4919,7 @@ index 32f6de1..05490a0 100644
      const outcome = await window.pdfApi.reduceFileSize(filePath)
      if (!outcome.ok) {
        if (!('canceled' in outcome)) showNotice(outcome.reason)
-@@ -6569,6 +6622,64 @@ export default function App() {
+@@ -6569,6 +6640,64 @@ export default function App() {
      showNotice(savedPct > 0 ? t('reduceDone', { pct: savedPct }) : t('reduceAlreadySmall'))
    }
  
@@ -4956,7 +4984,7 @@ index 32f6de1..05490a0 100644
    const insertPdf = (afterOrigIdx: number) => {
      // the flush bakes the visible order into the file, so the anchor becomes its visible position
      const afterPageIndex = visListOf(orderRef.current).indexOf(afterOrigIdx)
-@@ -7640,7 +7751,12 @@ export default function App() {
+@@ -7640,7 +7769,12 @@ export default function App() {
      if (convertBusy) return
      setConvertBusy(true)
      try {
@@ -4970,7 +4998,7 @@ index 32f6de1..05490a0 100644
      } catch {
        // No shell conversion flow in standalone mode; shell-side errors show their own dialogs
      } finally {
-@@ -8026,6 +8142,23 @@ export default function App() {
+@@ -8026,6 +8160,23 @@ export default function App() {
            </span>
            <span>{t('attachments')}</span>
          </button>
@@ -4994,7 +5022,12 @@ index 32f6de1..05490a0 100644
          {searchBtn}
          <button
            className={`rb-big${spread === 2 ? ' active' : ''}`}
-@@ -8053,6 +8186,12 @@ export default function App() {
+@@ -8049,10 +8200,17 @@ export default function App() {
+     </div>
+   )
+ 
++
+   return (
      <div className="app" inert={redactionCopyInFlight} aria-busy={redactionCopyInFlight}>
        <div className={`ribbon ${collapse.rootClass}`} ref={collapse.rootRef}>
          <div className="ribbon-tabs" onDoubleClick={collapse.onTabsDoubleClick}>
@@ -5007,7 +5040,7 @@ index 32f6de1..05490a0 100644
            <button
              className="qa-btn"
              data-tip={`${t('save')} (${platformShortcuts('⌘S')})`}
-@@ -8142,7 +8281,8 @@ export default function App() {
+@@ -8142,7 +8300,8 @@ export default function App() {
          <div className="ribbon-body" data-ribbon-body="">
            {ribbonTab === 'home' && (
              <>
@@ -5017,7 +5050,7 @@ index 32f6de1..05490a0 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8190,6 +8330,8 @@ export default function App() {
+@@ -8190,6 +8349,8 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -5026,7 +5059,7 @@ index 32f6de1..05490a0 100644
                {markupGroup}
                <div className="ribbon-sep" />
                {/* Edit entries lead; Search moved after page/zoom (⌘F is the common path) */}
-@@ -8221,11 +8363,15 @@ export default function App() {
+@@ -8221,11 +8382,15 @@ export default function App() {
                          <button onClick={() => void convertTo('xlsx')}>
                            {t('convertToExcel')}
                          </button>
@@ -5042,7 +5075,7 @@ index 32f6de1..05490a0 100644
                          <div className="rb-menu-sep" />
                          <button
                            title={t('exportImagesAll')}
-@@ -8283,6 +8429,8 @@ export default function App() {
+@@ -8283,6 +8448,8 @@ export default function App() {
            )}
            {ribbonTab === 'annotate' && (
              <>
@@ -5051,7 +5084,7 @@ index 32f6de1..05490a0 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8313,10 +8461,41 @@ export default function App() {
+@@ -8313,10 +8480,41 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -5093,7 +5126,7 @@ index 32f6de1..05490a0 100644
                    {DRAW_TOOLS.map(({ tool, icon: DrawIcon, key }) => (
                      <button
                        key={tool}
-@@ -8329,6 +8508,7 @@ export default function App() {
+@@ -8329,6 +8527,7 @@ export default function App() {
                          setPendingTextInsert(null)
                          setImagePick(null)
                          setEditImageMode(false)
@@ -5101,7 +5134,7 @@ index 32f6de1..05490a0 100644
                          if (tool === 'measure' && drawTool === 'measure') {
                            // a second click disarms the tool like every other
                            // one and asks the next measure line to re-open the
-@@ -8346,6 +8526,13 @@ export default function App() {
+@@ -8346,6 +8545,13 @@ export default function App() {
                        <span>{t(key)}</span>
                      </button>
                    ))}
@@ -5115,7 +5148,7 @@ index 32f6de1..05490a0 100644
                    <button
                      className={`rb-big${drawTool === 'redact' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8566,6 +8753,7 @@ export default function App() {
+@@ -8566,6 +8772,7 @@ export default function App() {
              <>
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
@@ -5123,7 +5156,7 @@ index 32f6de1..05490a0 100644
                    <button
                      className="rb-big ai-entry"
                      disabled={readOnly}
-@@ -8577,6 +8765,7 @@ export default function App() {
+@@ -8577,6 +8784,7 @@ export default function App() {
                      </span>
                      <span>{t('aiFillFormBtn')}</span>
                    </button>
@@ -5131,7 +5164,7 @@ index 32f6de1..05490a0 100644
                    <button
                      className={`rb-big${pendingStaticFill === 'text' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8697,6 +8886,23 @@ export default function App() {
+@@ -8697,6 +8905,23 @@ export default function App() {
                      </span>
                      <span>{t('formComplete')}</span>
                    </button>
@@ -5155,7 +5188,7 @@ index 32f6de1..05490a0 100644
                  </div>
                </div>
              </>
-@@ -8945,6 +9151,22 @@ export default function App() {
+@@ -8945,6 +9170,22 @@ export default function App() {
                      </span>
                      <span>{t('insertBlankPage')}</span>
                    </button>
@@ -5178,7 +5211,7 @@ index 32f6de1..05490a0 100644
                    <button
                      className="rb-big"
                      disabled={readOnly || pageCount === 0}
-@@ -9063,6 +9285,7 @@ export default function App() {
+@@ -9063,6 +9304,7 @@ export default function App() {
                      </span>
                      <span>{t('ocrRecognize')}</span>
                    </button>
@@ -5186,7 +5219,7 @@ index 32f6de1..05490a0 100644
                  </div>
                </div>
                <div className="ribbon-sep" />
-@@ -9085,6 +9308,7 @@ export default function App() {
+@@ -9085,6 +9327,7 @@ export default function App() {
        <div className="app-main">
          {/* dock wrapper animates the width between panel and rail (docs-style 180ms ease);
                the panel stays mounted while collapsed so the chat history survives */}
@@ -5194,7 +5227,7 @@ index 32f6de1..05490a0 100644
          <div
            className={`ai-dock${aiCollapsed ? ' collapsed' : ''}${
              !aiSidebarEnabled && aiCollapsed ? ' ai-dock-off' : ''
-@@ -9109,6 +9333,7 @@ export default function App() {
+@@ -9109,6 +9352,7 @@ export default function App() {
              onClearSelection={() => setAiSelection(null)}
            />
          </div>
@@ -5202,7 +5235,7 @@ index 32f6de1..05490a0 100644
          <div className="app-content">
            {digitalSignatures.length > 0 && (
              <div className={`pdf-sig-banner ${overallSignatureStatus(digitalSignatures)}`}>
-@@ -9258,6 +9483,22 @@ export default function App() {
+@@ -9258,6 +9502,22 @@ export default function App() {
                  />
                </div>
              )}
@@ -5225,7 +5258,7 @@ index 32f6de1..05490a0 100644
              {sidebar === 'attachments' && (
                <div className="pdf-thumbs" style={{ width: sidebarW }}>
                  <div className="pdf-outline-header">
-@@ -9620,7 +9861,13 @@ export default function App() {
+@@ -9620,7 +9880,13 @@ export default function App() {
                                  pendingStaticFill ? t('formPlaceStaticHint') : t('imagePlaceHint')
                                }
                                onPlace={(vx, vy) => placeImage(origIdx, vx, vy)}
@@ -5240,7 +5273,7 @@ index 32f6de1..05490a0 100644
                              />
                            )}
                            {/* Paragraph boxes (WPS-style): every text block outlined while
-@@ -10537,6 +10784,24 @@ export default function App() {
+@@ -10537,6 +10803,24 @@ export default function App() {
                                  onMove={readOnly ? undefined : moveDrawing}
                                  onResize={readOnly ? undefined : resizeDrawing}
                                />
@@ -5265,7 +5298,7 @@ index 32f6de1..05490a0 100644
                                <RedactionLayer
                                  active={
                                    !readOnly && !redactionCopyInFlight && drawTool === 'redact'
-@@ -10617,6 +10882,7 @@ export default function App() {
+@@ -10617,6 +10901,7 @@ export default function App() {
                                        labels={{
                                          required: t('formDesignRequired'),
                                          multiLine: t('formDesignMultiLine'),
@@ -5273,7 +5306,7 @@ index 32f6de1..05490a0 100644
                                          defaultValue: t('formDesignDefaultValue'),
                                          defaultChecked: t('formDesignDefaultChecked'),
                                          remove: t('formDesignDelete'),
-@@ -10821,7 +11087,7 @@ export default function App() {
+@@ -10821,7 +11106,7 @@ export default function App() {
                  </button>
                </div>
              )}
@@ -5282,7 +5315,7 @@ index 32f6de1..05490a0 100644
                <div
                  className="pdf-sel-popup"
                  style={{ left: selPopup.x, top: selPopup.y }}
-@@ -10895,9 +11161,10 @@ export default function App() {
+@@ -10895,9 +11180,10 @@ export default function App() {
                      >
                        <span className="sel-swatch sel-swatch-st">S</span>
                      </button>
@@ -5294,7 +5327,7 @@ index 32f6de1..05490a0 100644
                  <button
                    type="button"
                    className="pdf-sel-ask"
-@@ -10913,9 +11180,10 @@ export default function App() {
+@@ -10913,9 +11199,10 @@ export default function App() {
                    </svg>
                    {t('aiAskBtn')}
                  </button>
@@ -5306,7 +5339,7 @@ index 32f6de1..05490a0 100644
                <AiAskPopover
                  rect={askPop.rect}
                  excerpt={askPop.excerpt}
-@@ -11170,6 +11438,16 @@ export default function App() {
+@@ -11170,6 +11457,16 @@ export default function App() {
                  >
                    {t('insertBlankPage')}
                  </button>
@@ -6293,7 +6326,7 @@ index 3188d6c..2d675fb 100644
  
  installScreenTips()
 diff --git a/apps/pdf/src/shared/ipc.ts b/apps/pdf/src/shared/ipc.ts
-index bab2848..5644b87 100644
+index bab2848..f9b0c09 100644
 --- a/apps/pdf/src/shared/ipc.ts
 +++ b/apps/pdf/src/shared/ipc.ts
 @@ -702,6 +702,9 @@ export interface FormValueInput {
@@ -6315,7 +6348,7 @@ index bab2848..5644b87 100644
    /** text only; 0 or absent = no limit */
    maxLen?: number
    /** text only; absent = auto size */
-@@ -1179,6 +1184,14 @@ export interface PdfApi {
+@@ -1179,6 +1184,18 @@ export interface PdfApi {
    extractPages(request: ExtractPagesRequest): Promise<ExtractPagesResult>
    insertPdf(request: InsertPdfRequest): Promise<InsertPdfResult>
    insertBlankPage(request: InsertBlankPageRequest): Promise<InsertBlankPageResult>
@@ -6324,6 +6357,10 @@ index bab2848..5644b87 100644
 +  kertasLayerDefaults(path: string, hidden: string[]): Promise<KertasOpResult>
 +  kertasCompress(path: string): Promise<void>
 +  kertasFile(action: string): Promise<void>
++  /** a command from Kertas for this document ("sign": start placing a signature) */
++  onKertasCommand(cb: (name: string) => void): () => void
++  /** the command from Kertas waiting for this document, taken once */
++  kertasPending(): Promise<string | null>
 +  kertasOcrLangs(langs: string[]): Promise<void>
 +  kertasAnnotLayer(path: string, pageIndex: number, id: string, rect: number[]): Promise<string | null>
 +  kertasObjectOp(path: string, pageIndex: number, op: unknown): Promise<KertasOpResult & { layer?: string }>

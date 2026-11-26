@@ -497,9 +497,36 @@ async function openPath(p) {
 }
 async function openDialog(kind = 'all') { return openFileRecords(await openFiles(kind, true)); }
 
+// A new PDF made here (merged, or from pictures) is saved first, then opens in the PDF
+// editor like any other file
+async function saveAndOpenPdf(data, name) {
+  const out = await saveFile({ data, name, kind: 'pdf', saveAs: true });
+  if (out?.path) await openPath(out.path);
+  return out;
+}
 async function mergePdfs() {
   const files = await openFiles('pdf', true);
   if (!files.length) return;
+  if (await newEditorOn('pdf') && files.length > 1) {
+    try {
+      setStatus('Merging...');
+      const [{ buildPdf }, { PDFDocument }] = await Promise.all([import('./lib/pdf-ops.js'), import('@cantoo/pdf-lib')]);
+      const sources = {}; const pages = [];
+      for (const [i, f] of files.entries()) {
+        const id = `s${i}`;
+        sources[id] = new Uint8Array(f.data);
+        const count = (await PDFDocument.load(sources[id], { updateMetadata: false, ignoreEncryption: true })).getPageCount();
+        for (let index = 0; index < count; index++) pages.push({ src: id, index });
+      }
+      const data = await buildPdf(sources, pages);
+      const out = await saveAndOpenPdf(data, `${baseName(files[0].name)} (merged).pdf`);
+      if (out) toast(`Merged ${files.length} PDFs into ${out.name}`);
+    } catch (e) {
+      toast(`Could not merge: ${e.message || e}`, true);
+    }
+    setStatus(active()?.path || '');
+    return;
+  }
   // Kertas's own merge and sign tools work in the current PDF editor
   const tab = await openTab('pdf', { ...files[0], classic: true });
   if (files.length > 1) await tab.instance?.appendFiles?.(files.slice(1));
@@ -511,6 +538,7 @@ async function imagesToPdfCmd() {
     const mod = await MODULES.pdf.loader();
     const data = await mod.createFromImages(images);
     if (!data) return;
+    if (await newEditorOn('pdf')) { await saveAndOpenPdf(data, `${baseName(images[0].name)}.pdf`); return; }
     const tab = await openTab('pdf', { name: `${baseName(images[0].name)}.pdf`, data });
     if (tab) { tab.dirty = true; updateTab(tab); }
   } catch (err) {
@@ -520,6 +548,11 @@ async function imagesToPdfCmd() {
 async function signPdf() {
   const [file] = await openFiles('pdf', false);
   if (!file) return;
+  if (await newEditorOn('pdf') && file.path) {
+    const tab = await openTab('pdf', file);
+    if (tab?.native) window.kertasNative.newWriter('command', { id: tab.id, name: 'sign' });
+    return;
+  }
   const tab = await openTab('pdf', { ...file, classic: true });
   tab.instance?.startSignature?.();
 }
@@ -957,6 +990,12 @@ async function checkUpdates(manual = false) {
   else if (st.state === 'error') toast(`Could not check for updates: ${st.message || 'no connection'}`, true);
 }
 
+// The Licences link in About: the editors' licence and notice files
+document.addEventListener('click', (e) => {
+  if (!e.target.closest?.('[data-licences]')) return;
+  e.preventDefault();
+  window.kertasNative?.newWriter?.('licences');
+});
 async function showAbout() {
   const st = isDesktop ? await updates('state') : { state: 'web' };
   const lo = isDesktop && window.kertasNative?.hasLibreOffice ? await window.kertasNative.hasLibreOffice() : false;
@@ -965,14 +1004,14 @@ async function showAbout() {
   const res = await formDialog({
     title: 'Kertas Office',
     logo: './logo.svg',
-    description: `Version ${APP_VERSION} · free and open source (AGPL-3.0-or-later)`,
+    description: `Version ${APP_VERSION} · free and open source (AGPL-3.0-or-later)${nw.available ? ' · <a href="#" data-licences>Licences</a>' : ''}`,
     width: 460,
     fields: [
       { id: 'info', type: 'info', html: `<table class="stat-table"><tr><td>Updates</td><td>${status}</td></tr><tr><td>Older formats</td><td>${isDesktop ? (lo ? 'LibreOffice found: .doc, .xls, .rtf, .odt and .ods keep their formatting' : 'Built in: .xls and .ods, and the text of .doc. Install LibreOffice for full formatting and .rtf / .odt') : '.xls and .ods'}</td></tr><tr><td>Your files</td><td>Stay on this device</td></tr></table>` },
       { id: 'name', label: 'Your name (on tracked changes and comments)', value: userName(), placeholder: 'e.g. Aisha Rahman' },
-      ...(nw.available ? [{ id: 'newWriter', type: 'checkbox', label: 'Open Word documents in the new Writer (preview)', value: newWriterChosen() }] : []),
-      ...(nw.sheets ? [{ id: 'newSheets', type: 'checkbox', label: 'Open spreadsheets in the new Sheets (preview)', value: newEditorChosen('sheets') }] : []),
-      ...(nw.pdf ? [{ id: 'newPdf', type: 'checkbox', label: 'Open PDFs in the new PDF editor (preview)', value: newEditorChosen('pdf') }] : []),
+      ...(nw.available ? [{ id: 'newWriter', type: 'checkbox', label: 'Open Word documents in the new Writer', value: newWriterChosen() }] : []),
+      ...(nw.sheets ? [{ id: 'newSheets', type: 'checkbox', label: 'Open spreadsheets in the new Sheets', value: newEditorChosen('sheets') }] : []),
+      ...(nw.pdf ? [{ id: 'newPdf', type: 'checkbox', label: 'Open PDFs in the new PDF editor', value: newEditorChosen('pdf') }] : []),
       ...(isDesktop && st.packaged ? [{ id: 'auto', type: 'checkbox', label: 'Download updates automatically', value: st.auto !== false }] : []),
       ...(SUPPORT_BUILD ? [
         { id: 'support', type: 'info', html: `<div class="support-line">${icon('coffee', 16)}<span>Kertas is free and open source. If it saves you time, you can <a href="${SUPPORT_URL}" target="_blank" rel="noopener">buy me a coffee</a>.</span></div>` },
@@ -986,11 +1025,11 @@ async function showAbout() {
   });
   if (!res) return;
   if (res.values.name !== undefined && res.values.name.trim() !== userName()) { setUserName(res.values.name); window.kertasNative?.newWriter?.('author', res.values.name.trim()); toast(res.values.name.trim() ? `Your changes and comments now show as ${res.values.name.trim()}` : 'Name cleared'); }
-  if (res.values.newWriter !== undefined && res.values.newWriter !== newWriterChosen()) { try { localStorage.setItem('kertas-new-writer', res.values.newWriter ? '1' : '0'); } catch { /* private mode */ } toast(res.values.newWriter ? 'Word documents now open in the new Writer' : 'Word documents open in the current Writer again'); }
+  if (res.values.newWriter !== undefined && res.values.newWriter !== newWriterChosen()) { try { localStorage.setItem('kertas-new-writer', res.values.newWriter ? '1' : '0'); } catch { /* private mode */ } toast(res.values.newWriter ? 'Word documents now open in the new Writer' : 'Word documents open in the previous Writer again'); }
   for (const [field, kind, what] of [['newSheets', 'sheets', 'Spreadsheets'], ['newPdf', 'pdf', 'PDFs']]) {
     if (res.values[field] === undefined || res.values[field] === newEditorChosen(kind)) continue;
     try { localStorage.setItem(`kertas-new-${kind}`, res.values[field] ? '1' : '0'); } catch { /* private mode */ }
-    toast(res.values[field] ? `${what} now open in the new editor` : `${what} open in the current editor again`);
+    toast(res.values[field] ? `${what} now open in the new editor` : `${what} open in the previous editor again`);
   }
   if (res.values.auto !== undefined && res.values.auto !== (st.auto !== false)) await updates('set-auto', res.values.auto);
   if (res.values.cup !== undefined) { try { localStorage.setItem('kertas-hide-coffee', res.values.cup ? '0' : '1'); } catch { /* private mode */ } showCoffee(); }
