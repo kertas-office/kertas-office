@@ -570,3 +570,62 @@ test('the File button in Sheets and PDF opens Kertas\'s file menu, and its Save 
   await wb.xlsx.readFile(file);
   assert.equal(wb.getWorksheet('Sales').getCell('G3').value, 'From the File menu');
 });
+
+// ------------------------------------------------------------- the last parity items
+
+test('a workbook from a template opens in the new Sheets, and its first Save asks where to keep it', sheetsOpts, async () => {
+  await closeAll();
+  const had = editors('sheets').length;
+  await k.locator('#tabs .tab').first().click();
+  await k.locator('[data-cmd="templates-sheets"]').click();
+  await k.waitForSelector('.tpl-card[data-tpl]');
+  await k.locator('.tpl-card[data-tpl]').first().click();
+  for (let i = 0; i < 80 && editors('sheets').length === had; i++) await sleep(250);
+  assert.equal(editors('sheets').length, had + 1, 'opened in the new Sheets');
+  w = editors('sheets').at(-1);
+  await w.waitForSelector('#univer-container canvas');
+  await sleep(3000);
+  await w.mouse.click(1000, 262); // an empty cell beside the title
+  await w.keyboard.type('My note');
+  await w.keyboard.press('Enter');
+  await sleep(1500);
+  let asked = null;
+  await app.evaluate(({ dialog }, dir) => {
+    globalThis.__saveAsked = null;
+    dialog.showSaveDialog = async (_w, o) => { globalThis.__saveAsked = (o || _w)?.defaultPath || ''; return { canceled: false, filePath: `${dir}/from-template.xlsx` }; };
+  }, dir);
+  await press('sheets', 'S');
+  for (let i = 0; i < 40 && !existsSync(path.join(dir, 'from-template.xlsx')); i++) await sleep(250);
+  asked = await app.evaluate(() => globalThis.__saveAsked);
+  assert.ok(asked !== null, 'Save asked where to keep it');
+  assert.ok(existsSync(path.join(dir, 'from-template.xlsx')), 'saved where chosen');
+  await sleep(800);
+  assert.match((await tabTitles()).at(-1), /from-template\.xlsx/);
+  // (ExcelJS cannot read workbooks with charts, so the file is checked as a zip)
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(await readFile(path.join(dir, 'from-template.xlsx')));
+  const text = (await Promise.all(Object.keys(zip.files).filter((f) => /sharedStrings|sheet\d+\.xml$/.test(f)).map((f) => zip.file(f).async('string')))).join(' ');
+  assert.match(text, /My note/);
+  assert.match(text, /Monthly budget/);
+  assert.ok(Object.keys(zip.files).some((f) => /charts\/chart\d+\.xml$/.test(f)), 'the chart is still there');
+});
+
+test('a document dropped on one of the new editors opens in Kertas', pdfOpts, async () => {
+  await open('sample.pdf', 'pdf');
+  const target = path.join(dir, `${++n}-dropped.pdf`);
+  await copyFile(fixture('report.pdf'), target);
+  const before = (await tabTitles()).length;
+  // what the editor's page sends when a file is dropped on it
+  await app.evaluate(({ ipcMain, webContents }, p) => {
+    const wc = webContents.getAllWebContents().filter((c) => c.getURL().startsWith('kertas-writer://pdf/')).at(-1);
+    ipcMain.emit('app:open-dropped-files', { sender: wc }, [p]);
+  }, target);
+  for (let i = 0; i < 40 && (await tabTitles()).length === before; i++) await sleep(250);
+  assert.ok((await tabTitles()).some((t) => t.endsWith('dropped.pdf')));
+});
+
+test('the name set in About is the author in the new Sheets and PDF editor too', pdfOpts, async () => {
+  await k.evaluate(() => window.kertasNative.newWriter('author', 'Aisha Rahman'));
+  const settings = JSON.parse(await readFile(path.join(dir, 'config', 'Kertas Office', 'writer', 'app-settings.json'), 'utf8').catch(async () => readFile(path.join(dir, 'config', 'kertas-office', 'writer', 'app-settings.json'), 'utf8')));
+  assert.equal(settings.authorName, 'Aisha Rahman');
+});

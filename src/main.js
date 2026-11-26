@@ -98,7 +98,7 @@ function updateTab(tab) {
 }
 
 const NEW_EDITOR_FILES = { sheets: /\.(xlsx|xlsm|csv|xls|ods)$/i, pdf: /\.pdf$/i };
-async function openTab(kind, { name, path = null, data = null, html = null, result = null, classic = false } = {}) {
+async function openTab(kind, { name, path = null, data = null, html = null, result = null, classic = false, converted = false } = {}) {
   if (path) for (const t of tabs.values()) if (t.path === path) { activate(t.id); return t; }
   // Word documents go to the new Writer when it is switched on: a file by its path, anything
   // else (a template, a dropped file, a converted older format) by its bytes
@@ -109,12 +109,15 @@ async function openTab(kind, { name, path = null, data = null, html = null, resu
       if (t) return t;
     } catch (e) { console.error(e); }
   }
-  // Spreadsheets and PDFs the same way, each when its own switch is on; these editors read
-  // the file themselves, so only a file on disk (or a new blank workbook) goes to them
+  // Spreadsheets and PDFs the same way, each when its own switch is on. A file on disk goes
+  // to them by its path; a workbook that is not a file yet (new, a template, a converted
+  // older format) goes by its contents and is saved under a name of its own
+  const onDisk = path && !converted;
   if ((kind === 'sheets' || kind === 'pdf') && !classic && !html && !result && await newEditorOn(kind)
-    && (path ? NEW_EDITOR_FILES[kind].test(path) : kind === 'sheets' && !data)) {
+    && (onDisk ? NEW_EDITOR_FILES[kind].test(path) : kind === 'sheets')) {
     try {
-      const t = await openNativeWriter({ kind, name, path });
+      const token = !onDisk && data ? await window.kertasNative.newWriter('stash', data) : null;
+      const t = await openNativeWriter({ kind, name, path: onDisk ? path : null, result: token });
       if (t) return t;
     } catch (e) { console.error(e); }
   }
@@ -223,7 +226,7 @@ if (isDesktop && window.kertasNative?.newWriter) {
   }, 1500);
 }
 
-async function openNativeWriter({ kind = 'writer', name, path = null, result = null } = {}) {
+async function openNativeWriter({ kind = 'writer', name, path = null, result = null, recoverAs = null } = {}) {
   if (path) for (const t of tabs.values()) if (t.path === path) { activate(t.id); return t; }
   const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   if (!name) name = `${MODULES[kind].newName}${++untitled[kind]}.${MODULES[kind].ext}`;
@@ -251,7 +254,7 @@ async function openNativeWriter({ kind = 'writer', name, path = null, result = n
   activate(id);
 
   let ok = false;
-  try { ok = await window.kertasNative.newWriter('open', { id, kind, path, result }); } catch (e) { console.error(e); }
+  try { ok = await window.kertasNative.newWriter('open', { id, kind, path, result, name, recoverAs }); } catch (e) { console.error(e); }
   if (!ok) { tabEl.remove(); el.remove(); tabs.delete(id); activate('home'); return null; }
   tab.ready = true;
   syncNativeView();
@@ -260,6 +263,15 @@ async function openNativeWriter({ kind = 'writer', name, path = null, result = n
 }
 
 if (isDesktop && window.kertasNative?.newWriter) window.kertasNative.newWriter('author', userName()).catch(() => {});
+// New workbooks that a crash interrupted: the new Sheets offers what it kept of each
+if (isDesktop && window.kertasNative?.newWriter) {
+  newEditorOn('sheets').then(async (on) => {
+    if (!on) return;
+    for (const p of await window.kertasNative.newWriter('sheet-recoveries').catch(() => []) || []) {
+      await openNativeWriter({ kind: 'sheets', name: String(p).split(/[\\/]/).pop(), recoverAs: p });
+    }
+  }).catch(() => {});
+}
 // Text recognition for the new PDF editor, with Kertas's offline engine, in the languages
 // picked next to its Recognize text button.
 async function ocrForEditor(req, png, langs) {
@@ -325,6 +337,7 @@ onNative('new-writer', (ev) => {
     tab.path = ev.path;
     tab.name = ev.path.split(/[\\/]/).pop();
     updateTab(tab);
+    window.kertasNative.newWriter('recent', ev.path).catch(() => {});
     if (activeId === tab.id) setStatus(tab.path);
   } else if (ev.type === 'convert-progress') setStatus(`Converting to ${ev.format === 'xlsx' ? 'a workbook' : 'Word, keeping the layout'}: page ${ev.page} of ${ev.total}`);
   else if (ev.type === 'convert-done') setStatus(active()?.path || '');
@@ -467,7 +480,7 @@ async function openFileRecords(records) {
       try {
         setStatus(`Converting ${f.name}...`);
         const conv = await openLegacy(f, isDesktop ? convertLegacyNative : null);
-        opened.push(await openTab(kind, { ...f, data: conv.data || null, html: conv.html || null, classic: true }));
+        opened.push(await openTab(kind, { ...f, data: conv.data || null, html: conv.html || null, converted: true }));
         if (conv.note) toast(conv.note);
       } catch (e) {
         console.error(e);

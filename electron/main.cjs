@@ -421,7 +421,7 @@ ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
   };
   if (!writer2.available) return false;
   if (op === 'open') { // { id, path? , result? }: a tab for a file, a converted document, or a blank one
-    const { id, path: filePath = null, result = null } = arg || {};
+    const { id, path: filePath = null, result = null, name = null, recoverAs = null } = arg || {};
     const kind = ['sheets', 'pdf'].includes(arg && arg.kind) ? arg.kind : 'writer';
     if (filePath != null) {
       assertReadable(filePath);
@@ -429,7 +429,7 @@ ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
       grant(filePath);
       await addRecent(filePath);
     }
-    return writer2.openTab(String(id), { kind, filePath, result });
+    return writer2.openTab(String(id), { kind, filePath, result, name: name ? String(name) : null, recoverAs: recoverAs ? String(recoverAs) : null });
   }
   if (op === 'layout') return writer2.layout(String(arg.id), arg.rect);
   if (op === 'snapshot') return writer2.snapshot(String(arg));
@@ -438,6 +438,11 @@ ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
   if (op === 'command') return writer2.command(String(arg.id), String(arg.name));
   if (op === 'stash') return writer2.stash(arg); // document bytes in, a token for a tab out
   if (op === 'author') return writer2.setAuthor(arg);
+  if (op === 'sheet-recoveries') return writer2.sheetRecoveries(); // new workbooks a crash interrupted
+  if (op === 'recent') { // a file saved under a new name in one of the editors
+    if (typeof arg === 'string' && path.isAbsolute(arg) && require('fs').existsSync(arg)) await addRecent(arg);
+    return true;
+  }
   if (op === 'ocr-result') return writer2.ocrResult(arg); // lines read from a page picture
   if (op === 'convert-pdf') return writer2.convertPdfForTab(arg); // PDF bytes in, a token for the result out
   return false;

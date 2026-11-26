@@ -617,10 +617,10 @@ index 8ce14e6..ad45275 100644
        try {
 diff --git a/apps/docs/src/main/kertas-entry.ts b/apps/docs/src/main/kertas-entry.ts
 new file mode 100644
-index 0000000..4b8a6fd
+index 0000000..778b996
 --- /dev/null
 +++ b/apps/docs/src/main/kertas-entry.ts
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,82 @@
 +// Entry used when Kertas Office hosts this editor: the same main-process code,
 +// without starting an app of its own.
 +export {
@@ -685,7 +685,12 @@ index 0000000..4b8a6fd
 +  markSheetsShuttingDown,
 +  resetSheetsShuttingDown,
 +  stopSheetsSidecar,
++  markSheetsUnsavedNew,
++  unmarkSheetsUnsavedNew,
++  sheetsSuggestedPathTaken,
++  pendingUnsavedNewRecoveries,
 +} from '../../../sheets/src/main/sheets-main'
++export { blankXlsxBuffer } from '@genoffice/xlsx-gateway/gateway/csv-import-xlsx'
 +export {
 +  configurePdfRuntime,
 +  createPdfView,
@@ -6363,7 +6368,7 @@ index 0000000..468a656
 +  },
 +})
 diff --git a/apps/sheets/src/preload/index.ts b/apps/sheets/src/preload/index.ts
-index 6a8e706..87887bb 100644
+index 6a8e706..f60849e 100644
 --- a/apps/sheets/src/preload/index.ts
 +++ b/apps/sheets/src/preload/index.ts
 @@ -84,6 +84,8 @@ import {
@@ -6375,6 +6380,18 @@ index 6a8e706..87887bb 100644
    getLanguage: () => ipcRenderer.invoke('app:get-language'),
    openSourcePath: (path: string) => ipcRenderer.invoke('home:open-path', path),
    onLanguageChanged(handler) {
+@@ -1466,6 +1468,11 @@ function parseWorkbookFile(input: unknown): WorkbookFile {
+     ...(csvPath === undefined ? {} : { csvPath }),
+     ...(emptyCsv === undefined ? {} : { emptyCsv }),
+     ...(restoredFromRecovery === undefined ? {} : { restoredFromRecovery }),
++    // these three were dropped here, so a new workbook's first Save, its crash copy and the
++    // password commands never saw them (Kertas Office)
++    ...(input.unsavedNew === true ? { unsavedNew: true } : {}),
++    ...(input.automaticRecoveryDisabled === true ? { automaticRecoveryDisabled: true } : {}),
++    ...(typeof input.passwordProtected === 'boolean' ? { passwordProtected: input.passwordProtected } : {}),
+     ...(themeColors === undefined ? {} : { themeColors: themeColors as string[] }),
+     ...(parsedThemeFonts === undefined ? {} : { themeFonts: parsedThemeFonts }),
+     ...(typeof input.normalFontName === 'string' && input.normalFontName !== ''
 diff --git a/apps/sheets/src/renderer/App.tsx b/apps/sheets/src/renderer/App.tsx
 index f7fd122..eb00434 100644
 --- a/apps/sheets/src/renderer/App.tsx

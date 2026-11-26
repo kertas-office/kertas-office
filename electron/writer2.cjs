@@ -43,7 +43,19 @@ function answerHostQuestions() {
 }
 // The name set in Kertas's About, used on tracked changes and comments
 let author = '';
-const setAuthor = (name) => { author = String(name || '').trim().slice(0, 120); return true; };
+const setAuthor = (name) => {
+  author = String(name || '').trim().slice(0, 120);
+  // the spreadsheet and PDF editors read it from their settings file, for comments and notes
+  if (host) {
+    const file = path.join(app.getPath('userData'), 'writer', 'app-settings.json');
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch { /* first time */ }
+    if (author) settings.authorName = author; else delete settings.authorName;
+    try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(settings, null, 2)); } catch { /* best effort */ }
+    for (const t of tabs.values()) if (!t.view.webContents.isDestroyed()) t.view.webContents.send('app:author-name-changed', author || os.userInfo().username);
+  }
+  return true;
+};
 const stash = (data) => keepResult(new Uint8Array(data));
 
 // Kertas's light or dark look; the page itself stays as the document has it
@@ -82,6 +94,11 @@ function start() {
   host.setDocsFileSavedHook((wc, filePath) => { const id = tabOf(wc.id); if (id) tell('path', id, { path: filePath }); });
   host.setDocsFileOpenedHook((wcId, filePath) => { const id = tabOf(wcId); if (id) tell('path', id, { path: filePath }); });
   startSheetsAndPdf();
+  // a document dropped on one of the editors opens in Kertas, as anywhere else in the window
+  ipcMain.on('app:open-dropped-files', (e, paths) => {
+    if (!windows.has(e.sender.id) || !Array.isArray(paths)) return;
+    for (const p of paths.slice(0, 20)) if (typeof p === 'string' && path.isAbsolute(p) && fs.existsSync(p)) tell('open-path', null, { path: p });
+  });
   // the File button of the spreadsheet and PDF editors: Kertas carries out the command
   const FILE_ACTIONS = new Set(['new-doc', 'new-sheet', 'open', 'save', 'save-as', 'export-pdf', 'export-csv', 'print', 'close-tab']);
   ipcMain.handle('kertas:editor-file', (e, action) => {
@@ -217,13 +234,36 @@ const tabOf = (wcId) => { for (const [id, t] of tabs) if (t.wcId === wcId) retur
 const activeTab = () => { for (const [id, t] of tabs) if (t.shown) return id; return null; };
 const keepResult = (bytes) => { const token = `r${++resultSeq}`; results.set(token, Buffer.from(bytes)); return token; };
 
-function openTab(id, { kind = 'writer', filePath = null, result = null } = {}) {
+// A workbook that is not a file yet (new, from a template, converted from an older format)
+// opens from a copy in a temporary folder; its first Save asks where to keep it, starting
+// from its name in Documents, and a crash keeps a copy that is offered again next time.
+const SHEETS_TEMP = path.join(os.tmpdir(), 'kertas-sheets');
+async function sheetsBacking(name, bytes, recoverAs) {
+  const docs = app.getPath('documents');
+  const clean = (n) => String(n || 'Book.xlsx').replace(/[\\/:*?"<>|]/g, '_').replace(/\.(xlsx|xlsm|xls|ods|csv)$/i, '') || 'Book';
+  let suggested = recoverAs || path.join(docs, `${clean(name)}.xlsx`);
+  for (let i = 2; !recoverAs && (fs.existsSync(suggested) || host.sheetsSuggestedPathTaken(suggested)) && i < 200; i++) suggested = path.join(docs, `${clean(name)} ${i}.xlsx`);
+  const tempDir = path.join(SHEETS_TEMP, require('crypto').randomUUID());
+  fs.mkdirSync(tempDir, { recursive: true });
+  const backing = path.join(tempDir, path.basename(suggested));
+  host.markSheetsUnsavedNew(backing, suggested, tempDir);
+  try { await fs.promises.writeFile(backing, bytes || Buffer.from(await host.blankXlsxBuffer())); } catch (e) { host.unmarkSheetsUnsavedNew(backing); throw e; }
+  return backing;
+}
+const sheetRecoveries = () => { try { return host && has.sheets ? host.pendingUnsavedNewRecoveries() : []; } catch { return []; } };
+
+async function openTab(id, { kind = 'writer', filePath = null, result = null, name = null, recoverAs = null } = {}) {
   if (!host || !mainWin || tabs.has(id) || !has[kind]) return false;
   let view;
   if (kind === 'sheets') {
-    if (!filePath) host.setSheetsNewBlank();
-    view = host.createSheetsView({ includeAiHandlers: false, openingWorkbook: !!filePath });
-    if (filePath) host.queueWorkbookForView(view.webContents, filePath);
+    if (!filePath) {
+      const bytes = result && results.get(result);
+      if (result) results.delete(result);
+      if (recoverAs && !sheetRecoveries().includes(recoverAs)) recoverAs = null;
+      filePath = await sheetsBacking(name, bytes, recoverAs);
+    }
+    view = host.createSheetsView({ includeAiHandlers: false, openingWorkbook: true });
+    host.queueWorkbookForView(view.webContents, filePath);
   } else if (kind === 'pdf') view = host.createPdfView(filePath || undefined);
   else view = host.createDocsView(filePath || undefined);
   const wc = view.webContents;
@@ -335,4 +375,4 @@ function convertPdfForTab(data, format = 'docx') {
 }
 
 const ocrResult = (arg) => ocrAnswer(Number(arg && arg.req), arg && arg.lines);
-module.exports = { available, has, ocrResult, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };
+module.exports = { available, has, ocrResult, sheetRecoveries, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };
