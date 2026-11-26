@@ -617,10 +617,10 @@ index 8ce14e6..ad45275 100644
        try {
 diff --git a/apps/docs/src/main/kertas-entry.ts b/apps/docs/src/main/kertas-entry.ts
 new file mode 100644
-index 0000000..cf3aa6f
+index 0000000..4b8a6fd
 --- /dev/null
 +++ b/apps/docs/src/main/kertas-entry.ts
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,77 @@
 +// Entry used when Kertas Office hosts this editor: the same main-process code,
 +// without starting an app of its own.
 +export {
@@ -697,6 +697,7 @@ index 0000000..cf3aa6f
 +  setPdfRenamedHook,
 +  setPdfRedactionSavedHook,
 +} from '../../../pdf/src/main/pdf-main'
++export { setKertasOcr } from '../../../pdf/src/main/kertas-pdf'
 diff --git a/apps/docs/src/main/kertas-pdf-entry.ts b/apps/docs/src/main/kertas-pdf-entry.ts
 new file mode 100644
 index 0000000..370cf36
@@ -3919,19 +3920,421 @@ index 0000000..98aa098
 +    },
 +  },
 +})
+diff --git a/apps/pdf/src/main/kertas-pdf.ts b/apps/pdf/src/main/kertas-pdf.ts
+new file mode 100644
+index 0000000..6ce53e8
+--- /dev/null
++++ b/apps/pdf/src/main/kertas-pdf.ts
+@@ -0,0 +1,115 @@
++// Kertas Office's additions to the PDF editor's main process: duplicating a page,
++// flattening a form, and saving which layers a file opens with. Each works on the file on
++// disk (the editor saves pending edits first) and the editor reloads it afterwards.
++import { readFile } from 'node:fs/promises'
++import { BrowserWindow, dialog, ipcMain } from 'electron'
++import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRef } from 'pdf-lib'
++import { writePdfAtomically } from './atomic-write'
++
++/** Text recognition supplied by Kertas Office (its own engine, which reads many languages on
++ *  every system); the editor's system helpers are used only when it is not set. */
++type KertasOcr = (pngBase64: string, langs: string[]) => Promise<unknown[] | null>
++let ocrLangs: string[] = ['eng']
++export const kertasOcrLangs = (): string[] => ocrLangs
++let kertasOcr: KertasOcr | null = null
++export function setKertasOcr(fn: KertasOcr | null): void {
++  kertasOcr = fn
++}
++export const kertasOcrEngine = (): KertasOcr | null => kertasOcr
++
++export const KERTAS_PDF_CHANNELS = {
++  duplicatePage: 'pdf:kertas-duplicate-page',
++  flatten: 'pdf:kertas-flatten',
++  layerDefaults: 'pdf:kertas-layer-defaults',
++} as const
++
++type Result = { ok: true } | { ok: true; canceled: true } | { ok: false; error: string }
++const failed = (err: unknown): Result => ({ ok: false, error: err instanceof Error ? err.message : String(err) })
++
++/** pdf.js names a layer by its object reference: "12R", or "12R3" for generation 3 */
++function refOf(id: string): PDFRef | null {
++  const m = /^(\d+)R(\d*)$/.exec(id)
++  return m ? PDFRef.of(Number(m[1]), m[2] ? Number(m[2]) : 0) : null
++}
++
++export function registerKertasPdfIpc(granted: (wcId: number, path: string) => boolean): void {
++  ipcMain.handle('pdf:kertas-ocr-langs', (_e, langs: unknown) => {
++    if (Array.isArray(langs) && langs.length && langs.every((l) => typeof l === 'string' && /^[a-z_]{2,10}$/.test(l))) ocrLangs = langs.slice(0, 8)
++  })
++
++  const load = async (path: string) => PDFDocument.load(new Uint8Array(await readFile(path)), { updateMetadata: false })
++
++  ipcMain.handle(KERTAS_PDF_CHANNELS.duplicatePage, async (e, req: unknown): Promise<Result> => {
++    const { path, pageIndex } = (req ?? {}) as { path?: unknown; pageIndex?: unknown }
++    if (typeof path !== 'string' || !granted(e.sender.id, path)) return { ok: false, error: 'pdf: path not granted to this view' }
++    try {
++      const doc = await load(path)
++      const at = typeof pageIndex === 'number' ? Math.trunc(pageIndex) : -1
++      if (at < 0 || at >= doc.getPageCount()) return { ok: false, error: 'There is no such page' }
++      const [copy] = await doc.copyPages(doc, [at])
++      doc.insertPage(at + 1, copy!)
++      await writePdfAtomically(path, await doc.save({ useObjectStreams: true }))
++      return { ok: true }
++    } catch (err) {
++      return failed(err)
++    }
++  })
++
++  ipcMain.handle(KERTAS_PDF_CHANNELS.flatten, async (e, req: unknown): Promise<Result> => {
++    const { path } = (req ?? {}) as { path?: unknown }
++    if (typeof path !== 'string' || !granted(e.sender.id, path)) return { ok: false, error: 'pdf: path not granted to this view' }
++    try {
++      const doc = await load(path)
++      const form = doc.getForm()
++      if (form.getFields().length === 0) return { ok: false, error: 'This PDF has no form fields to flatten' }
++      const win = BrowserWindow.fromWebContents(e.sender) ?? undefined
++      const opts = {
++        type: 'question' as const,
++        buttons: ['Flatten', 'Cancel'],
++        defaultId: 0,
++        cancelId: 1,
++        message: 'Flatten the form?',
++        detail: 'The filled-in values become part of the page and can no longer be changed, and the fields are removed. This is saved to the file.',
++      }
++      const { response } = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
++      if (response !== 0) return { ok: true, canceled: true }
++      form.flatten({ updateFieldAppearances: true })
++      await writePdfAtomically(path, await doc.save({ useObjectStreams: true }))
++      return { ok: true }
++    } catch (err) {
++      return failed(err)
++    }
++  })
++
++  ipcMain.handle(KERTAS_PDF_CHANNELS.layerDefaults, async (e, req: unknown): Promise<Result> => {
++    const { path, hidden } = (req ?? {}) as { path?: unknown; hidden?: unknown }
++    if (typeof path !== 'string' || !granted(e.sender.id, path)) return { ok: false, error: 'pdf: path not granted to this view' }
++    if (!Array.isArray(hidden)) return { ok: false, error: 'pdf: bad request' }
++    try {
++      const doc = await load(path)
++      const props = doc.catalog.lookupMaybe(PDFName.of('OCProperties'), PDFDict)
++      const all = props?.lookupMaybe(PDFName.of('OCGs'), PDFArray)
++      if (!props || !all) return { ok: false, error: 'This PDF has no layers' }
++      const off = new Set(hidden.map((id) => refOf(String(id))?.toString()).filter(Boolean))
++      const on: PDFRef[] = []
++      const offRefs: PDFRef[] = []
++      for (let i = 0; i < all.size(); i++) {
++        const ref = all.get(i)
++        if (!(ref instanceof PDFRef)) continue
++        ;(off.has(ref.toString()) ? offRefs : on).push(ref)
++      }
++      let d = props.lookupMaybe(PDFName.of('D'), PDFDict)
++      if (!d) {
++        d = doc.context.obj({})
++        props.set(PDFName.of('D'), d)
++      }
++      d.set(PDFName.of('BaseState'), PDFName.of('ON'))
++      d.set(PDFName.of('ON'), doc.context.obj(on))
++      d.set(PDFName.of('OFF'), doc.context.obj(offRefs))
++      await writePdfAtomically(path, await doc.save({ useObjectStreams: true }))
++      return { ok: true }
++    } catch (err) {
++      return failed(err)
++    }
++  })
++}
+diff --git a/apps/pdf/src/main/pdf-main.ts b/apps/pdf/src/main/pdf-main.ts
+index e8c72ad..f8e62c1 100644
+--- a/apps/pdf/src/main/pdf-main.ts
++++ b/apps/pdf/src/main/pdf-main.ts
+@@ -97,6 +97,7 @@ import type {
+   SignaturePosition,
+ } from '../shared/ipc'
+ import { writePdfAtomically } from './atomic-write'
++import { kertasOcrEngine, kertasOcrLangs, registerKertasPdfIpc } from './kertas-pdf'
+ import {
+   cropPagesBytes,
+   extractPagesBytes,
+@@ -1604,6 +1605,8 @@ function registerPdfIpc(): void {
+   ipcMain.handle(PDF_CHANNELS.ocrPage, async (_e, png: unknown) => {
+     // bad payload = failed page ([]), never "no engine" (null) — null stops the caller's pass
+     if (typeof png !== 'string' || png.length === 0 || png.length > 64 * 1024 * 1024) return []
++    const kertas = kertasOcrEngine()
++    if (kertas) return kertas(png, kertasOcrLangs())
+     const { ocrPagePng } = await import('./ocr')
+     return ocrPagePng(png)
+   })
+@@ -2358,6 +2361,8 @@ function registerPdfIpc(): void {
+   // Language channel shared with other modules; removeHandler tolerates duplicate registration
+   ipcMain.removeHandler(PDF_CHANNELS.getLanguage)
+   ipcMain.handle(PDF_CHANNELS.getLanguage, () => getUiLang())
++
++  registerKertasPdfIpc((wcId, path) => !!allowedByWc.get(wcId)?.has(path))
+ }
+ 
+ function grantAndTrack(wc: WebContents, openPath?: string | null): void {
+diff --git a/apps/pdf/src/main/save-pdf.ts b/apps/pdf/src/main/save-pdf.ts
+index a59cac1..e9fe3e8 100644
+--- a/apps/pdf/src/main/save-pdf.ts
++++ b/apps/pdf/src/main/save-pdf.ts
+@@ -1000,6 +1000,15 @@ export function applyFormFields(pdfDoc: PDFDocument, fields: FormFieldInput[]):
+       if (f.checked) group.select(option)
+       continue
+     }
++    if (f.kind === 'choice' && f.listBox) {
++      const list = form.createOptionList(f.name)
++      if (f.required) list.enableRequired()
++      const options = (f.options ?? []).map((o) => o.trim()).filter(Boolean)
++      list.addOptions(options)
++      if (f.value && options.includes(f.value)) list.select(f.value)
++      list.addToPage(page, common)
++      continue
++    }
+     if (f.kind === 'choice') {
+       const dd = form.createDropdown(f.name)
+       if (f.required) dd.enableRequired()
+diff --git a/apps/pdf/src/main/wasm-path.ts b/apps/pdf/src/main/wasm-path.ts
+index 75f46f2..63d093c 100644
+--- a/apps/pdf/src/main/wasm-path.ts
++++ b/apps/pdf/src/main/wasm-path.ts
+@@ -7,11 +7,14 @@ import { dirname, join } from 'node:path'
+  * ships no node_modules (everything is bundled) — electron-builder copies them
+  * into Resources/wasm instead (see apps/shell/electron-builder.cjs extraResources).
+  */
+-const packagedPath = (fileName: string) => join(process.resourcesPath, 'wasm', fileName)
++const packagedPath = (fileName: string) =>
++  join(process.env.KERTAS_WASM_DIR || join(process.resourcesPath, 'wasm'), fileName)
+ 
+ const req = () => createRequire(import.meta.url)
+ 
+ export function pdfiumWasmPath(): string {
++  // Kertas Office ships the engine files with the editor (KERTAS_WASM_DIR)
++  if (process.env.KERTAS_WASM_DIR) return packagedPath('pdfium.wasm')
+   try {
+     return req().resolve('@embedpdf/pdfium/pdfium.wasm')
+   } catch {
+@@ -20,6 +23,7 @@ export function pdfiumWasmPath(): string {
+ }
+ 
+ export function hbSubsetWasmPath(): string {
++  if (process.env.KERTAS_WASM_DIR) return packagedPath('hb-subset.wasm')
+   const r = req()
+   try {
+     // harfbuzzjs ≤0.10 ships hb-subset.wasm at the package root with no exports map
+diff --git a/apps/pdf/src/preload/index.ts b/apps/pdf/src/preload/index.ts
+index e799e6b..3fcecf3 100644
+--- a/apps/pdf/src/preload/index.ts
++++ b/apps/pdf/src/preload/index.ts
+@@ -36,6 +36,14 @@ const api: PdfApi = {
+     ipcRenderer.invoke(PDF_CHANNELS.compareReadOpen, path, password),
+   reduceFileSize: (path) => ipcRenderer.invoke(PDF_CHANNELS.reduceFileSize, path),
+   insertBlankPage: (request) => ipcRenderer.invoke(PDF_CHANNELS.insertBlankPage, request),
++  // Kertas Office's additions (main/kertas-pdf.ts; compress is answered by Kertas itself)
++  kertasDuplicatePage: (path: string, pageIndex: number) =>
++    ipcRenderer.invoke('pdf:kertas-duplicate-page', { path, pageIndex }),
++  kertasFlatten: (path: string) => ipcRenderer.invoke('pdf:kertas-flatten', { path }),
++  kertasLayerDefaults: (path: string, hidden: string[]) =>
++    ipcRenderer.invoke('pdf:kertas-layer-defaults', { path, hidden }),
++  kertasCompress: (path: string) => ipcRenderer.invoke('pdf:kertas-compress', { path }),
++  kertasOcrLangs: (langs: string[]) => ipcRenderer.invoke('pdf:kertas-ocr-langs', langs),
+   splitPdf: (request) => ipcRenderer.invoke(PDF_CHANNELS.splitPdf, request),
+   mergePdf: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePdf, request),
+   mergePages: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePages, request),
 diff --git a/apps/pdf/src/renderer/App.tsx b/apps/pdf/src/renderer/App.tsx
-index 32f6de1..8040f11 100644
+index 32f6de1..97cee97 100644
 --- a/apps/pdf/src/renderer/App.tsx
 +++ b/apps/pdf/src/renderer/App.tsx
-@@ -8,6 +8,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
+@@ -8,6 +8,11 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
  import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
  import { AiPanel, GensparkMark } from './ai/AiPanel'
  import { AiAskPopover, type AskAnchorRect } from './AiAskPopover'
 +import { KERTAS_AI, KERTAS_HOST } from './kertas'
++import { StampButton } from './kertas/StampButton'
++import { renderStamp, STAMP_PX_PER_PT } from './kertas/stamps'
++import { LayersPanel } from './kertas/LayersPanel'
++import { OcrLanguages } from './kertas/OcrLanguages'
  import {
    createSavedAnnotCountsLoader,
    loadSavedAnnots,
-@@ -8142,7 +8143,8 @@ export default function App() {
+@@ -479,8 +484,10 @@ export default function App() {
+   const [currentPage, setCurrentPage] = useState(1)
+   const [pageInput, setPageInput] = useState('1')
+   const [sidebar, setSidebar] = useState<
+-    'thumbs' | 'outline' | 'comments' | 'compare' | 'attachments' | null
++    'thumbs' | 'outline' | 'comments' | 'compare' | 'attachments' | 'layers' | null
+   >('thumbs')
++  /** the picture being placed is a stamp: real size, above the text (Kertas Office) */
++  const [stampPlacing, setStampPlacing] = useState(false)
+   const [compareResult, setCompareResult] = useState<CompareResult | null>(null)
+   const [compareName, setCompareName] = useState<string | null>(null)
+   const [compareBusy, setCompareBusy] = useState(false)
+@@ -864,6 +871,9 @@ export default function App() {
+   const [savedStaticFormFills, setSavedStaticFormFills] = useState<StaticFormFillRecord[]>([])
+   /** Picked image awaiting click-to-place (same overlay flow as signatures) */
+   const [imagePick, setImagePick] = useState<Extract<SignatureData, { kind: 'image' }> | null>(null)
++  useEffect(() => {
++    if (!imagePick) setStampPlacing(false)
++  }, [imagePick])
+   const [pendingStaticFill, setPendingStaticFill] = useState<StaticFormFillKind | null>(null)
+   const [staticTextDialog, setStaticTextDialog] = useState(false)
+   const [staticTextPurpose, setStaticTextPurpose] = useState<'form' | 'insert'>('form')
+@@ -5322,7 +5332,22 @@ export default function App() {
+   }
+ 
+   /** Ribbon button → file picker; the picked image then enters click-to-place mode */
++  /** Kertas Office: a stamp follows the pointer and lands where clicked */
++  const pickStamp = (kind: Parameters<typeof renderStamp>[0]) => {
++    setEditTextMode(false)
++    setTextDraft(null)
++    setPendingTextInsert(null)
++    setDrawTool(null)
++    setPendingSign(null)
++    setSignatureTarget(null)
++    setPendingStaticFill(null)
++    replaceTargetRef.current = null
++    setImagePick(renderStamp(kind, noteAuthor))
++    setStampPlacing(true)
++  }
++
+   const pickInsertImage = () => {
++    setStampPlacing(false)
+     setEditTextMode(false)
+     setTextDraft(null)
+     setPendingTextInsert(null)
+@@ -5417,8 +5442,20 @@ export default function App() {
+     const pick = imagePick
+     if (!pick) return
+     const fill = pendingStaticFill
++    const stamp = stampPlacing
+     setImagePick(null)
+     setPendingStaticFill(null)
++    setStampPlacing(false)
++    if (stamp) {
++      const geom = pageGeom(origIdx)
++      const disp = geomDispSize(geom)
++      const w = pick.width / STAMP_PX_PER_PT
++      const h = pick.height / STAMP_PX_PER_PT
++      const left = Math.min(Math.max(vx - w / 2, 0), Math.max(disp.width - w, 0))
++      const top = Math.min(Math.max(vy - h / 2, 0), Math.max(disp.height - h, 0))
++      commitPlacedImage(origIdx, pick.image, pdfRectFromView(geom, left, top, w, h), null, true)
++      return
++    }
+     if (fill === 'check' || fill === 'cross') {
+       void placeFormMark(fill, pick, origIdx, vx, vy)
+       return
+@@ -5439,6 +5476,7 @@ export default function App() {
+     image: string,
+     rect: [number, number, number, number],
+     fill: StaticFormFillKind | null,
++    above = false,
+   ) => {
+     const id = newId()
+     const staticFill: StaticFormFillRecord | undefined = fill
+@@ -5466,7 +5504,7 @@ export default function App() {
+           pageIndex: origIdx,
+           image,
+           rect,
+-          layer: fill ? 'aboveText' : 'belowText',
++          layer: fill || above ? 'aboveText' : 'belowText',
+           rotate: ((pageGeom(origIdx).rot % 360) + 360) % 360,
+         },
+         staticFill,
+@@ -6557,6 +6595,11 @@ export default function App() {
+ 
+   const reduceFileSize = async (): Promise<void> => {
+     if (!filePath) return
++    if (KERTAS_HOST) {
++      // Kertas's own Compress: pictures resized and re-saved at the level picked
++      await flushThen(async () => window.pdfApi.kertasCompress(filePath))
++      return
++    }
+     const outcome = await window.pdfApi.reduceFileSize(filePath)
+     if (!outcome.ok) {
+       if (!('canceled' in outcome)) showNotice(outcome.reason)
+@@ -6569,6 +6612,46 @@ export default function App() {
+     showNotice(savedPct > 0 ? t('reduceDone', { pct: savedPct }) : t('reduceAlreadySmall'))
+   }
+ 
++  /** Kertas Office: a copy of the page right after it */
++  const duplicatePage = (origIdx: number) => {
++    const pageIndex = visListOf(orderRef.current).indexOf(origIdx)
++    if (pageIndex < 0) return
++    return flushThen(async () => {
++      const before = await readFileBytes(window.pdfApi, filePath)
++      const result = await window.pdfApi.kertasDuplicatePage(filePath, pageIndex)
++      if (!result.ok) {
++        opFailed(result.error)
++        return
++      }
++      if (!('canceled' in result)) await reloadWritten(before)
++    })
++  }
++
++  /** Kertas Office: the form's values become part of the page, the fields go */
++  const flattenForm = () =>
++    flushThen(async () => {
++      const before = await readFileBytes(window.pdfApi, filePath)
++      const result = await window.pdfApi.kertasFlatten(filePath)
++      if (!result.ok) {
++        opFailed(result.error)
++        return
++      }
++      if (!('canceled' in result)) await reloadWritten(before)
++    })
++
++  /** Kertas Office: which layers are shown becomes how the file opens */
++  const keepLayerDefaults = (hidden: string[]) =>
++    flushThen(async () => {
++      const before = await readFileBytes(window.pdfApi, filePath)
++      const result = await window.pdfApi.kertasLayerDefaults(filePath, hidden)
++      if (!result.ok) {
++        opFailed(result.error)
++        return
++      }
++      await reloadWritten(before)
++      showNotice('Saved: the file now opens with these layers')
++    })
++
+   const insertPdf = (afterOrigIdx: number) => {
+     // the flush bakes the visible order into the file, so the anchor becomes its visible position
+     const afterPageIndex = visListOf(orderRef.current).indexOf(afterOrigIdx)
+@@ -7640,7 +7723,12 @@ export default function App() {
+     if (convertBusy) return
+     setConvertBusy(true)
+     try {
+-      await window.pdfApi.convertOffice(format)
++      // Kertas converts the file on disk: pending edits, and recognised text, are saved first
++      if (KERTAS_HOST) {
++        if (!dirty && ocrBakeInserts.length > 0) await save(false, true)
++        await flushThen(() => window.pdfApi.convertOffice(format))
++      }
++      else await window.pdfApi.convertOffice(format)
+     } catch {
+       // No shell conversion flow in standalone mode; shell-side errors show their own dialogs
+     } finally {
+@@ -8026,6 +8114,23 @@ export default function App() {
+           </span>
+           <span>{t('attachments')}</span>
+         </button>
++        {KERTAS_HOST && (
++          <button
++            className={`rb-big${sidebar === 'layers' ? ' active' : ''}`}
++            disabled={status !== 'ready'}
++            data-tip="Layers: show or hide parts of the page"
++            onClick={() => setSidebar((v) => (v === 'layers' ? null : 'layers'))}
++          >
++            <span className="rb-big-icon">
++              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
++                <path d="M12 3 2.5 8 12 13l9.5-5z" />
++                <path d="m2.5 12.5 9.5 5 9.5-5" />
++                <path d="m2.5 16.5 9.5 5 9.5-5" />
++              </svg>
++            </span>
++            <span>Layers</span>
++          </button>
++        )}
+         {searchBtn}
+         <button
+           className={`rb-big${spread === 2 ? ' active' : ''}`}
+@@ -8142,7 +8247,8 @@ export default function App() {
          <div className="ribbon-body" data-ribbon-body="">
            {ribbonTab === 'home' && (
              <>
@@ -3941,7 +4344,7 @@ index 32f6de1..8040f11 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8190,6 +8192,8 @@ export default function App() {
+@@ -8190,6 +8296,8 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -3950,7 +4353,7 @@ index 32f6de1..8040f11 100644
                {markupGroup}
                <div className="ribbon-sep" />
                {/* Edit entries lead; Search moved after page/zoom (⌘F is the common path) */}
-@@ -8221,11 +8225,15 @@ export default function App() {
+@@ -8221,11 +8329,15 @@ export default function App() {
                          <button onClick={() => void convertTo('xlsx')}>
                            {t('convertToExcel')}
                          </button>
@@ -3966,7 +4369,7 @@ index 32f6de1..8040f11 100644
                          <div className="rb-menu-sep" />
                          <button
                            title={t('exportImagesAll')}
-@@ -8283,6 +8291,8 @@ export default function App() {
+@@ -8283,6 +8395,8 @@ export default function App() {
            )}
            {ribbonTab === 'annotate' && (
              <>
@@ -3975,7 +4378,7 @@ index 32f6de1..8040f11 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8313,6 +8323,8 @@ export default function App() {
+@@ -8313,6 +8427,8 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -3984,7 +4387,21 @@ index 32f6de1..8040f11 100644
                {markupGroup}
                <div className="ribbon-sep" />
                <div className="ribbon-group">
-@@ -8566,6 +8578,7 @@ export default function App() {
+@@ -8346,6 +8462,13 @@ export default function App() {
+                       <span>{t(key)}</span>
+                     </button>
+                   ))}
++                  {KERTAS_HOST && (
++                    <StampButton
++                      active={!!imagePick && stampPlacing}
++                      disabled={readOnly}
++                      onPick={pickStamp}
++                    />
++                  )}
+                   <button
+                     className={`rb-big${drawTool === 'redact' ? ' active' : ''}`}
+                     disabled={readOnly}
+@@ -8566,6 +8689,7 @@ export default function App() {
              <>
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
@@ -3992,7 +4409,7 @@ index 32f6de1..8040f11 100644
                    <button
                      className="rb-big ai-entry"
                      disabled={readOnly}
-@@ -8577,6 +8590,7 @@ export default function App() {
+@@ -8577,6 +8701,7 @@ export default function App() {
                      </span>
                      <span>{t('aiFillFormBtn')}</span>
                    </button>
@@ -4000,7 +4417,62 @@ index 32f6de1..8040f11 100644
                    <button
                      className={`rb-big${pendingStaticFill === 'text' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -9085,6 +9099,7 @@ export default function App() {
+@@ -8697,6 +8822,23 @@ export default function App() {
+                     </span>
+                     <span>{t('formComplete')}</span>
+                   </button>
++                  {KERTAS_HOST && (
++                    <button
++                      className="rb-big"
++                      disabled={readOnly}
++                      data-tip="Flatten: lock the filled-in values into the page"
++                      onClick={() => void flattenForm()}
++                    >
++                      <span className="rb-big-icon">
++                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
++                          <path d="M4 8l8-4 8 4-8 4z" />
++                          <path d="M4 12l8 4 8-4" />
++                          <path d="M4 16l8 4 8-4" />
++                        </svg>
++                      </span>
++                      <span>Flatten</span>
++                    </button>
++                  )}
+                 </div>
+               </div>
+             </>
+@@ -8945,6 +9087,22 @@ export default function App() {
+                     </span>
+                     <span>{t('insertBlankPage')}</span>
+                   </button>
++                  {KERTAS_HOST && (
++                    <button
++                      className="rb-big"
++                      disabled={readOnly || pageCount === 0}
++                      data-tip="Duplicate page: a copy right after the current page"
++                      onClick={() => void duplicatePage(curOrigIdx)}
++                    >
++                      <span className="rb-big-icon">
++                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" aria-hidden="true">
++                          <rect x="8" y="7" width="11" height="14" rx="1.5" />
++                          <path d="M5 17V4.5A1.5 1.5 0 0 1 6.5 3H15" />
++                        </svg>
++                      </span>
++                      <span>Duplicate page</span>
++                    </button>
++                  )}
+                   <button
+                     className="rb-big"
+                     disabled={readOnly || pageCount === 0}
+@@ -9063,6 +9221,7 @@ export default function App() {
+                     </span>
+                     <span>{t('ocrRecognize')}</span>
+                   </button>
++                  {KERTAS_HOST && <OcrLanguages disabled={status !== 'ready' || ocrRunning} />}
+                 </div>
+               </div>
+               <div className="ribbon-sep" />
+@@ -9085,6 +9244,7 @@ export default function App() {
        <div className="app-main">
          {/* dock wrapper animates the width between panel and rail (docs-style 180ms ease);
                the panel stays mounted while collapsed so the chat history survives */}
@@ -4008,7 +4480,7 @@ index 32f6de1..8040f11 100644
          <div
            className={`ai-dock${aiCollapsed ? ' collapsed' : ''}${
              !aiSidebarEnabled && aiCollapsed ? ' ai-dock-off' : ''
-@@ -9109,6 +9124,7 @@ export default function App() {
+@@ -9109,6 +9269,7 @@ export default function App() {
              onClearSelection={() => setAiSelection(null)}
            />
          </div>
@@ -4016,7 +4488,53 @@ index 32f6de1..8040f11 100644
          <div className="app-content">
            {digitalSignatures.length > 0 && (
              <div className={`pdf-sig-banner ${overallSignatureStatus(digitalSignatures)}`}>
-@@ -10821,7 +10837,7 @@ export default function App() {
+@@ -9258,6 +9419,22 @@ export default function App() {
+                 />
+               </div>
+             )}
++            {sidebar === 'layers' && (
++              <div className="pdf-thumbs" style={{ width: sidebarW }}>
++                <div className="pdf-outline-header">
++                  <span>Layers</span>
++                  <button
++                    type="button"
++                    className="rb-icon"
++                    aria-label={t('aiCollapsePanel')}
++                    onClick={() => setSidebar(null)}
++                  >
++                    ×
++                  </button>
++                </div>
++                <LayersPanel doc={doc} readOnly={readOnly} onKeep={(hidden) => void keepLayerDefaults(hidden)} />
++              </div>
++            )}
+             {sidebar === 'attachments' && (
+               <div className="pdf-thumbs" style={{ width: sidebarW }}>
+                 <div className="pdf-outline-header">
+@@ -9620,7 +9797,13 @@ export default function App() {
+                                 pendingStaticFill ? t('formPlaceStaticHint') : t('imagePlaceHint')
+                               }
+                               onPlace={(vx, vy) => placeImage(origIdx, vx, vy)}
+-                              placeK={pendingStaticFill ? staticFormFillPlaceK : imagePlaceK}
++                              placeK={
++                                stampPlacing
++                                  ? () => 1 / STAMP_PX_PER_PT
++                                  : pendingStaticFill
++                                    ? staticFormFillPlaceK
++                                    : imagePlaceK
++                              }
+                             />
+                           )}
+                           {/* Paragraph boxes (WPS-style): every text block outlined while
+@@ -10617,6 +10800,7 @@ export default function App() {
+                                       labels={{
+                                         required: t('formDesignRequired'),
+                                         multiLine: t('formDesignMultiLine'),
++                                        ...(KERTAS_HOST ? { listBox: 'Show as a list box' } : {}),
+                                         defaultValue: t('formDesignDefaultValue'),
+                                         defaultChecked: t('formDesignDefaultChecked'),
+                                         remove: t('formDesignDelete'),
+@@ -10821,7 +11005,7 @@ export default function App() {
                  </button>
                </div>
              )}
@@ -4025,7 +4543,7 @@ index 32f6de1..8040f11 100644
                <div
                  className="pdf-sel-popup"
                  style={{ left: selPopup.x, top: selPopup.y }}
-@@ -10895,9 +10911,10 @@ export default function App() {
+@@ -10895,9 +11079,10 @@ export default function App() {
                      >
                        <span className="sel-swatch sel-swatch-st">S</span>
                      </button>
@@ -4037,7 +4555,7 @@ index 32f6de1..8040f11 100644
                  <button
                    type="button"
                    className="pdf-sel-ask"
-@@ -10913,9 +10930,10 @@ export default function App() {
+@@ -10913,9 +11098,10 @@ export default function App() {
                    </svg>
                    {t('aiAskBtn')}
                  </button>
@@ -4049,6 +4567,124 @@ index 32f6de1..8040f11 100644
                <AiAskPopover
                  rect={askPop.rect}
                  excerpt={askPop.excerpt}
+@@ -11170,6 +11356,16 @@ export default function App() {
+                 >
+                   {t('insertBlankPage')}
+                 </button>
++                {KERTAS_HOST && !menuInGap && menuOrig >= 0 && (
++                  <button
++                    onClick={() => {
++                      setThumbMenu(null)
++                      void duplicatePage(menuOrig)
++                    }}
++                  >
++                    Duplicate page
++                  </button>
++                )}
+               </div>
+             )}
+             {formMenu && (
+diff --git a/apps/pdf/src/renderer/FormDesignLayer.tsx b/apps/pdf/src/renderer/FormDesignLayer.tsx
+index b1ecf16..9670c71 100644
+--- a/apps/pdf/src/renderer/FormDesignLayer.tsx
++++ b/apps/pdf/src/renderer/FormDesignLayer.tsx
+@@ -553,6 +553,7 @@ function PreviewControl({ field, style }: { field: DesignField; style: Box }): R
+ export interface FormFieldPropsLabels {
+   required: string
+   multiLine: string
++  listBox?: string
+   defaultValue: string
+   defaultChecked: string
+   remove: string
+@@ -648,6 +649,16 @@ export function FormFieldProps({
+           />
+         </label>
+       )}
++      {input?.kind === 'choice' && labels.listBox && (
++        <label className="pdf-formdesign-check">
++          <input
++            type="checkbox"
++            checked={!!input.listBox}
++            onChange={(e) => onPatch({ listBox: e.target.checked })}
++          />
++          <span>{labels.listBox}</span>
++        </label>
++      )}
+       {input?.kind === 'choice' && (
+         <label>
+           <span>{labels.defaultValue}</span>
+diff --git a/apps/pdf/src/renderer/PdfPage.tsx b/apps/pdf/src/renderer/PdfPage.tsx
+index 785be7f..8df11c8 100644
+--- a/apps/pdf/src/renderer/PdfPage.tsx
++++ b/apps/pdf/src/renderer/PdfPage.tsx
+@@ -1,5 +1,6 @@
+ import { useEffect, useRef, useState } from 'react'
+ import type { CSSProperties, RefObject } from 'react'
++import { layerConfig, useLayerRev } from './kertas/layers'
+ import { AnnotationMode, TextLayer } from 'pdfjs-dist/legacy/build/pdf.mjs'
+ import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
+ import { pdfRectToCss, quadToRect } from './annotations'
+@@ -90,6 +91,7 @@ export function PdfPage({
+   onRenderState: (doc: PDFDocumentProxy, pageNo: number, pending: boolean) => void
+ }) {
+   const holderRef = useRef<HTMLDivElement>(null)
++  const layerRev = useLayerRev()
+   useEffect(() => {
+     const holder = holderRef.current
+     if (!holder) return
+@@ -129,6 +131,7 @@ export function PdfPage({
+       const restoreDrawImage = context && smoothPageImageUpscaling(context)
+       try {
+         renderTask = page.render({
++          optionalContentConfigPromise: layerConfig(doc),
+           canvas,
+           viewport,
+           // FormLayer renders interactive widgets as HTML. Exclude their saved appearance
+@@ -164,7 +167,7 @@ export function PdfPage({
+       cancelled = true
+       renderTask?.cancel()
+     }
+-  }, [doc, pageNo, scale, rotationDelta, visible, onRenderState])
++  }, [doc, pageNo, scale, rotationDelta, visible, layerRev, onRenderState])
+   return <div ref={holderRef} className="pdf-page-content" />
+ }
+ 
+diff --git a/apps/pdf/src/renderer/PdfThumb.tsx b/apps/pdf/src/renderer/PdfThumb.tsx
+index 2546271..4b2f239 100644
+--- a/apps/pdf/src/renderer/PdfThumb.tsx
++++ b/apps/pdf/src/renderer/PdfThumb.tsx
+@@ -1,5 +1,6 @@
+ import { Fragment, useEffect, useRef } from 'react'
+ import type { ReactElement } from 'react'
++import { layerConfig, useLayerRev } from './kertas/layers'
+ import type { PDFDocumentProxy } from 'pdfjs-dist'
+ import { geomDispSize, pdfRectToCss } from './annotations'
+ import type { LocalMarkup, PageGeom } from './annotations'
+@@ -53,6 +54,7 @@ export function PdfThumb({
+   rasterW: number
+ }) {
+   const canvasRef = useRef<HTMLCanvasElement>(null)
++  const layerRev = useLayerRev()
+   const renderedRef = useRef<RenderedThumb | null>(null)
+   const renderSettledRef = useRef<Promise<void>>(Promise.resolve())
+   useEffect(() => {
+@@ -91,6 +93,7 @@ export function PdfThumb({
+         canvas.width = Math.floor(viewport.width * dpr)
+         canvas.height = Math.floor(viewport.height * dpr)
+         renderTask = page.render({
++          optionalContentConfigPromise: layerConfig(doc),
+           canvas,
+           viewport,
+           transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+@@ -108,7 +111,7 @@ export function PdfThumb({
+       disposed = true
+       renderTask?.cancel()
+     }
+-  }, [doc, pageNo, rotationDelta, visible, rasterW])
++  }, [doc, pageNo, rotationDelta, visible, layerRev, rasterW])
+ 
+   // Capture the node: React may clear canvasRef before passive unmount cleanup runs.
+   useEffect(() => {
 diff --git a/apps/pdf/src/renderer/kertas.ts b/apps/pdf/src/renderer/kertas.ts
 new file mode 100644
 index 0000000..3dae050
@@ -4062,6 +4698,285 @@ index 0000000..3dae050
 +/** Kertas Office is the host: what only the original suite's other apps could
 + * open (presentations, Markdown, web pages) is not offered. */
 +export const KERTAS_HOST: boolean = true
+diff --git a/apps/pdf/src/renderer/kertas/LayersPanel.tsx b/apps/pdf/src/renderer/kertas/LayersPanel.tsx
+new file mode 100644
+index 0000000..e0e8140
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/LayersPanel.tsx
+@@ -0,0 +1,51 @@
++// Layers panel: the PDF's layers, each shown or hidden with a tick, and a way to keep the
++// current choice as how the file opens in every reader.
++import { useEffect, useState, type ReactElement } from 'react'
++import type { PDFDocumentProxy } from 'pdfjs-dist'
++import { listLayers, setLayerVisible, useLayerRev, type LayerRow } from './layers'
++
++export function LayersPanel({
++  doc,
++  readOnly,
++  onKeep,
++}: {
++  doc: PDFDocumentProxy | null
++  readOnly: boolean
++  onKeep: (hidden: string[]) => void
++}): ReactElement {
++  const rev = useLayerRev()
++  const [rows, setRows] = useState<LayerRow[] | null>(null)
++  useEffect(() => {
++    let stale = false
++    if (!doc) return
++    void listLayers(doc).then((r) => {
++      if (!stale) setRows(r)
++    })
++    return () => {
++      stale = true
++    }
++  }, [doc, rev])
++  if (!doc || rows === null) return <div className="kertas-layers-empty">Loading layers</div>
++  if (rows.length === 0) {
++    return <div className="kertas-layers-empty">This PDF has no layers. Layers keep parts of a page apart, so they can be shown or hidden on their own (plans, drawings, translations).</div>
++  }
++  return (
++    <div className="kertas-layers">
++      {rows.map((r) => (
++        <label key={r.id} className="kertas-layer-row">
++          <input type="checkbox" checked={r.visible} onChange={(e) => void setLayerVisible(doc, r.id, e.target.checked)} />
++          <span>{r.name}</span>
++        </label>
++      ))}
++      <button
++        type="button"
++        className="pdf-modal-btn kertas-layers-keep"
++        disabled={readOnly}
++        title="Saves which layers are shown into the file, so it opens this way in every reader"
++        onClick={() => onKeep(rows.filter((r) => !r.visible).map((r) => r.id))}
++      >
++        Open the file like this
++      </button>
++    </div>
++  )
++}
+diff --git a/apps/pdf/src/renderer/kertas/OcrLanguages.tsx b/apps/pdf/src/renderer/kertas/OcrLanguages.tsx
+new file mode 100644
+index 0000000..234721b
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/OcrLanguages.tsx
+@@ -0,0 +1,84 @@
++// The languages text recognition reads (Kertas Office's offline engine). Picked here, next
++// to Recognize text, remembered on this computer, and sent to the main process.
++import { useEffect, useRef, useState, type ReactElement } from 'react'
++
++export const OCR_LANGUAGES = [
++  { id: 'eng', label: 'English' },
++  { id: 'msa', label: 'Malay' },
++  { id: 'mal', label: 'Malayalam' },
++  { id: 'ara', label: 'Arabic' },
++  { id: 'hin', label: 'Hindi' },
++  { id: 'tam', label: 'Tamil' },
++  { id: 'chi_sim', label: 'Chinese (simplified)' },
++]
++const KEY = 'kertas-ocr-langs'
++
++function saved(): string[] {
++  try {
++    const v = JSON.parse(localStorage.getItem(KEY) || 'null')
++    if (Array.isArray(v) && v.length && v.every((x) => OCR_LANGUAGES.some((l) => l.id === x))) return v
++  } catch {
++    /* default */
++  }
++  return ['eng']
++}
++
++export function OcrLanguages({ disabled }: { disabled: boolean }): ReactElement {
++  const [langs, setLangs] = useState<string[]>(saved)
++  const [open, setOpen] = useState(false)
++  const wrap = useRef<HTMLDivElement>(null)
++  useEffect(() => {
++    void window.pdfApi.kertasOcrLangs(langs)
++    try {
++      localStorage.setItem(KEY, JSON.stringify(langs))
++    } catch {
++      /* private mode */
++    }
++  }, [langs])
++  useEffect(() => {
++    if (!open) return
++    const away = (e: PointerEvent): void => {
++      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
++    }
++    window.addEventListener('pointerdown', away, true)
++    return () => window.removeEventListener('pointerdown', away, true)
++  }, [open])
++  const names = OCR_LANGUAGES.filter((l) => langs.includes(l.id)).map((l) => l.label)
++  return (
++    <div ref={wrap} style={{ position: 'relative' }}>
++      <button
++        className="rb-big"
++        disabled={disabled}
++        data-tip={`Languages read in scans: ${names.join(', ')}`}
++        onClick={() => setOpen((v) => !v)}
++      >
++        <span className="rb-big-icon">
++          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
++            <circle cx="12" cy="12" r="8.5" />
++            <path d="M3.5 12h17M12 3.5c2.4 2.6 3.5 5.4 3.5 8.5s-1.1 5.9-3.5 8.5c-2.4-2.6-3.5-5.4-3.5-8.5s1.1-5.9 3.5-8.5z" />
++          </svg>
++        </span>
++        <span>{names.length === 1 ? names[0] : `${names.length} languages`}</span>
++      </button>
++      {open && (
++        <div className="rb-drop rb-menu kertas-ocr-langs">
++          {OCR_LANGUAGES.map((l) => (
++            <label key={l.id} className="kertas-layer-row">
++              <input
++                type="checkbox"
++                checked={langs.includes(l.id)}
++                onChange={(e) =>
++                  setLangs((cur) => {
++                    const next = e.target.checked ? [...cur, l.id] : cur.filter((x) => x !== l.id)
++                    return next.length ? next : cur
++                  })
++                }
++              />
++              <span>{l.label}</span>
++            </label>
++          ))}
++        </div>
++      )}
++    </div>
++  )
++}
+diff --git a/apps/pdf/src/renderer/kertas/StampButton.tsx b/apps/pdf/src/renderer/kertas/StampButton.tsx
+new file mode 100644
+index 0000000..50dd048
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/StampButton.tsx
+@@ -0,0 +1,67 @@
++// The Stamp button of the Annotate tab: a list of stamps; picking one arms placement.
++import { useEffect, useRef, useState, type ReactElement } from 'react'
++import { STAMPS, type StampKind } from './stamps'
++
++export function StampButton({
++  active,
++  disabled,
++  onPick,
++}: {
++  active: boolean
++  disabled: boolean
++  onPick: (kind: StampKind) => void
++}): ReactElement {
++  const [open, setOpen] = useState(false)
++  const wrap = useRef<HTMLDivElement>(null)
++  useEffect(() => {
++    if (!open) return
++    const away = (e: PointerEvent): void => {
++      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
++    }
++    const key = (e: KeyboardEvent): void => {
++      if (e.key === 'Escape') setOpen(false)
++    }
++    window.addEventListener('pointerdown', away, true)
++    window.addEventListener('keydown', key)
++    return () => {
++      window.removeEventListener('pointerdown', away, true)
++      window.removeEventListener('keydown', key)
++    }
++  }, [open])
++  return (
++    <div className="rb-drop-wrap" ref={wrap} style={{ position: 'relative' }}>
++      <button
++        className={`rb-big${active ? ' active' : ''}`}
++        disabled={disabled}
++        data-tip="Stamp: approved, paid, draft and more"
++        onClick={() => setOpen((v) => !v)}
++      >
++        <span className="rb-big-icon">
++          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
++            <path d="M9.5 3.5h5l-1 7h-3z" />
++            <path d="M5 13.5c0-1.6 1.3-3 3-3h8c1.7 0 3 1.4 3 3v2H5z" />
++            <path d="M5 19.5h14" />
++          </svg>
++        </span>
++        <span>Stamp</span>
++      </button>
++      {open && (
++        <div className="rb-drop rb-menu kertas-stamp-menu">
++          {STAMPS.map((s) => (
++            <button
++              key={s.id}
++              onClick={() => {
++                setOpen(false)
++                onPick(s)
++              }}
++            >
++              <span className="kertas-stamp-chip" style={{ color: s.color, borderColor: s.color }}>
++                {s.label}
++              </span>
++            </button>
++          ))}
++        </div>
++      )}
++    </div>
++  )
++}
+diff --git a/apps/pdf/src/renderer/kertas/layers.ts b/apps/pdf/src/renderer/kertas/layers.ts
+new file mode 100644
+index 0000000..a4e0a10
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/layers.ts
+@@ -0,0 +1,53 @@
++// The PDF's layers (optional content groups): which are shown is kept here, per open
++// document, and every page drawing reads it, so hiding a layer redraws the pages without it.
++import { useSyncExternalStore } from 'react'
++import type { PDFDocumentProxy } from 'pdfjs-dist'
++
++type Config = Awaited<ReturnType<PDFDocumentProxy['getOptionalContentConfig']>>
++
++const configs = new WeakMap<PDFDocumentProxy, Promise<Config>>()
++let rev = 0
++const listeners = new Set<() => void>()
++
++/** The one visibility setting of this document that every page drawing uses */
++export function layerConfig(doc: PDFDocumentProxy): Promise<Config> {
++  let p = configs.get(doc)
++  if (!p) {
++    p = doc.getOptionalContentConfig()
++    configs.set(doc, p)
++  }
++  return p
++}
++
++export interface LayerRow {
++  id: string
++  name: string
++  visible: boolean
++}
++
++export async function listLayers(doc: PDFDocumentProxy): Promise<LayerRow[]> {
++  const config = await layerConfig(doc)
++  const rows: LayerRow[] = []
++  for (const [id, group] of config) {
++    rows.push({ id, name: group.name || 'Unnamed layer', visible: group.visible })
++  }
++  return rows
++}
++
++export async function setLayerVisible(doc: PDFDocumentProxy, id: string, visible: boolean): Promise<void> {
++  const config = await layerConfig(doc)
++  config.setVisibility(id, visible)
++  rev++
++  for (const fn of listeners) fn()
++}
++
++/** Changes whenever a layer is shown or hidden; page drawings redraw on it */
++export function useLayerRev(): number {
++  return useSyncExternalStore(
++    (fn) => {
++      listeners.add(fn)
++      return () => listeners.delete(fn)
++    },
++    () => rev,
++  )
++}
 diff --git a/apps/pdf/src/renderer/kertas/no-ai/AiAskPopover.tsx b/apps/pdf/src/renderer/kertas/no-ai/AiAskPopover.tsx
 new file mode 100644
 index 0000000..ef69c84
@@ -4089,10 +5004,10 @@ index 0000000..cf5096a
 +}
 diff --git a/apps/pdf/src/renderer/kertas/skin.css b/apps/pdf/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..e854766
+index 0000000..5c68353
 --- /dev/null
 +++ b/apps/pdf/src/renderer/kertas/skin.css
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,77 @@
 +/* Kertas Office look for the PDF editor: the shared skin plus Kertas's PDF red.
 + * Loaded last so it wins. */
 +@import '../../../../kertas-skin.css';
@@ -4112,6 +5027,139 @@ index 0000000..e854766
 +  --accent-soft: #3b1420;
 +  --pdf-select: #fb7185;
 +}
++
++/* ---- Kertas additions: stamps menu, layers panel ---- */
++.kertas-stamp-menu {
++  min-width: 190px;
++}
++
++.kertas-stamp-menu button {
++  display: flex;
++  justify-content: flex-start;
++}
++
++.kertas-stamp-chip {
++  display: inline-block;
++  padding: 2px 8px;
++  border: 1.5px solid;
++  border-radius: 5px;
++  font-weight: 800;
++  font-size: 12px;
++  letter-spacing: 0.04em;
++}
++
++.kertas-layers {
++  display: flex;
++  flex-direction: column;
++  gap: 2px;
++  padding: 8px 10px;
++}
++
++.kertas-layer-row {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 6px 4px;
++  border-radius: 6px;
++  cursor: pointer;
++  font-size: 13px;
++}
++
++.kertas-layer-row:hover {
++  background: var(--hover);
++}
++
++.kertas-layers-keep {
++  margin-top: 10px;
++  align-self: flex-start;
++}
++
++.kertas-layers-empty {
++  padding: 14px 12px;
++  color: var(--text-tertiary);
++  font-size: 13px;
++  line-height: 1.45;
++}
++
++.kertas-ocr-langs {
++  min-width: 200px;
++  padding: 6px;
++}
+diff --git a/apps/pdf/src/renderer/kertas/stamps.ts b/apps/pdf/src/renderer/kertas/stamps.ts
+new file mode 100644
+index 0000000..14ef572
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/stamps.ts
+@@ -0,0 +1,69 @@
++// Rubber stamps (APPROVED, PAID, DRAFT...), as Kertas's own PDF editor has them. A stamp
++// is drawn as a picture and placed like an inserted picture: it follows the pointer, a
++// click drops it, and it can be moved, resized or deleted until the file is saved.
++import type { SignatureData } from '../../shared/ipc'
++
++export interface StampKind {
++  id: string
++  label: string
++  color: string
++}
++
++export const STAMPS: StampKind[] = [
++  { id: 'approved', label: 'APPROVED', color: '#16a34a' },
++  { id: 'rejected', label: 'REJECTED', color: '#dc2626' },
++  { id: 'paid', label: 'PAID', color: '#16a34a' },
++  { id: 'received', label: 'RECEIVED', color: '#2563eb' },
++  { id: 'draft', label: 'DRAFT', color: '#2563eb' },
++  { id: 'confidential', label: 'CONFIDENTIAL', color: '#dc2626' },
++  { id: 'for-review', label: 'FOR REVIEW', color: '#d97706' },
++  { id: 'final', label: 'FINAL', color: '#7c3aed' },
++  { id: 'copy', label: 'COPY', color: '#475569' },
++]
++
++/** Drawn at this many pixels per PDF point, so the stamp stays sharp when printed */
++export const STAMP_PX_PER_PT = 4
++
++const FONT = "'Inter Variable', 'Segoe UI', Arial, sans-serif"
++
++/** The stamp as a PNG: the label in bold capitals inside a rounded frame, with who
++ *  stamped it and when on a second line */
++export function renderStamp(kind: StampKind, by: string, when = new Date()): Extract<SignatureData, { kind: 'image' }> {
++  const k = STAMP_PX_PER_PT
++  const labelPx = 18 * k
++  const subPx = 7 * k
++  const date = when.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
++  const sub = by ? `${by}, ${date}` : date
++  const probe = document.createElement('canvas').getContext('2d')!
++  probe.font = `800 ${labelPx}px ${FONT}`
++  const labelW = probe.measureText(kind.label).width
++  probe.font = `600 ${subPx}px ${FONT}`
++  const subW = probe.measureText(sub).width
++  const padX = 9 * k
++  const padY = 5 * k
++  const border = 2.2 * k
++  const width = Math.ceil(Math.max(labelW, subW) + padX * 2)
++  const height = Math.ceil(labelPx + subPx + padY * 2 + 2 * k)
++  const canvas = document.createElement('canvas')
++  canvas.width = width
++  canvas.height = height
++  const ctx = canvas.getContext('2d')!
++  ctx.strokeStyle = kind.color
++  ctx.fillStyle = kind.color
++  ctx.lineWidth = border
++  const r = 5 * k
++  const h = border / 2
++  ctx.beginPath()
++  ctx.roundRect(h, h, width - border, height - border, r)
++  ctx.globalAlpha = 0.07
++  ctx.fill()
++  ctx.globalAlpha = 0.95
++  ctx.stroke()
++  ctx.textAlign = 'center'
++  ctx.textBaseline = 'alphabetic'
++  ctx.font = `800 ${labelPx}px ${FONT}`
++  ctx.fillText(kind.label, width / 2, padY + labelPx * 0.86)
++  ctx.font = `600 ${subPx}px ${FONT}`
++  ctx.fillText(sub, width / 2, height - padY - subPx * 0.2)
++  return { kind: 'image', image: canvas.toDataURL('image/png').split(',')[1] ?? '', width, height }
++}
 diff --git a/apps/pdf/src/renderer/main.tsx b/apps/pdf/src/renderer/main.tsx
 index 3188d6c..2d675fb 100644
 --- a/apps/pdf/src/renderer/main.tsx
@@ -4124,6 +5172,41 @@ index 3188d6c..2d675fb 100644
  import { applyAiPanelPrefs, installScreenTips } from '@genoffice/ui'
  
  installScreenTips()
+diff --git a/apps/pdf/src/shared/ipc.ts b/apps/pdf/src/shared/ipc.ts
+index bab2848..0cf6645 100644
+--- a/apps/pdf/src/shared/ipc.ts
++++ b/apps/pdf/src/shared/ipc.ts
+@@ -702,6 +702,9 @@ export interface FormValueInput {
+   checked?: boolean
+ }
+ 
++/** Result of Kertas Office's own page and form operations */
++export type KertasOpResult = { ok: true } | { ok: true; canceled: true } | { ok: false; error: string }
++
+ export type FormFieldKind = 'text' | 'checkbox' | 'radio' | 'choice' | 'signature'
+ 
+ /** A new AcroForm field authored in Form Design; becomes a real widget on save. PDF user space, y up. */
+@@ -713,6 +716,8 @@ export interface FormFieldInput {
+   required?: boolean
+   /** text only */
+   multiLine?: boolean
++  /** A choice field shown as a list box instead of a drop-down (Kertas Office) */
++  listBox?: boolean
+   /** text only; 0 or absent = no limit */
+   maxLen?: number
+   /** text only; absent = auto size */
+@@ -1179,6 +1184,11 @@ export interface PdfApi {
+   extractPages(request: ExtractPagesRequest): Promise<ExtractPagesResult>
+   insertPdf(request: InsertPdfRequest): Promise<InsertPdfResult>
+   insertBlankPage(request: InsertBlankPageRequest): Promise<InsertBlankPageResult>
++  kertasDuplicatePage(path: string, pageIndex: number): Promise<KertasOpResult>
++  kertasFlatten(path: string): Promise<KertasOpResult>
++  kertasLayerDefaults(path: string, hidden: string[]): Promise<KertasOpResult>
++  kertasCompress(path: string): Promise<void>
++  kertasOcrLangs(langs: string[]): Promise<void>
+   splitPdf(request: SplitPdfRequest): Promise<SplitPdfResult>
+   mergePdf(request: MergePdfRequest): Promise<MergePdfResult>
+   mergePages(request: MergePagesRequest): Promise<MergePagesResult>
 diff --git a/apps/sheets/kertas.vite.config.ts b/apps/sheets/kertas.vite.config.ts
 new file mode 100644
 index 0000000..468a656

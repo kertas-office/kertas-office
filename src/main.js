@@ -260,6 +260,64 @@ async function openNativeWriter({ kind = 'writer', name, path = null, result = n
 }
 
 if (isDesktop && window.kertasNative?.newWriter) window.kertasNative.newWriter('author', userName()).catch(() => {});
+// Text recognition for the new PDF editor, with Kertas's offline engine, in the languages
+// picked next to its Recognize text button.
+async function ocrForEditor(req, png, langs) {
+  let lines = [];
+  try {
+    const { recogniseLines } = await import('./lib/ocr.js');
+    const { OCR_LANGUAGES } = await import('./lib/ocr.js');
+    langs = (Array.isArray(langs) ? langs : []).filter((l) => OCR_LANGUAGES.some((o) => o.id === l));
+    if (!langs.length) langs = ['eng'];
+    const img = new Image();
+    img.src = `data:image/png;base64,${png}`;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    lines = await recogniseLines(canvas, langs);
+    canvas.width = 0; canvas.height = 0;
+  } catch (e) { console.error('Text recognition failed', e); }
+  window.kertasNative.newWriter('ocr-result', { req, lines }).catch(() => {});
+}
+
+// Compress for the new PDF editor: Kertas's own, with its picture levels. A smaller copy
+// is saved; the open document is not changed.
+async function compressPdfFile(path) {
+  const mb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+  let bytes;
+  try { bytes = new Uint8Array((await readPath(path)).data); } catch (e) { toast(`Could not read the PDF: ${e.message}`, true); return; }
+  const res = await formDialog({
+    title: 'Compress PDF',
+    description: 'Saves a smaller copy. Pictures are resized and re-saved; text and drawings stay sharp. This document is not changed.',
+    fields: [
+      { id: 'level', type: 'segmented', label: 'Pictures', value: 'balanced', options: [
+        { value: 'strong', label: 'Smallest file' }, { value: 'balanced', label: 'Balanced' }, { value: 'light', label: 'Best quality' }, { value: 'none', label: 'Unchanged' },
+      ] },
+      { id: 'info', type: 'info', label: `This file is ${mb(bytes.length)} now.` },
+    ],
+    actions: [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'Compress and save', primary: true }],
+  });
+  if (!res || res.action !== 'ok') return;
+  setStatus('Compressing...');
+  try {
+    const [{ buildPdf }, { recodeImage }, { PDFDocument }] = await Promise.all([import('./lib/pdf-ops.js'), import('./lib/pdf-recode.js'), import('@cantoo/pdf-lib')]);
+    const count = (await PDFDocument.load(bytes, { updateMetadata: false, ignoreEncryption: true })).getPageCount();
+    const pages = Array.from({ length: count }, (_, index) => ({ src: 'a', index }));
+    const level = res.values.level === 'none' ? null : res.values.level;
+    const data = await buildPdf({ a: bytes }, pages, { compress: { images: level, recodeImage } });
+    const base = path.split(/[\\/]/).pop().replace(/\.pdf$/i, '');
+    const out = await saveFile({ data, name: `${base} (compressed).pdf`, kind: 'pdf', saveAs: true });
+    if (out) {
+      const pct = Math.round((1 - data.length / bytes.length) * 100);
+      toast(pct > 0 ? `Saved ${out.name}: ${mb(bytes.length)} to ${mb(data.length)}, ${pct}% smaller` : `Saved ${out.name} (${mb(data.length)}). This PDF was already compact.`);
+    }
+  } catch (e) {
+    toast(`Could not compress: ${e.message}`, true);
+  }
+  setStatus(active()?.path || '');
+}
+
 onNative('new-writer', (ev) => {
   const tab = ev.id ? tabs.get(ev.id) : null;
   if (ev.type === 'title' && tab && ev.title && !/^Kertas Writer$/.test(ev.title)) { tab.name = ev.title; updateTab(tab); }
@@ -271,6 +329,8 @@ onNative('new-writer', (ev) => {
   } else if (ev.type === 'convert-progress') setStatus(`Converting to ${ev.format === 'xlsx' ? 'a workbook' : 'Word, keeping the layout'}: page ${ev.page} of ${ev.total}`);
   else if (ev.type === 'convert-done') setStatus(active()?.path || '');
   else if (ev.type === 'error') toast(ev.message);
+  else if (ev.type === 'compress' && ev.path) compressPdfFile(ev.path);
+  else if (ev.type === 'ocr') ocrForEditor(ev.req, ev.png, ev.langs);
   else if (ev.type === 'open-path') openPath(ev.path);
   else if (ev.type === 'new') newDocument();
   else if (ev.type === 'result') openTab('writer', { result: ev.token });

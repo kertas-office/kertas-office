@@ -3,6 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFDocument } from '@cantoo/pdf-lib';
 import { buildPdf, listFormFields, imagesToPdf } from '../lib/pdf-ops.js';
+import { recodeImage } from '../lib/pdf-recode.js';
 import { openFiles, saveMany, saveFile, saveAnyFile, newWriterOn } from '../lib/platform.js';
 import { extractPages as extractTextPages, pdfToDocx, pdfToSnapshot, fontInfo, textLooksGarbled } from '../lib/pdf-convert.js';
 import { compareText, buildReport } from '../lib/pdf-compare.js';
@@ -913,30 +914,6 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
 
   // ---------------------------------------------------------------- compress
   const mb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
-  async function recodeImage({ data, kind, width, height, channels, maxSide, quality }) {
-    const s = Math.min(1, maxSide / Math.max(width, height));
-    const w = Math.max(1, Math.round(width * s)); const h = Math.max(1, Math.round(height * s));
-    let source;
-    if (kind === 'jpeg') source = await createImageBitmap(new Blob([data], { type: 'image/jpeg' }));
-    else {
-      const rgba = new Uint8ClampedArray(width * height * 4);
-      for (let i = 0, j = 0; i < width * height; i++, j += channels) {
-        const r = data[j]; const g = channels === 3 ? data[j + 1] : r; const b = channels === 3 ? data[j + 2] : r;
-        rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 255;
-      }
-      source = document.createElement('canvas');
-      source.width = width; source.height = height;
-      source.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
-    }
-    const c = document.createElement('canvas');
-    c.width = w; c.height = h;
-    const ctx = c.getContext('2d');
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(source, 0, 0, w, h);
-    source.close?.();
-    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', quality));
-    return blob ? { bytes: new Uint8Array(await blob.arrayBuffer()), width: w, height: h } : null;
-  }
   async function compressCopy() {
     const before = sources[main.id]?.bytes?.length || 0;
     const res = await openDialog({

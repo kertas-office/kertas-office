@@ -10,6 +10,8 @@ const fs = require('fs');
 const ROOT = path.join(__dirname, 'writer2');
 const MAIN = path.join(ROOT, 'main', 'index.cjs');
 const available = fs.existsSync(MAIN);
+// the engine files the PDF editor loads (PDFium, and HarfBuzz for fonts in edited text)
+process.env.KERTAS_WASM_DIR = path.join(ROOT, 'wasm');
 
 let host = null;
 const windows = new Set(); // webContents ids of the editor's windows
@@ -117,6 +119,23 @@ function startSheetsAndPdf() {
     host.setPdfRenamedHook((wc, _from, to) => { const id = tabOf(wc.id); const t = tabs.get(id); if (t) { t.path = to; tell('path', id, { path: to }); } });
     // The PDF editor's Convert menu. The file as it is on disk is converted, in the
     // background process; a Word result opens as a document, a workbook is saved first.
+    // Recognising text on scanned pages is Kertas's own as well (tesseract, offline, on every
+    // system): each page picture goes to the Kertas page and its lines come back
+    const asks = new Map();
+    let askSeq = 0;
+    host.setKertasOcr((png, langs) => new Promise((resolve) => {
+      const req = ++askSeq;
+      const timer = setTimeout(() => { asks.delete(req); resolve([]); }, 3 * 60 * 1000);
+      asks.set(req, (lines) => { clearTimeout(timer); asks.delete(req); resolve(Array.isArray(lines) ? lines : []); });
+      tell('ocr', null, { req, png, langs });
+    }));
+    ocrAnswer = (req, lines) => asks.get(req)?.(lines);
+    // Compress is Kertas's own (picture levels), run by the Kertas page on the tab's file
+    ipcMain.handle('pdf:kertas-compress', (e) => {
+      const id = tabOf(e.sender.id);
+      const t = tabs.get(id);
+      if (t && t.kind === 'pdf' && t.path) tell('compress', id, { path: t.path });
+    });
     let converting = false;
     ipcMain.handle('pdf:convert-office', async (e, format) => {
       const t = tabs.get(tabOf(e.sender.id));
@@ -176,6 +195,7 @@ function serveDictionaries() {
 // Each new-Writer tab is a view of its own, laid over the tab's pane in the Kertas
 // window. Kertas's page says where the pane is and when it shows; the view follows.
 let mainWin = null;
+let ocrAnswer = () => {};
 const tabs = new Map(); // tab id -> { view, wcId, rect }
 const results = new Map(); // token -> bytes of a document made here, waiting for its tab
 let resultSeq = 0;
@@ -308,4 +328,5 @@ function convertPdfForTab(data, format = 'docx') {
   });
 }
 
-module.exports = { available, has, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };
+const ocrResult = (arg) => ocrAnswer(Number(arg && arg.req), arg && arg.lines);
+module.exports = { available, has, ocrResult, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };

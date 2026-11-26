@@ -279,3 +279,144 @@ test('Kertas\'s dark mode reaches both editors', pdfOpts, async () => {
   await k.locator('#theme-toggle, [data-action="theme"], button[title*="theme" i], button[title*="dark" i], button[title*="light" i]').first().click();
   await sleep(500);
 });
+
+// ------------------------------------------------- what Kertas's PDF editor had, added here
+
+test('Duplicate page puts a copy of the page right after it, in the file', pdfOpts, async () => {
+  await open('sample.pdf', 'pdf');
+  await pdfTab('Pages');
+  await w.getByText('Duplicate page', { exact: true }).click();
+  for (let i = 0; i < 40; i++) { if ((await PDFDocument.load(await readFile(file))).getPageCount() === 4) break; await sleep(250); }
+  const doc = await PDFDocument.load(await readFile(file));
+  assert.equal(doc.getPageCount(), 4);
+  assert.deepEqual(w.errors, []);
+});
+
+test('a stamp is placed where clicked and saved into the page', pdfOpts, async () => {
+  await open('sample.pdf', 'pdf');
+  const xobjects = async () => {
+    const doc = await PDFDocument.load(await readFile(file));
+    const res = doc.getPage(0).node.Resources();
+    const xo = res?.lookup((await import('@cantoo/pdf-lib')).PDFName.of('XObject'));
+    return xo ? xo.keys().length : 0;
+  };
+  const had = await xobjects();
+  await pdfTab('Annotate');
+  await w.getByText('Stamp', { exact: true }).click();
+  await w.locator('.kertas-stamp-menu button', { hasText: 'APPROVED' }).click();
+  await sleep(300);
+  const page = w.locator('.pdf-page').first();
+  const box = await page.boundingBox();
+  await w.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.2);
+  await sleep(200);
+  await w.mouse.click(box.x + box.width * 0.7, box.y + box.height * 0.2);
+  await sleep(800);
+  await press('pdf', 'S');
+  await sleep(4000);
+  assert.ok(await xobjects() > had, 'the page holds one more picture');
+  assert.deepEqual(w.errors, []);
+});
+
+test('Flatten locks the form values into the page and removes the fields', pdfOpts, async () => {
+  await open('form.pdf', 'pdf');
+  assert.ok((await PDFDocument.load(await readFile(file))).getForm().getFields().length > 0);
+  await pdfTab('Fill Form');
+  await w.getByText('Flatten', { exact: true }).click();
+  for (let i = 0; i < 40; i++) { if ((await PDFDocument.load(await readFile(file))).getForm().getFields().length === 0) break; await sleep(250); }
+  assert.equal((await PDFDocument.load(await readFile(file))).getForm().getFields().length, 0);
+});
+
+test('the Layers panel lists the layers, hides one, and keeps the choice in the file', pdfOpts, async () => {
+  await open('layered.pdf', 'pdf');
+  await pdfTab('View');
+  await w.getByText('Layers', { exact: true }).first().click();
+  await sleep(600);
+  const rows = w.locator('.kertas-layer-row');
+  assert.equal(await rows.count(), 4);
+  const first = rows.first().locator('input');
+  assert.equal(await first.isChecked(), true);
+  await first.uncheck();
+  await sleep(500);
+  assert.equal(await first.isChecked(), false);
+  await w.getByText('Open the file like this', { exact: true }).click();
+  await sleep(3000);
+  const { PDFName, PDFDict, PDFArray } = await import('@cantoo/pdf-lib');
+  const doc = await PDFDocument.load(await readFile(file));
+  const d = doc.catalog.lookup(PDFName.of('OCProperties'), PDFDict).lookup(PDFName.of('D'), PDFDict);
+  assert.equal(d.lookup(PDFName.of('OFF'), PDFArray).size(), 2, 'the hidden layer joined the one that was off');
+});
+
+test('Reduce file size uses Kertas\'s Compress, with picture levels, and saves a copy', pdfOpts, async () => {
+  await open('scan.pdf', 'pdf');
+  await answerDialogs([], 'scan-small.pdf');
+  await pdfTab('Pages');
+  await w.getByText('Reduce file size', { exact: true }).click();
+  await k.waitForSelector('text=Compress PDF');
+  await k.getByText('Smallest file', { exact: true }).click();
+  await k.getByText('Compress and save', { exact: true }).click();
+  const out = path.join(dir, 'scan-small.pdf');
+  for (let i = 0; i < 80 && !existsSync(out); i++) await sleep(250);
+  assert.ok(existsSync(out), 'the copy was saved');
+  const before = (await readFile(file)).length;
+  const after = (await readFile(out)).length;
+  assert.ok(after < before, `smaller: ${before} to ${after}`);
+  assert.equal((await PDFDocument.load(await readFile(out))).getPageCount(), (await PDFDocument.load(await readFile(file))).getPageCount());
+});
+
+test('text added with Insert text is saved into the page', pdfOpts, async () => {
+  await open('sample.pdf', 'pdf');
+  await pdfTab('Edit');
+  await w.getByText('Insert text', { exact: true }).click();
+  const box = await w.locator('.pdf-page').first().boundingBox();
+  await w.mouse.click(box.x + box.width * 0.3, box.y + 330);
+  await sleep(500);
+  await w.getByPlaceholder('Enter the text to place').fill('Added in the new editor');
+  await w.getByRole('button', { name: 'OK', exact: true }).click();
+  await sleep(500);
+  // the text follows the pointer until a click places it
+  await w.mouse.move(box.x + box.width * 0.35, box.y + 420);
+  await w.mouse.click(box.x + box.width * 0.35, box.y + 420);
+  await sleep(800);
+  await sleep(1800); // Kertas sees the change
+  assert.equal(await dirtyTabs(), 1, 'the tab shows unsaved changes');
+  await press('pdf', 'S');
+  const { execFileSync } = await import('node:child_process');
+  let text = '';
+  for (let i = 0; i < 40 && !/Added in the new editor/.test(text); i++) {
+    await sleep(300);
+    try { text = execFileSync('pdftotext', [file, '-'], { encoding: 'utf8' }); } catch { text = ''; }
+  }
+  assert.match(text, /Added in the new editor/);
+});
+
+test('Recognize text reads a scanned page with Kertas\'s own engine', pdfOpts, async () => {
+  await open('scan.pdf', 'pdf');
+  await pdfTab('View');
+  await w.getByText('Recognize text', { exact: true }).click();
+  let found = false;
+  for (let i = 0; i < 240 && !found; i++) {
+    await sleep(500);
+    found = (await w.locator('.pdf-ocr-layer span').count()) > 5;
+  }
+  assert.ok(found, 'recognised words are laid over the page');
+  const words = (await w.locator('.pdf-ocr-layer').first().innerText()).trim();
+  assert.ok(words.length > 30, words.slice(0, 80));
+});
+
+test('a scanned PDF converts to Word with its recognised text', pdfOpts, async () => {
+  await open('scan.pdf', 'pdf');
+  await pdfTab('View');
+  await w.getByText('Recognize text', { exact: true }).click();
+  for (let i = 0; i < 240 && (await w.locator('.pdf-ocr-layer span').count()) < 5; i++) await sleep(500);
+  await sleep(1500);
+  await pdfTab('Home');
+  const docsBefore = editors('docs').length;
+  await w.getByText('PDF Converter', { exact: true }).click();
+  await w.getByText('PDF to Word', { exact: true }).click();
+  for (let i = 0; i < 240 && editors('docs').length === docsBefore; i++) await sleep(250);
+  const doc = editors('docs').at(-1);
+  await doc.waitForSelector('.ProseMirror');
+  await sleep(1500);
+  const text = (await doc.locator('.ProseMirror').innerText()).replace(/\s+/g, ' ').trim();
+  assert.ok(text.length > 30, `the document has the page's words: "${text.slice(0, 80)}"`);
+});

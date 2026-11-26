@@ -438,6 +438,7 @@ ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
   if (op === 'command') return writer2.command(String(arg.id), String(arg.name));
   if (op === 'stash') return writer2.stash(arg); // document bytes in, a token for a tab out
   if (op === 'author') return writer2.setAuthor(arg);
+  if (op === 'ocr-result') return writer2.ocrResult(arg); // lines read from a page picture
   if (op === 'convert-pdf') return writer2.convertPdfForTab(arg); // PDF bytes in, a token for the result out
   return false;
 });

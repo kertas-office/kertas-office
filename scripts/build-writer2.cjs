@@ -83,6 +83,7 @@ try {
   console.warn('The spreadsheet helper was not built, so the new Sheets is left out:', e.message);
 }
 fs.copyFileSync(path.join(SRC, 'node_modules', '@embedpdf', 'pdfium', 'dist', 'pdfium.wasm'), path.join(OUT, 'wasm', 'pdfium.wasm'));
+fs.copyFileSync(path.join(SRC, 'node_modules', 'harfbuzzjs', 'dist', 'harfbuzz-subset.wasm'), path.join(OUT, 'wasm', 'hb-subset.wasm'));
 // Spelling dictionaries, so the checker never has to fetch one: Electron's own set for the version
 // Kertas ships, of which the languages Kertas offers are kept (electron/writer2.cjs serves them
 // to the checker from this computer). Skipped quietly when offline; spelling then uses whatever the

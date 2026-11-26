@@ -116,3 +116,32 @@ export const OCR_MAX_SIDE = 3600;
 export function ocrScale(width, height) {
   return Math.min(300 / 72, OCR_MAX_SIDE / Math.max(width, height, 1));
 }
+
+/**
+ * Lines of text from a page picture, in the shape the new PDF editor reads: boxes as
+ * parts of the picture (0 to 1, measured from the bottom left), confidence 0 to 1, and
+ * each word's letters sharing the word's box, with a zero-width space between words.
+ */
+export async function recogniseLines(image, langs) {
+  const [w] = await ocrWorkers(langs, 1);
+  const { data } = await w.recognize(image, {}, { blocks: true, text: false });
+  const W = image.width || 1; const H = image.height || 1;
+  const box = (b) => [b.x0 / W, 1 - b.y1 / H, b.x1 / W, 1 - b.y0 / H];
+  const lines = [];
+  for (const block of data.blocks || []) {
+    for (const para of block.paragraphs || []) {
+      for (const line of para.lines || []) {
+        const words = (line.words || []).filter((wd) => (wd.text || '').trim() && wd.confidence >= 25);
+        if (!words.length) continue;
+        const chars = [];
+        words.forEach((wd, i) => {
+          const b = box(wd.bbox);
+          if (i) chars.push({ text: ' ', box: [b[0], b[1], b[0], b[3]] });
+          for (const ch of wd.text.trim()) chars.push({ text: ch, box: b });
+        });
+        lines.push({ text: words.map((wd) => wd.text.trim()).join(' '), confidence: (line.confidence || 0) / 100, box: box(line.bbox), chars });
+      }
+    }
+  }
+  return lines;
+}
