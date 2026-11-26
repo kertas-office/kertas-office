@@ -420,3 +420,17 @@ test('a scanned PDF converts to Word with its recognised text', pdfOpts, async (
   const text = (await doc.locator('.ProseMirror').innerText()).replace(/\s+/g, ' ').trim();
   assert.ok(text.length > 30, `the document has the page's words: "${text.slice(0, 80)}"`);
 });
+
+test('an older .xls workbook opens in the new Sheets when LibreOffice is not installed', sheetsOpts, async () => {
+  const hasLo = await k.evaluate(() => window.kertasNative.hasLibreOffice());
+  if (hasLo) return; // with LibreOffice, Kertas's own conversion keeps the formatting
+  await closeAll();
+  file = path.join(dir, `${++n}-legacy.xls`);
+  await copyFile(fixture('legacy.xls'), file);
+  await answerDialogs([file]);
+  const had = editors('sheets').length;
+  await k.locator('#tabs .tab').first().click();
+  await k.keyboard.press('Control+o');
+  for (let i = 0; i < 80 && editors('sheets').length === had; i++) await sleep(250);
+  assert.equal(editors('sheets').length, had + 1);
+});

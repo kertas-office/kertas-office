@@ -97,7 +97,7 @@ function updateTab(tab) {
   if (tab.id === activeId) document.title = `${tab.name}${tab.dirty ? ' *' : ''} - Kertas Office`;
 }
 
-const NEW_EDITOR_FILES = { sheets: /\.(xlsx|xlsm|csv)$/i, pdf: /\.pdf$/i };
+const NEW_EDITOR_FILES = { sheets: /\.(xlsx|xlsm|csv|xls|ods)$/i, pdf: /\.pdf$/i };
 async function openTab(kind, { name, path = null, data = null, html = null, result = null, classic = false } = {}) {
   if (path) for (const t of tabs.values()) if (t.path === path) { activate(t.id); return t; }
   // Word documents go to the new Writer when it is switched on: a file by its path, anything
@@ -450,12 +450,19 @@ async function openFileRecords(records) {
   for (const f of records) {
     const kind = kindForName(f.name);
     if (!kind) { toast(`Unsupported file: ${f.name}`, true); continue; }
+    // The new Sheets imports .xls and .ods itself (values, formulas, dates); Kertas's own
+    // conversion is kept when LibreOffice is there, since that keeps the formatting too
+    if (kind === 'sheets' && f.path && /\.(xls|ods)$/i.test(f.name) && await newEditorOn('sheets')
+      && !(window.kertasNative?.hasLibreOffice && await window.kertasNative.hasLibreOffice().catch(() => false))) {
+      opened.push(await openTab(kind, f));
+      continue;
+    }
     if (isLegacy(f.name)) {
       // Older formats are converted first, then open like any other document
       try {
         setStatus(`Converting ${f.name}...`);
         const conv = await openLegacy(f, isDesktop ? convertLegacyNative : null);
-        opened.push(await openTab(kind, { ...f, data: conv.data || null, html: conv.html || null }));
+        opened.push(await openTab(kind, { ...f, data: conv.data || null, html: conv.html || null, classic: true }));
         if (conv.note) toast(conv.note);
       } catch (e) {
         console.error(e);

@@ -410,7 +410,7 @@ async function makeDefaultApp() {
   const ok = await new Promise((resolve) => execFile('xdg-mime', ['default', desktop, ...DEFAULT_MIMES], { timeout: 15000 }, (err) => resolve(!err)));
   return { how: ok ? 'done' : 'manual' };
 }
-const NEW_EDITOR_FILES = { writer: /\.docx$/i, sheets: /\.(xlsx|xlsm|csv)$/i, pdf: /\.pdf$/i };
+const NEW_EDITOR_FILES = { writer: /\.docx$/i, sheets: /\.(xlsx|xlsm|csv|xls|ods)$/i, pdf: /\.pdf$/i };
 // The new Writer (trial): whether this build has it, and opening a document in it.
 // It reads the file itself, so the path gets the same checks as any other open.
 ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
