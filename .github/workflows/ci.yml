@@ -38,6 +38,7 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - run: sudo apt-get install -y --no-install-recommends poppler-utils
       # The new Writer (trial): its editor is fetched, patched and built here, so its tests run
       # (test/e2e/new-writer.e2e.mjs skips itself when it is not built). The checkout and its
       # installed packages are kept between runs until the patch or the script changes.
