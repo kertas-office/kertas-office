@@ -38,6 +38,13 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      # The Writer, Sheets and PDF editors (fetched at a fixed commit, patched and built), and
+      # the spreadsheet helper for each processor the installers are made for. Rust is on
+      # every hosted runner already.
+      - name: Build the editors
+        run: npm run build:writer2
+      - name: Build the spreadsheet helper
+        run: npm run build:sidecars
       # macOS notarization with an App Store Connect API key: the .p8 key is stored as a
       # base64 secret and written to a file only for this run
       - name: Prepare notarization key

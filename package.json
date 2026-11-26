@@ -1,6 +1,6 @@
 {
   "name": "kertas-office",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Free, open-source office suite: documents, spreadsheets and PDFs",
   "homepage": "https://kertasoffice.com",
   "repository": {
@@ -15,6 +15,8 @@
     "start": "vite build && electron .",
     "test": "node --test test/*.test.js",
     "e2e": "vite build && node --test --test-concurrency=1 test/e2e/*.e2e.mjs",
+    "build:writer2": "node scripts/build-writer2.cjs",
+    "build:sidecars": "node scripts/build-sidecars.cjs",
     "icons": "node scripts/make-icons.cjs",
     "site": "node website/build.mjs",
     "dist": "vite build && electron-builder --config electron-builder.config.cjs --publish never",

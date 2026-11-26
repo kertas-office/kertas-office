@@ -28,7 +28,11 @@ module.exports = {
   productName: 'Kertas Office',
   copyright: `Copyright © ${new Date().getFullYear()} Kertas Office contributors`,
   directories: { output: 'release', buildResources: 'build' },
-  files: ['dist/**', 'electron/**', 'package.json'],
+  files: ['dist/**', 'electron/**', '!electron/writer2/native/**', 'package.json'],
+  // The new Sheets starts a small helper program that reads and writes workbooks. A program
+  // cannot be started from inside the app's archive, and each installer needs the one built
+  // for its own processor: scripts/build-sidecars.cjs puts them in build/sidecar/<arch>.
+  extraResources: [{ from: 'build/sidecar/${arch}', to: 'sidecar', filter: ['xlsx-sidecar*', 'Cargo.lock'] }],
   // Renderer code is bundled by Vite into dist/, so only the main process's own
   // dependencies (electron-updater, word-extractor) are shipped as node_modules.
   asar: true,

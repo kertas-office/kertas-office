@@ -21,7 +21,8 @@ before(async () => {
   app = await _electron.launch({
     executablePath: require('electron'),
     args: [ROOT, '--no-sandbox'],
-    env: { ...process.env, XDG_CONFIG_HOME: path.join(dir, 'config'), NODE_ENV: 'production' },
+    // these tests cover the previous editors, which stay one release as the way back
+    env: { ...process.env, XDG_CONFIG_HOME: path.join(dir, 'config'), NODE_ENV: 'production', KERTAS_NEW_WRITER: '0', KERTAS_NEW_SHEETS: '0', KERTAS_NEW_PDF: '0' },
   });
   win = await app.firstWindow();
   win.setDefaultTimeout(15000);
