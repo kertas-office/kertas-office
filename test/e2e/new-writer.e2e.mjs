@@ -367,8 +367,13 @@ test('track changes: what is typed while it is on is saved as an insertion', opt
   assert.match(await w.locator('.status-bar').textContent(), /Track Changes: On/);
   await toEnd();
   await w.keyboard.type('Tracked insertion.');
+  await w.waitForFunction(() => document.querySelector('.ProseMirror')?.textContent.includes('Tracked insertion.'), null, { timeout: 10000 });
+  await sleep(500);
   await save();
-  assert.match(await xml(), /<w:ins [^>]*>[\s\S]{0,400}?Tracked insertion\./);
+  // typing can be stored as several insertions; join the text inside all of them
+  const inserted = [...(await xml()).matchAll(/<w:ins\b[^>]*>([\s\S]*?)<\/w:ins>/g)]
+    .map((m) => [...m[1].matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map((t) => t[1]).join('')).join('');
+  assert.match(inserted, /Tracked insertion\./);
 });
 
 test('header with a different first page, page numbers and a watermark', opts, async () => {
