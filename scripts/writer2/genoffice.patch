@@ -6324,10 +6324,10 @@ index 0000000..8642570
 +}
 diff --git a/apps/sheets/src/renderer/kertas/skin.css b/apps/sheets/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..a566239
+index 0000000..c6c3777
 --- /dev/null
 +++ b/apps/sheets/src/renderer/kertas/skin.css
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,32 @@
 +/* Kertas Office look for the spreadsheet editor: the shared skin plus Kertas's
 + * Sheets green. Loaded last so it wins. */
 +@import '../../../../kertas-skin.css';
@@ -6354,8 +6354,9 @@ index 0000000..a566239
 +  --surface-hover: var(--hover);
 +}
 +
-+/* the ribbon band on the same light grey as the Writer and PDF ribbons */
++/* the tab row and the ribbon band on the same light grey as the Writer and PDF ribbons */
 +.excel-header,
++.excel-header .ribbon-tabs,
 +.excel-header .ribbon {
 +  background: var(--chrome-bg);
 +}
