@@ -2719,10 +2719,10 @@ index 0000000..cc37f40
 +export function markDocSeen(): void {}
 diff --git a/apps/docs/src/renderer/kertas/skin.css b/apps/docs/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..9286c06
+index 0000000..401f799
 --- /dev/null
 +++ b/apps/docs/src/renderer/kertas/skin.css
-@@ -0,0 +1,455 @@
+@@ -0,0 +1,579 @@
 +/* Kertas Office look for the editor: Kertas's own font, colours and shapes laid
 + * over the editor's tokens. Loaded last so it wins; document content (the page,
 + * its text and pictures) is untouched. The two Inter files are copied in by
@@ -3177,6 +3177,130 @@ index 0000000..9286c06
 +.vruler-edge-handle:focus-visible {
 +  outline: 2px solid var(--accent);
 +  outline-offset: 1px;
++}
++
++/* ==== Kertas ribbon (the same in Writer, Sheets and PDF) ====
++ * Softer ink than the document text, as Kertas's own ribbon had: slate tools and labels,
++ * muted tab names, the app colour on the open tab. Every large button is the same height,
++ * with its icon in the same place and room for a two-line caption, so a row of buttons
++ * lines up whatever their captions. */
++:root {
++  --kertas-rb-ink: #475569;
++  --kertas-rb-ink-strong: #334155;
++  --kertas-rb-tab: #64748b;
++  --kertas-rb-line: #e1e6ef;
++}
++
++[data-theme='dark'] {
++  --kertas-rb-ink: #b4bdcc;
++  --kertas-rb-ink-strong: #d3d9e4;
++  --kertas-rb-tab: #8a94a8;
++  --kertas-rb-line: #283043;
++}
++
++/* the ribbon draws with the softer ink */
++.ribbon,
++.excel-header {
++  --text: var(--kertas-rb-ink);
++  --text-primary: var(--kertas-rb-ink);
++  --color-text-primary: var(--kertas-rb-ink);
++  --text-secondary: var(--kertas-rb-ink);
++  color: var(--kertas-rb-ink);
++}
++
++/* typed values (font name, size, page number) stay easy to read */
++.ribbon input,
++.ribbon select,
++.excel-header input,
++.excel-header select,
++.ribbon .rb-select,
++.excel-header .select-like {
++  color: var(--kertas-rb-ink-strong);
++}
++
++/* tab names: muted, the open one in the app's colour */
++.ribbon-tab:not(.ribbon-tab-file),
++.ribbon-tabs > button:not(.qa-btn) {
++  color: var(--kertas-rb-tab);
++  font-weight: 550;
++}
++
++.ribbon-tab:not(.ribbon-tab-file):hover,
++.ribbon-tabs > button:not(.qa-btn):hover {
++  color: var(--kertas-rb-ink-strong);
++}
++
++.ribbon-tab.active,
++.ribbon-tabs > button:not(.qa-btn).active {
++  color: var(--accent);
++  font-weight: 600;
++}
++
++/* group separators: one quiet line, the same inset everywhere */
++.ribbon-sep {
++  background: var(--kertas-rb-line);
++  margin: 6px 6px;
++}
++
++.ribbon-group::after {
++  background: var(--kertas-rb-line);
++  top: 6px;
++  bottom: 6px;
++}
++
++/* ---- large buttons: one height, icon on top, caption below ---- */
++.rb-big:not(.rb-big-split > .rb-big),
++.ribbon-tool.large {
++  justify-content: flex-start;
++  gap: 3px;
++  height: 64px;
++  padding: 3px 6px 2px;
++  min-width: 52px;
++  max-width: 96px;
++  white-space: normal;
++}
++
++.rb-big-icon,
++.ribbon-tool.large .tool-icon-row {
++  flex: none;
++  min-height: 30px;
++  height: 30px;
++  align-self: stretch;
++}
++
++/* the caption: up to two lines, always the room of two, centred */
++.rb-big:not(.rb-big-split > .rb-big) > span:not(.rb-big-icon),
++.ribbon-tool.large > span:not(.tool-icon-row),
++.ribbon-tool.large strong {
++  display: block;
++  min-height: 26px;
++  line-height: 13px;
++  font-size: 11.5px;
++  font-weight: 450;
++  text-align: center;
++  white-space: normal;
++  overflow-wrap: anywhere;
++}
++
++/* small buttons and icon buttons keep their size; only their ink softens */
++.rb-small svg,
++.rb-icon svg,
++.ribbon-tool:not(.large) svg {
++  color: var(--kertas-rb-ink);
++}
++
++/* the split Paste button: a tall icon, then its caption as the drop-down part */
++.rb-big-split {
++  height: 64px;
++  justify-content: flex-start;
++}
++
++.rb-big-split > .rb-big {
++  padding-bottom: 0;
++}
++
++.rb-big-split-caret {
++  font-size: 11.5px;
 +}
 diff --git a/apps/docs/src/renderer/kertas/slash-menu.ts b/apps/docs/src/renderer/kertas/slash-menu.ts
 new file mode 100644
@@ -3775,10 +3899,10 @@ index 0000000..d33493d
 +})
 diff --git a/apps/kertas-skin.css b/apps/kertas-skin.css
 new file mode 100644
-index 0000000..2cf0b23
+index 0000000..d279ad3
 --- /dev/null
 +++ b/apps/kertas-skin.css
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,212 @@
 +/* Kertas Office look shared by the spreadsheet and PDF editors: Kertas's font and
 + * neutral colours laid over the editors' tokens. Each editor's own skin adds its
 + * accent. Document content (cells, pages) is untouched. */
@@ -3866,6 +3990,130 @@ index 0000000..2cf0b23
 +/* Kertas's tab strip is the window's title bar; this row is not a drag area */
 +.ribbon-tabs {
 +  -webkit-app-region: no-drag;
++}
++
++/* ==== Kertas ribbon (the same in Writer, Sheets and PDF) ====
++ * Softer ink than the document text, as Kertas's own ribbon had: slate tools and labels,
++ * muted tab names, the app colour on the open tab. Every large button is the same height,
++ * with its icon in the same place and room for a two-line caption, so a row of buttons
++ * lines up whatever their captions. */
++:root {
++  --kertas-rb-ink: #475569;
++  --kertas-rb-ink-strong: #334155;
++  --kertas-rb-tab: #64748b;
++  --kertas-rb-line: #e1e6ef;
++}
++
++[data-theme='dark'] {
++  --kertas-rb-ink: #b4bdcc;
++  --kertas-rb-ink-strong: #d3d9e4;
++  --kertas-rb-tab: #8a94a8;
++  --kertas-rb-line: #283043;
++}
++
++/* the ribbon draws with the softer ink */
++.ribbon,
++.excel-header {
++  --text: var(--kertas-rb-ink);
++  --text-primary: var(--kertas-rb-ink);
++  --color-text-primary: var(--kertas-rb-ink);
++  --text-secondary: var(--kertas-rb-ink);
++  color: var(--kertas-rb-ink);
++}
++
++/* typed values (font name, size, page number) stay easy to read */
++.ribbon input,
++.ribbon select,
++.excel-header input,
++.excel-header select,
++.ribbon .rb-select,
++.excel-header .select-like {
++  color: var(--kertas-rb-ink-strong);
++}
++
++/* tab names: muted, the open one in the app's colour */
++.ribbon-tab:not(.ribbon-tab-file),
++.ribbon-tabs > button:not(.qa-btn) {
++  color: var(--kertas-rb-tab);
++  font-weight: 550;
++}
++
++.ribbon-tab:not(.ribbon-tab-file):hover,
++.ribbon-tabs > button:not(.qa-btn):hover {
++  color: var(--kertas-rb-ink-strong);
++}
++
++.ribbon-tab.active,
++.ribbon-tabs > button:not(.qa-btn).active {
++  color: var(--accent);
++  font-weight: 600;
++}
++
++/* group separators: one quiet line, the same inset everywhere */
++.ribbon-sep {
++  background: var(--kertas-rb-line);
++  margin: 6px 6px;
++}
++
++.ribbon-group::after {
++  background: var(--kertas-rb-line);
++  top: 6px;
++  bottom: 6px;
++}
++
++/* ---- large buttons: one height, icon on top, caption below ---- */
++.rb-big:not(.rb-big-split > .rb-big),
++.ribbon-tool.large {
++  justify-content: flex-start;
++  gap: 3px;
++  height: 64px;
++  padding: 3px 6px 2px;
++  min-width: 52px;
++  max-width: 96px;
++  white-space: normal;
++}
++
++.rb-big-icon,
++.ribbon-tool.large .tool-icon-row {
++  flex: none;
++  min-height: 30px;
++  height: 30px;
++  align-self: stretch;
++}
++
++/* the caption: up to two lines, always the room of two, centred */
++.rb-big:not(.rb-big-split > .rb-big) > span:not(.rb-big-icon),
++.ribbon-tool.large > span:not(.tool-icon-row),
++.ribbon-tool.large strong {
++  display: block;
++  min-height: 26px;
++  line-height: 13px;
++  font-size: 11.5px;
++  font-weight: 450;
++  text-align: center;
++  white-space: normal;
++  overflow-wrap: anywhere;
++}
++
++/* small buttons and icon buttons keep their size; only their ink softens */
++.rb-small svg,
++.rb-icon svg,
++.ribbon-tool:not(.large) svg {
++  color: var(--kertas-rb-ink);
++}
++
++/* the split Paste button: a tall icon, then its caption as the drop-down part */
++.rb-big-split {
++  height: 64px;
++  justify-content: flex-start;
++}
++
++.rb-big-split > .rb-big {
++  padding-bottom: 0;
++}
++
++.rb-big-split-caret {
++  font-size: 11.5px;
 +}
 diff --git a/apps/pdf/kertas.vite.config.ts b/apps/pdf/kertas.vite.config.ts
 new file mode 100644
@@ -5556,10 +5804,10 @@ index 0000000..cf5096a
 +}
 diff --git a/apps/pdf/src/renderer/kertas/skin.css b/apps/pdf/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..5e63a99
+index 0000000..c1f6fe8
 --- /dev/null
 +++ b/apps/pdf/src/renderer/kertas/skin.css
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,194 @@
 +/* Kertas Office look for the PDF editor: the shared skin plus Kertas's PDF red.
 + * Loaded last so it wins. */
 +@import '../../../../kertas-skin.css';
@@ -5745,6 +5993,14 @@ index 0000000..5e63a99
 +  background: var(--surface);
 +  color: var(--text);
 +  font: inherit;
++}
++
++/* a few large buttons drew their icon at 16 or 20px: matched to the look of the others */
++.rb-big-icon > svg[width='16'],
++.rb-big-icon > svg[width='20'],
++.rb-big-icon > svg[width='22'] {
++  width: 23px;
++  height: 23px;
 +}
 diff --git a/apps/pdf/src/renderer/kertas/stamps.ts b/apps/pdf/src/renderer/kertas/stamps.ts
 new file mode 100644
@@ -6068,10 +6324,10 @@ index 0000000..8642570
 +}
 diff --git a/apps/sheets/src/renderer/kertas/skin.css b/apps/sheets/src/renderer/kertas/skin.css
 new file mode 100644
-index 0000000..13e7da9
+index 0000000..a566239
 --- /dev/null
 +++ b/apps/sheets/src/renderer/kertas/skin.css
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,31 @@
 +/* Kertas Office look for the spreadsheet editor: the shared skin plus Kertas's
 + * Sheets green. Loaded last so it wins. */
 +@import '../../../../kertas-skin.css';
@@ -6096,6 +6352,12 @@ index 0000000..13e7da9
 +  --ribbon-hover: var(--hover);
 +  --ribbon-active: var(--pressed);
 +  --surface-hover: var(--hover);
++}
++
++/* the ribbon band on the same light grey as the Writer and PDF ribbons */
++.excel-header,
++.excel-header .ribbon {
++  background: var(--chrome-bg);
 +}
 diff --git a/apps/sheets/src/renderer/main.tsx b/apps/sheets/src/renderer/main.tsx
 index 66f509f..cda88d2 100644
