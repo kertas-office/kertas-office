@@ -555,7 +555,7 @@ test('the File button in Sheets and PDF opens Kertas\'s file menu, and its Save 
   await open('sample.pdf', 'pdf');
   await w.locator('.kertas-file-tab').click();
   const items = (await w.locator('.kertas-file-menu button span').allInnerTexts()).map((s) => s.trim());
-  assert.deepEqual(items, ['New document', 'New spreadsheet', 'Open...', 'Save', 'Save as...', 'Print...', 'Close tab']);
+  assert.deepEqual(items, ['New document', 'New spreadsheet', 'New presentation', 'Open...', 'Save', 'Save as...', 'Print...', 'Close tab']);
   await w.keyboard.press('Escape');
   if (!hasSheets) return;
   await open('sample.xlsx', 'sheets');

@@ -23,6 +23,8 @@ const MODULES = {
   sheets: { label: 'S', loader: () => import('./modules/sheets.js'), newName: 'Book', ext: 'xlsx', title: 'Sheets' },
   pdf: { label: 'P', loader: () => import('./modules/pdf.js'), newName: 'Document', ext: 'pdf', title: 'PDF' },
   convert: { label: 'C', loader: () => import('./modules/convert.js'), newName: 'Convert', ext: '', title: 'Convert' },
+  // presentations open only in the Slides editor (there is no previous one)
+  slides: { label: 'S', loader: null, newName: 'Presentation', ext: 'pptx', title: 'Slides' },
 };
 
 const tabsEl = document.getElementById('tabs');
@@ -34,7 +36,7 @@ const toastEl = document.getElementById('toast');
 /** @type {Map<string, {id, kind, name, path, dirty, el, tabEl, instance}>} */
 const tabs = new Map();
 let activeId = 'home';
-const untitled = { writer: 0, sheets: 0, pdf: 0, convert: 0 };
+const untitled = { writer: 0, sheets: 0, pdf: 0, convert: 0, slides: 0 };
 
 document.body.classList.add(platform);
 const hydrateIcons = (root = document) => root.querySelectorAll('[data-ic]').forEach((n) => { n.innerHTML = icon(n.dataset.ic, 17); n.style.display = 'inline-grid'; });
@@ -52,7 +54,7 @@ export function toast(msg, isError = false) {
 }
 function setStatus(text) { statusEl.textContent = text; }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const BADGE_ICON = { writer: 'doc', sheets: 'sheet', pdf: 'pdf', convert: 'convert' };
+const BADGE_ICON = { writer: 'doc', sheets: 'sheet', pdf: 'pdf', convert: 'convert', slides: 'slides' };
 const badge = (kind) => `<span class="badge ${kind}">${icon(BADGE_ICON[kind] || 'doc', 11)}</span>`;
 const isDark = () => document.documentElement.dataset.theme === 'dark';
 const baseName = (n) => n.replace(/\.[^.]+$/, '');
@@ -114,6 +116,13 @@ async function openTab(kind, { name, path = null, data = null, html = null, resu
   // to them by its path; a workbook that is not a file yet (new, a template, a converted
   // older format) goes by its contents and is saved under a name of its own
   const onDisk = path && !converted;
+  if (kind === 'slides') {
+    if (await newEditorOn('slides')) {
+      try { const t = await openNativeWriter({ kind, name, path: onDisk ? path : null }); if (t) return t; } catch (e) { console.error(e); }
+    }
+    toast('Presentations need the desktop app with the Slides editor', true);
+    return null;
+  }
   if ((kind === 'sheets' || kind === 'pdf') && !classic && !html && !result && await newEditorOn(kind)
     && (onDisk ? NEW_EDITOR_FILES[kind].test(path) : kind === 'sheets')) {
     try {
@@ -378,7 +387,7 @@ onNative('new-writer', (ev) => {
   else if (ev.type === 'compress' && ev.path) compressPdfFile(ev.path);
   else if (ev.type === 'ocr') ocrForEditor(ev.req, ev.png, ev.langs);
   else if (ev.type === 'convert-scan') convertScanForEditor(ev.req, ev.path);
-  else if (ev.type === 'file' && tab) { // the File button of the new Sheets and PDF editors
+  else if (ev.type === 'file' && tab) { // the File button of the new Sheets, PDF and Slides editors
     if (activeId !== tab.id) activate(tab.id);
     if (ev.action === 'export-csv') window.kertasNative.newWriter('command', { id: tab.id, name: 'export-csv' });
     else runCommand(ev.action);
@@ -700,6 +709,7 @@ const active = () => tabs.get(activeId);
 const COMMANDS = [
   { id: 'new-doc', group: 'files', label: 'New document', icon: 'doc', key: 'Ctrl+N', run: () => newDocument() },
   { id: 'new-sheet', group: 'files', label: 'New spreadsheet', icon: 'sheet', key: 'Ctrl+Shift+N', run: () => openTab('sheets') },
+  ...(isDesktop ? [{ id: 'new-slides', group: 'files', label: 'New presentation', icon: 'slides', run: () => openTab('slides') }] : []),
   { id: 'templates-writer', group: 'files', label: 'New document from a template...', icon: 'template', run: () => openTemplates('writer') },
   { id: 'templates-sheets', group: 'files', label: 'New workbook from a template...', icon: 'template', run: () => openTemplates('sheets') },
   { id: 'open', group: 'files', label: 'Open...', icon: 'open', key: 'Ctrl+O', run: () => openDialog() },
@@ -723,7 +733,7 @@ const runCommand = (id) => COMMANDS.find((c) => c.id === id)?.run();
 
 function fileMenuFor() {
   const pick = (id) => { const c = COMMANDS.find((x) => x.id === id); return { id, label: c.label, icon: c.icon, shortcut: c.key, action: c.run }; };
-  return [pick('new-doc'), pick('new-sheet'), pick('open'), 'sep', pick('save'), pick('save-as'), pick('export-pdf'), pick('print'), 'sep', pick('close-tab')];
+  return [pick('new-doc'), pick('new-sheet'), ...(COMMANDS.some((c) => c.id === 'new-slides') ? [pick('new-slides')] : []), pick('open'), 'sep', pick('save'), pick('save-as'), pick('export-pdf'), pick('print'), 'sep', pick('close-tab')];
 }
 
 // Command palette (Ctrl+K)
@@ -744,7 +754,7 @@ function openPalette() {
   const close = () => back.remove();
   const render = async () => {
     const q = input.value.toLowerCase().trim();
-    const recent = (await recentFiles()).slice(0, 8).map((r) => ({ label: r.name, sub: r.path, icon: kindForName(r.name) === 'sheets' ? 'sheet' : kindForName(r.name) === 'pdf' ? 'pdf' : 'doc', run: () => openPath(r.path) }));
+    const recent = (await recentFiles()).slice(0, 8).map((r) => ({ label: r.name, sub: r.path, icon: BADGE_ICON[kindForName(r.name)] || 'doc', run: () => openPath(r.path) }));
     items = [...COMMANDS.filter((c) => !c.needsTab || active()).map((c) => ({ label: c.label, key: c.key, icon: c.icon, run: c.run, group: c.group })), ...recent.map((r) => ({ ...r, group: 'recent' }))]
       .filter((it) => !q || it.label.toLowerCase().includes(q) || it.sub?.toLowerCase().includes(q));
     sel = Math.min(sel, Math.max(0, items.length - 1));
@@ -811,7 +821,7 @@ async function renderHome() {
         <div>
           <div class="hero-greet">${greet}</div>
           <h1>Your workspace.</h1>
-          <p>Documents, spreadsheets and PDFs. All offline.</p>
+          <p>${isDesktop ? "Documents, spreadsheets, presentations and PDFs" : "Documents, spreadsheets and PDFs"}. All offline.</p>
           <div class="local-badge">${icon('shield-check', 15)}<span><strong>Everything stays on this computer.</strong> No account and no uploads.</span></div>
         </div>
         <div class="hero-side">
@@ -847,6 +857,14 @@ async function renderHome() {
             <button class="chip" data-open="sheets">${icon('open', 14)}Open</button>
           </div>
         </div>
+        ${isDesktop ? `<div class="app-card slides">
+          <div class="app-icon">${icon('slides', 24)}</div>
+          <strong>Slides</strong><span class="desc">PowerPoint-compatible presentations (.pptx, also opens .ppt, .odp)</span>
+          <div class="actions">
+            <button class="chip primary" data-cmd="new-slides">${icon('plus', 14)}Blank</button>
+            <button class="chip" data-open="slides">${icon('open', 14)}Open</button>
+          </div>
+        </div>` : ''}
         <div class="app-card pdf">
           <div class="app-icon">${icon('pdf', 24)}</div>
           <strong>PDF</strong><span class="desc">Fill forms, comment, sign, protect, redact and organise pages</span>

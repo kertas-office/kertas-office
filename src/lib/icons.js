@@ -22,11 +22,12 @@ import {
   ArrowBigRight, MessageCircle, BringToFront, SendToBack, Ellipsis, Move, LayersPlus, WrapText, AlignLeft, AlignCenter, AlignRight, Bold, Italic, Baseline, PaintbrushVertical, AlignJustify, AArrowUp, AArrowDown, Grid2x2, TableCellsMerge, DollarSign, DecimalsArrowLeft, DecimalsArrowRight, AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, ArrowDownUp, Hexagon, Diamond, TextCursor, BadgeCheck, KeyRound, ScanLine, Languages, Type as TypeIcon,
   PinOff, CircleDot, SquareChevronDown, FileArchive, LetterText, Settings2, SlidersHorizontal, PanelsTopLeft,
   Paperclip,
-  Crop, FlipHorizontal2, FlipVertical2, ArrowRightToLine, ArrowRightLeft, FolderSearch, Film, AudioLines,
+  Crop, FlipHorizontal2, FlipVertical2, ArrowRightToLine, ArrowRightLeft, FolderSearch, Film, AudioLines, Presentation,
 } from 'lucide';
 
 const ICONS = {
   convert: ArrowRightLeft,
+  slides: Presentation,
   video: Film,
   audio: AudioLines,
   'show-folder': FolderSearch,

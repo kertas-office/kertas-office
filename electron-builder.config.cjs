@@ -48,6 +48,9 @@ module.exports = {
     assoc('ods', 'OpenDocument Spreadsheet'),
     assoc('csv', 'CSV File'),
     assoc('pdf', 'PDF Document'),
+    assoc('pptx', 'PowerPoint Presentation'),
+    assoc('ppt', 'PowerPoint 97-2003 Presentation'),
+    assoc('odp', 'OpenDocument Presentation'),
   ],
   // KERTAS_UPDATE_URL publishes to your own web server instead (any folder served over https)
   ...(process.env.KERTAS_UPDATE_URL

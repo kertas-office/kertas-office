@@ -1,14 +1,15 @@
 diff --git a/apps/docs/kertas.vite.config.ts b/apps/docs/kertas.vite.config.ts
 new file mode 100644
-index 0000000..31e9b9e
+index 0000000..f9c4f5b
 --- /dev/null
 +++ b/apps/docs/kertas.vite.config.ts
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,60 @@
 +import { resolve } from 'node:path'
 +import react from '@vitejs/plugin-react'
 +import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 +import type { Plugin } from 'vite'
 +import { type AiModules, kertasAssetNames, kertasNoAi as noAiPlugin, kertasNoAiBridge, kertasNoAiMain, kertasNoAiStrings } from '../kertas-build'
++import { slidesWorkspaceAlias } from '../slides/kertas-alias'
 +
 +// Build used when Kertas Office hosts this editor. Same sources as the normal
 +// build; the main-process entry exports the hosting functions instead of
@@ -31,7 +32,8 @@ index 0000000..31e9b9e
 +export default defineConfig({
 +  main: {
 +    plugins: [kertasNoAi(), kertasNoAiStrings(), kertasNoAiMain()],
-+    resolve: { alias: localAlias },
++    // the Slides editor's main-process code is in this bundle too, with its own packages
++    resolve: { alias: { ...slidesWorkspaceAlias, ...localAlias } },
 +    build: {
 +      externalizeDeps: false,
 +      outDir: 'out-kertas/main',
@@ -63,7 +65,7 @@ index 0000000..31e9b9e
 +  },
 +})
 diff --git a/apps/docs/src/main/docs-main.ts b/apps/docs/src/main/docs-main.ts
-index 8ce14e6..0c449f4 100644
+index 8ce14e6..3da818a 100644
 --- a/apps/docs/src/main/docs-main.ts
 +++ b/apps/docs/src/main/docs-main.ts
 @@ -1,3 +1,4 @@
@@ -71,6 +73,22 @@ index 8ce14e6..0c449f4 100644
  import { createHash, randomUUID } from 'node:crypto'
  import { handOffBytes } from './byte-handoff'
  import {
+@@ -31,7 +32,6 @@ import {
+   Menu,
+   WebContentsView,
+   app,
+-  clipboard,
+   dialog,
+   ipcMain,
+   nativeImage,
+@@ -41,6 +41,7 @@ import {
+   shell,
+   webContents,
+ } from 'electron'
++import { writeImageHtml } from '../../../kertas-clipboard'
+ import {
+   isUnderExcludedFolder,
+   readExcludedFolders,
 @@ -271,14 +272,14 @@ const tMain = createI18n({
      filterWord: 'Word 文档',
      odtImportMsg: '转换 .{ext} 文档？',
@@ -584,7 +602,19 @@ index 8ce14e6..0c449f4 100644
      let driver: ElectronBrowserDriver | null = null
      try {
        const htmlPath = join(workDir, 'chunk.html')
-@@ -9559,9 +9579,20 @@ export function registerDocsIpc(): void {
+@@ -9443,10 +9463,7 @@ export function registerDocsIpc(): void {
+           /* malformed payload: plain img */
+         }
+       }
+-      clipboard.write({
+-        image,
+-        html: `<img src="${htmlSrc}" width="${width}" height="${height}"${metaAttr}>`,
+-      })
++      writeImageHtml(image, `<img src="${htmlSrc}" width="${width}" height="${height}"${metaAttr}>`)
+       return true
+     },
+   )
+@@ -9559,9 +9576,20 @@ export function registerDocsIpc(): void {
          })
          const data = await withInternalLinks(printed, links)
          await atomicWriteFile(filePath, data)
@@ -605,7 +635,7 @@ index 8ce14e6..0c449f4 100644
          // path is already authorized, so the renderer can retry chunked to the same target
          return { ok: false, error: String(err), path: filePath }
        }
-@@ -9587,7 +9618,7 @@ export function registerDocsIpc(): void {
+@@ -9587,7 +9615,7 @@ export function registerDocsIpc(): void {
      }
      if (!dir) return null
      const wcId = event.sender.id
@@ -614,7 +644,7 @@ index 8ce14e6..0c449f4 100644
      allowPdfWrite(wcId, pdfPath)
      imageExportTemps.set(wcId, (imageExportTemps.get(wcId) ?? new Set()).add(pdfPath))
      imageExportDirs.set(wcId, (imageExportDirs.get(wcId) ?? new Set()).add(dir))
-@@ -9635,7 +9666,7 @@ export function registerDocsIpc(): void {
+@@ -9635,7 +9663,7 @@ export function registerDocsIpc(): void {
  
    // templates live in one folder of their own, where both dialogs start
    const templatesDir = async (): Promise<string> => {
@@ -623,7 +653,7 @@ index 8ce14e6..0c449f4 100644
      await mkdir(dir, { recursive: true })
      return dir
    }
-@@ -9981,7 +10012,7 @@ interface DocsShellHooks {
+@@ -9981,7 +10009,7 @@ interface DocsShellHooks {
    detachedWindowCount?(): number
    /** closes the calling tab instead of the whole shell window (Cmd+W / role:'close') */
    closeActiveTab(): void
@@ -632,7 +662,7 @@ index 8ce14e6..0c449f4 100644
    openGeneratedPath?(path: string): boolean
    /** the open document's file was renamed or moved: recents, tabs and the views follow it */
    fileMoved?(oldPath: string, newPath: string): void
-@@ -10427,7 +10458,7 @@ export function createDocsWindow(openPath?: string): BrowserWindow {
+@@ -10427,7 +10455,7 @@ export function createDocsWindow(openPath?: string): BrowserWindow {
      height: 900,
      minWidth: 720,
      minHeight: 550,
@@ -641,7 +671,7 @@ index 8ce14e6..0c449f4 100644
      // Word-like custom title bar (document name centered, quick-access buttons)
      ...(process.platform === 'darwin'
        ? { titleBarStyle: 'hiddenInset' as const }
-@@ -10760,16 +10791,16 @@ export function startDocsStandalone(): void {
+@@ -10760,16 +10788,16 @@ export function startDocsStandalone(): void {
    installContextMenu(app, () => contextMenuLabels(getUiLang()))
    // dev runs must not share the packaged app's userData (recent files, AI settings)
    // or its single-instance lock — otherwise `npm run dev` silently quits whenever
@@ -664,10 +694,10 @@ index 8ce14e6..0c449f4 100644
        try {
 diff --git a/apps/docs/src/main/kertas-entry.ts b/apps/docs/src/main/kertas-entry.ts
 new file mode 100644
-index 0000000..50d4381
+index 0000000..f9068f8
 --- /dev/null
 +++ b/apps/docs/src/main/kertas-entry.ts
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,97 @@
 +// Entry used when Kertas Office hosts this editor: the same main-process code,
 +// without starting an app of its own.
 +export {
@@ -750,6 +780,21 @@ index 0000000..50d4381
 +  setPdfRedactionSavedHook,
 +} from '../../../pdf/src/main/pdf-main'
 +export { setKertasOcr } from '../../../pdf/src/main/kertas-pdf'
++export {
++  configureSlidesRuntime,
++  registerSlidesIpc,
++  createSlidesView,
++  requestSlidesClose,
++  slidesIsDirty,
++  setActiveSlidesWebContents,
++  setSlidesShellWindow,
++  setSlidesHostWindowHook,
++  setSlidesShowBleed,
++  setSlidesOpenedHook,
++  setSlidesCloseTabHook,
++  setSlidesFirstSaveAsks,
++  exportSlidesPdfHeadless,
++} from '../../../slides/src/main/slides-main'
 diff --git a/apps/docs/src/main/kertas-pdf-entry.ts b/apps/docs/src/main/kertas-pdf-entry.ts
 new file mode 100644
 index 0000000..370cf36
@@ -3771,10 +3816,10 @@ index baa778a..7c770e7 100644
   * Every no-selection case falls out of the counting rule itself: a collapsed
 diff --git a/apps/kertas-build.ts b/apps/kertas-build.ts
 new file mode 100644
-index 0000000..d33493d
+index 0000000..49cd032
 --- /dev/null
 +++ b/apps/kertas-build.ts
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,209 @@
 +import { readdirSync, readFileSync } from 'node:fs'
 +import { join, resolve } from 'node:path'
 +import type { Plugin } from 'vite'
@@ -3948,6 +3993,7 @@ index 0000000..d33493d
 +// channel names lose the assistant's entries, so neither the handlers nor the names
 +// are in the build.
 +const SHEETS_MAIN = /[\\/]sheets[\\/]src[\\/]main[\\/]sheets-main\.ts$/
++const SLIDES_MAIN = /[\\/]slides[\\/]src[\\/]main[\\/]slides-main\.ts$/
 +const CHANNEL_TABLES = /[\\/](?:sheets[\\/]src[\\/]shared[\\/]ipc-channels|pdf[\\/]src[\\/]shared[\\/]ipc)\.ts$/
 +export const kertasNoAiMain = (): Plugin => ({
 +  name: 'kertas-no-ai-main',
@@ -3956,6 +4002,20 @@ index 0000000..d33493d
 +    const file = id.split('?')[0]
 +    if (CHANNEL_TABLES.test(file)) {
 +      return { code: code.replace(/^[ \t]*\w+: '(?:ai|kb|project):[\w-]+',[ \t]*\n/gm, ''), map: null }
++    }
++    if (SLIDES_MAIN.test(file)) {
++      // Slides: no project store, no chat attachments, no image generation
++      let next = code
++      const head = 'export function registerProjectIpc(): void {\n'
++      const from = next.indexOf(head)
++      const to = from < 0 ? -1 : next.indexOf('\n}\n', from)
++      if (to < 0) throw new Error('kertas-no-ai-main: Slides registerProjectIpc is not where it was')
++      next = `${next.slice(0, from + head.length)}${next.slice(to + 1)}`
++      for (const call of ['  registerAttachmentIpc()\n', '  registerSlidesOnlyAiIpc()\n']) {
++        if (!next.includes(call)) throw new Error(`kertas-no-ai-main: ${call.trim()} is not where it was`)
++        next = next.replace(call, '')
++      }
++      return { code: next, map: null }
 +    }
 +    if (!SHEETS_MAIN.test(file)) return null
 +    let next = code
@@ -3969,12 +4029,153 @@ index 0000000..d33493d
 +    return { code: next, map: null }
 +  },
 +})
+diff --git a/apps/kertas-clipboard.ts b/apps/kertas-clipboard.ts
+new file mode 100644
+index 0000000..8a263d1
+--- /dev/null
++++ b/apps/kertas-clipboard.ts
+@@ -0,0 +1,135 @@
++// The clipboard of the main process, for both Electron APIs: the older one (readImage,
++// readBuffer, writeBuffer, write({ image, html })) and the newer one (Electron 45 and later),
++// where reading and writing are promises of ClipboardItem lists and custom formats are gone.
++// With the newer API an app's own markers live here, and a nonce in the HTML written tells
++// whether the clipboard still holds what this app put there.
++import * as electron from 'electron'
++import type { NativeImage } from 'electron'
++
++// eslint-disable-next-line @typescript-eslint/no-explicit-any
++const cb: any = electron.clipboard
++export const legacyClipboard = typeof cb.readBuffer === 'function'
++
++const marks = new Map<string, string>()
++let nonce = ''
++const nonceTag = (): string => {
++  nonce = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
++  return `<meta name="kertas-clip" content="${nonce}">`
++}
++
++async function writeItems(items: Record<string, string | Blob>): Promise<void> {
++  // eslint-disable-next-line @typescript-eslint/no-explicit-any
++  const Item = (electron as any).ClipboardItem
++  await cb.write([new Item(items)])
++}
++
++/** The clipboard's items with the newer API, [] when it cannot be read */
++async function items(): Promise<Array<{ types: string[]; getType: (t: string) => Promise<Blob> }>> {
++  try {
++    return await cb.read()
++  } catch {
++    return []
++  }
++}
++
++/** Does the clipboard still hold the last thing written through this module (newer API)? */
++async function stillOurs(): Promise<boolean> {
++  if (!nonce) return false
++  for (const it of await items()) {
++    if (!it.types.includes('text/html')) continue
++    try {
++      if ((await (await it.getType('text/html')).text()).includes(nonce)) return true
++    } catch {
++      /* unreadable */
++    }
++  }
++  return false
++}
++
++/** Puts an app marker on the clipboard (and nothing else) */
++export function writeMarker(format: string, value: string): void {
++  if (legacyClipboard) {
++    cb.writeBuffer(format, Buffer.from(value))
++    return
++  }
++  marks.clear()
++  marks.set(format, value)
++  void writeItems({ 'text/html': nonceTag() }).catch(() => {})
++}
++
++/** Is the marker the last one written? (with the older API: is it on the clipboard?) */
++export function markerIs(format: string, value: string): boolean {
++  if (legacyClipboard) {
++    try {
++      return cb.readBuffer(format).equals(Buffer.from(value))
++    } catch {
++      return false
++    }
++  }
++  return marks.get(format) === value
++}
++
++/** Is there any marker of this format on the clipboard? */
++export async function markerPresent(format: string): Promise<boolean> {
++  if (legacyClipboard) {
++    try {
++      return cb.readBuffer(format).length > 0
++    } catch {
++      return false
++    }
++  }
++  return marks.has(format) && (await stillOurs())
++}
++
++/** Is the marker still what the clipboard holds? */
++export async function markerStill(format: string, value: string): Promise<boolean> {
++  if (legacyClipboard) return markerIs(format, value)
++  return marks.get(format) === value && (await stillOurs())
++}
++
++/** A picture with its HTML flavour; keepMarks leaves this app's markers standing (they describe it) */
++export function writeImageHtml(image: NativeImage, html: string, { keepMarks = false } = {}): void {
++  if (legacyClipboard) {
++    cb.write({ image, html })
++    return
++  }
++  if (!keepMarks) marks.clear()
++  const png = image.toPNG()
++  void writeItems({ 'image/png': new Blob([png], { type: 'image/png' }), 'text/html': `${html}${nonceTag()}` }).catch(() => {})
++}
++
++/** The picture on the clipboard as PNG bytes, or null */
++export async function readImagePng(): Promise<Buffer | null> {
++  if (legacyClipboard) {
++    const img = cb.readImage()
++    return img.isEmpty() ? null : img.toPNG()
++  }
++  for (const it of await items()) {
++    const type = it.types.find((t) => t.startsWith('image/'))
++    if (!type) continue
++    try {
++      const bytes = Buffer.from(await (await it.getType(type)).arrayBuffer())
++      if (type === 'image/png') return bytes
++      const img = electron.nativeImage.createFromBuffer(bytes)
++      return img.isEmpty() ? null : img.toPNG()
++    } catch {
++      /* unreadable */
++    }
++  }
++  return null
++}
++
++/** Is there a picture on the clipboard? (no decoding) */
++export async function hasImage(): Promise<boolean> {
++  if (legacyClipboard) return cb.availableFormats().some((f: string) => f.startsWith('image/'))
++  return (await items()).some((it) => it.types.some((t) => t.startsWith('image/')))
++}
++
++/** The clipboard's plain text */
++export async function readText(): Promise<string> {
++  try {
++    return String((await cb.readText()) ?? '')
++  } catch {
++    return ''
++  }
++}
 diff --git a/apps/kertas-file-button.tsx b/apps/kertas-file-button.tsx
 new file mode 100644
-index 0000000..0737698
+index 0000000..afd2b72
 --- /dev/null
 +++ b/apps/kertas-file-button.tsx
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,101 @@
 +// The File button at the start of the tab row, as in Kertas's own Sheets and PDF editors:
 +// a pill in the app's colour, opening the same file menu as Kertas's (new, open, save,
 +// export, print, close). Each item is carried out by Kertas, so it behaves as everywhere else.
@@ -3990,6 +4191,7 @@ index 0000000..0737698
 +const ICONS: Record<string, string> = {
 +  doc: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6',
 +  sheet: 'M4 4h16v16H4zM4 10h16M4 15h16M10 4v16',
++  slides: 'M3 4h18v12H3zM12 16v4M8 20h8M7 8h6M7 11h10',
 +  open: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H7.5a2 2 0 0 0-1.9 1.4L3 19zM3 19l2.6-7.6A2 2 0 0 1 7.5 10H21l-2.7 8.1A2 2 0 0 1 16.4 19z',
 +  save: 'M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM7 3v5h8V3M7 21v-7h10v7',
 +  saveAs: 'M5 3h11l3 3v5M7 3v5h8V3M7 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2M13 21l1-3 5-5 2 2-5 5z',
@@ -4063,6 +4265,7 @@ index 0000000..0737698
 +  return [
 +    { id: 'new-doc', label: 'New document', key: 'Ctrl+N', icon: 'doc' },
 +    { id: 'new-sheet', label: 'New spreadsheet', key: 'Ctrl+Shift+N', icon: 'sheet' },
++    { id: 'new-slides', label: 'New presentation', icon: 'slides' },
 +    { id: 'open', label: 'Open...', key: 'Ctrl+O', icon: 'open' },
 +    null,
 +    { id: 'save', label: 'Save', key: 'Ctrl+S', icon: 'save' },
@@ -7152,6 +7355,519 @@ index 9e11080..8213d13 100644
    /** open any shell-routed document path (an AI answer's filenav citation) */
    openSourcePath(path: string): Promise<void>
    /** current UI language (persisted by the shell in app-settings.json) */
+diff --git a/apps/slides/kertas-alias.ts b/apps/slides/kertas-alias.ts
+new file mode 100644
+index 0000000..9151428
+--- /dev/null
++++ b/apps/slides/kertas-alias.ts
+@@ -0,0 +1,47 @@
++// The Slides app's own packages, resolved to their sources (as in electron.vite.config.ts);
++// shared by Kertas Office's Slides build and the Writer's main-process build, which also
++// compiles this editor's main-process code.
++import { dirname, resolve } from 'node:path'
++import { fileURLToPath } from 'node:url'
++
++const here = dirname(fileURLToPath(import.meta.url))
++
++export const slidesWorkspaceAlias: Record<string, string> = {
++  // Subpath before the bare name: string aliases are prefix replacements
++  '@genoffice/pptx-engine/table-grid': resolve(
++    here,
++    '../../packages/pptx-engine/src/table-grid.ts',
++  ),
++  '@genoffice/pptx-engine/identity': resolve(here, '../../packages/pptx-engine/src/identity.ts'),
++  '@genoffice/pptx-engine/named-action': resolve(
++    here,
++    '../../packages/pptx-engine/src/named-action.ts',
++  ),
++  '@genoffice/pptx-engine/custgeom': resolve(here, '../../packages/pptx-engine/src/custgeom.ts'),
++  '@genoffice/pptx-engine/background-promote': resolve(
++    here,
++    '../../packages/pptx-engine/src/background-promote.ts',
++  ),
++  '@genoffice/pptx-engine/model3d': resolve(here, '../../packages/pptx-engine/src/model3d.ts'),
++  '@genoffice/pptx-engine/chart-workbook': resolve(
++    here,
++    '../../packages/pptx-engine/src/chart-workbook.ts',
++  ),
++  '@genoffice/pptx-engine': resolve(here, '../../packages/pptx-engine/src/index.ts'),
++  '@genoffice/pptx-ops/op-docs': resolve(here, '../../packages/pptx-ops/src/op-docs.ts'),
++  '@genoffice/pptx-ops/font-size': resolve(here, '../../packages/pptx-ops/src/font-size.ts'),
++  '@genoffice/pptx-ops': resolve(here, '../../packages/pptx-ops/src/index.ts'),
++  '@genoffice/pptx-render/preset-geometry': resolve(
++    here,
++    '../../packages/pptx-render/src/preset-geometry.ts',
++  ),
++  '@genoffice/pptx-render': resolve(here, '../../packages/pptx-render/src/index.ts'),
++  '@genoffice/pipelines/slides/layout-audit': resolve(
++    here,
++    '../../packages/pipelines/src/slides/layout-audit.ts',
++  ),
++  '@genoffice/pipelines/slides': resolve(here, '../../packages/pipelines/src/slides/index.ts'),
++  // Metafile (EMF/WMF) rasterizer shared with the docs engine (renderer-only: needs canvas)
++  '@genoffice/docx-engine/metafile': resolve(here, '../../packages/docx-engine/src/metafile.ts'),
++  '@genoffice/docx-engine/math': resolve(here, '../../packages/docx-engine/src/math.ts'),
++}
+diff --git a/apps/slides/kertas.vite.config.ts b/apps/slides/kertas.vite.config.ts
+new file mode 100644
+index 0000000..a367905
+--- /dev/null
++++ b/apps/slides/kertas.vite.config.ts
+@@ -0,0 +1,33 @@
++import { dirname, resolve } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import react from '@vitejs/plugin-react'
++import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
++import type { Plugin } from 'vite'
++import { type AiModules, kertasAssetNames, kertasNoAi as noAiPlugin, kertasNoAiMain, kertasNoAiStrings, kertasQuietBridge, kertasTitle } from '../kertas-build'
++import { slidesWorkspaceAlias } from './kertas-alias'
++
++// Build used when Kertas Office hosts this editor: the window's bridge and the
++// page. The main-process code is built with the Writer's (apps/docs), so the
++// editors share one bundle there.
++const here = dirname(fileURLToPath(import.meta.url))
++const noAi = resolve(here, 'src/renderer/kertas/no-ai')
++const AI_MODULES: AiModules = [
++  [/(^|\/)ai\/AiPanel$/, 'AiPanel.tsx'],
++  [/(^|\/)components\/AiAskPopover$/, 'AiAskPopover.tsx'],
++]
++const kertasNoAi = (): Plugin => noAiPlugin(noAi, AI_MODULES)
++
++export default defineConfig({
++  preload: {
++    plugins: [kertasNoAi(), kertasNoAiMain(), kertasQuietBridge(), externalizeDepsPlugin({ exclude: ['@genoffice/electron-utils'] })],
++    build: { outDir: 'out-kertas/preload' },
++  },
++  renderer: {
++    resolve: { alias: slidesWorkspaceAlias },
++    plugins: [kertasNoAi(), kertasNoAiMain(), kertasNoAiStrings(), kertasTitle('Slides'), react()],
++    build: {
++      outDir: 'out-kertas/renderer',
++      rollupOptions: { output: { assetFileNames: kertasAssetNames } },
++    },
++  },
++})
+diff --git a/apps/slides/src/main/element-clipboard.ts b/apps/slides/src/main/element-clipboard.ts
+index 77e5eff..0767f3b 100644
+--- a/apps/slides/src/main/element-clipboard.ts
++++ b/apps/slides/src/main/element-clipboard.ts
+@@ -1,4 +1,5 @@
+ import { clipboard, nativeImage } from 'electron'
++import { legacyClipboard, markerIs, markerStill, writeImageHtml } from '../../../kertas-clipboard'
+ 
+ export const ELEMENT_CLIPBOARD_FORMAT = 'io.genoffice.slides.elements'
+ 
+@@ -12,14 +13,11 @@ export function isElementClipboardToken(value: unknown): value is string {
+ }
+ 
+ function markerBufferMatches(token: string): boolean {
+-  try {
+-    return clipboard.readBuffer(ELEMENT_CLIPBOARD_FORMAT).equals(Buffer.from(token))
+-  } catch {
+-    return false
+-  }
++  return markerIs(ELEMENT_CLIPBOARD_FORMAT, token)
+ }
+ 
+ function markerHtmlMatches(token: string): boolean {
++  if (!legacyClipboard) return false
+   try {
+     const encodedToken = encodeURIComponent(token)
+     const images = clipboard
+@@ -36,6 +34,13 @@ export function elementClipboardMarkerMatches(token: string): boolean {
+   return isElementClipboardToken(token) && (markerBufferMatches(token) || markerHtmlMatches(token))
+ }
+ 
++/** Whether the clipboard still holds this element copy (a later copy anywhere replaces it) */
++export async function elementClipboardStill(token: string): Promise<boolean> {
++  if (!isElementClipboardToken(token)) return false
++  if (legacyClipboard) return elementClipboardMarkerMatches(token)
++  return markerStill(ELEMENT_CLIPBOARD_FORMAT, token)
++}
++
+ /** Prevent a delayed renderer PNG from replacing a later copy or an external clipboard change. */
+ export function canWriteElementClipboardImage(
+   current: ElementClipboardIdentity | null,
+@@ -76,7 +81,7 @@ export function writeElementClipboardImage(token: string, pngBase64: unknown): b
+     if (!normalizedPng.length) return false
+     const html = `<img src="data:image/png;base64,${normalizedPng.toString('base64')}" data-genoffice-slides-elements="${encodeURIComponent(token)}">`
+     if (!elementClipboardMarkerMatches(token)) return false
+-    clipboard.write({ image: decoded, html })
++    writeImageHtml(decoded, html, { keepMarks: true })
+     return true
+   } catch {
+     return false
+diff --git a/apps/slides/src/main/slides-main.ts b/apps/slides/src/main/slides-main.ts
+index 08c89a8..e043494 100644
+--- a/apps/slides/src/main/slides-main.ts
++++ b/apps/slides/src/main/slides-main.ts
+@@ -5,7 +5,6 @@
+  * future shell reuse.
+  */
+ import {
+-  clipboard,
+   app,
+   BrowserWindow,
+   desktopCapturer,
+@@ -89,6 +88,7 @@ import {
+   ELEMENT_CLIPBOARD_FORMAT,
+   canWriteElementClipboardImage,
+   elementClipboardMarkerMatches,
++  elementClipboardStill,
+   isElementClipboardToken,
+   writeElementClipboardImage,
+ } from './element-clipboard'
+@@ -158,6 +158,7 @@ import {
+ // From its own electron-utils subpath rather than the package barrel: the
+ // barrel drags Electron-only modules into headless bundles.
+ import { atomicWriteFile, atomicWriteVia } from '@genoffice/electron-utils/atomic-write'
++import * as kclip from '../../../kertas-clipboard'
+ import { DEFAULT_PICTURE_DPI, pictureFrame } from './picture-frame'
+ import { refineComplexWidths, shapedMetricsReady } from './shaped-metrics'
+ import { cfbKind, isCfbHeader } from './cfb-sniff'
+@@ -473,6 +474,13 @@ export function setSlidesOpenedHook(fn: ((wc: WebContents, path: string) => void
+   slidesOpenedHook = fn
+ }
+ 
++/** Set by a host whose new decks ask where to go on their first Save (Kertas Office): the
++ *  name to suggest for the deck in this webContents. Unset, the first save goes to the drafts folder. */
++let slidesFirstSaveName: ((wc: WebContents) => string | null) | null = null
++export function setSlidesFirstSaveAsks(fn: ((wc: WebContents) => string | null) | null): void {
++  slidesFirstSaveName = fn
++}
++
+ /** Detached editor windows (createSlidesWindow), keyed by webContents id — their titles are owned here */
+ const standaloneWindows = new Map<number, BrowserWindow>()
+ 
+@@ -2706,7 +2714,7 @@ export function registerSlidesIpc(): void {
+     const pngs = op.pngs?.length === bundles.length ? op.pngs : undefined
+     slideClipboard = { bundles, ...(pngs ? { pngs } : {}) }
+     // Marker so plain ⌘V knows the latest copy was a slide (element copies / external copies overwrite it)
+-    clipboard.writeBuffer('io.genoffice.slides.slide', Buffer.from('1'))
++    kclip.writeMarker('io.genoffice.slides.slide', '1')
+     return true
+   })
+ 
+@@ -3632,31 +3640,25 @@ export function registerSlidesIpc(): void {
+ 
+   // Our marker still present = the last copy came from this app -> use internal element paste
+   // (on macOS custom formats don't appear in availableFormats, so check via readBuffer)
+-  const clipboardMarker = (format: string) => {
+-    try {
+-      return clipboard.readBuffer(format).length > 0
+-    } catch {
+-      return false
+-    }
+-  }
++  const clipboardMarker = (format: string) => kclip.markerPresent(format)
+ 
+-  ipcMain.handle('slides:clipboard-external', () => {
+-    if (slideClipboard && clipboardMarker('io.genoffice.slides.slide')) return { kind: 'slide' }
+-    if (elementClipboard && elementClipboardMarkerMatches(elementClipboard.token))
++  ipcMain.handle('slides:clipboard-external', async () => {
++    if (slideClipboard && (await clipboardMarker('io.genoffice.slides.slide'))) return { kind: 'slide' }
++    if (elementClipboard && (await elementClipboardStill(elementClipboard.token)))
+       return { kind: 'internal' }
+-    const img = clipboard.readImage()
+-    if (!img.isEmpty()) return { kind: 'image', base64: img.toPNG().toString('base64'), ext: 'png' }
+-    const text = clipboard.readText()
++    const png = await kclip.readImagePng()
++    if (png) return { kind: 'image', base64: png.toString('base64'), ext: 'png' }
++    const text = await kclip.readText()
+     if (text.trim()) return { kind: 'text', text }
+     return { kind: 'none' }
+   })
+ 
+   // Menu-enable probe: is there anything a paste would act on? (no image decode)
+-  ipcMain.handle('slides:clipboard-probe', () => {
+-    if (slideClipboard && clipboardMarker('io.genoffice.slides.slide')) return true
+-    if (elementClipboard && elementClipboardMarkerMatches(elementClipboard.token)) return true
+-    if (clipboard.availableFormats().some((f) => f.startsWith('image/'))) return true
+-    return clipboard.readText().trim().length > 0
++  ipcMain.handle('slides:clipboard-probe', async () => {
++    if (slideClipboard && (await clipboardMarker('io.genoffice.slides.slide'))) return true
++    if (elementClipboard && (await elementClipboardStill(elementClipboard.token))) return true
++    if (await kclip.hasImage()) return true
++    return (await kclip.readText()).trim().length > 0
+   })
+ 
+   ipcMain.handle('slides:copy-elements', (e, op: CopyElementsOp) => {
+@@ -3677,7 +3679,7 @@ export function registerSlidesIpc(): void {
+         senderId: e.sender.id,
+       }
+       // Write our marker to the OS clipboard: an external copy overwrites it, so at paste time it tells whether internal or external is newer
+-      clipboard.writeBuffer(ELEMENT_CLIPBOARD_FORMAT, Buffer.from(token))
++      kclip.writeMarker(ELEMENT_CLIPBOARD_FORMAT, token)
+     }
+     return items.length
+   })
+@@ -4683,6 +4685,22 @@ export function registerSlidesIpc(): void {
+   ipcMain.handle('slides:save', async (e) => {
+     const session = sessions.get(e.sender.id)
+     if (!session) return { ok: false, error: 'no file open' }
++    // Untitled, in a host that asks: the first save asks where to keep the deck, like Save As
++    if (!session.path && slidesFirstSaveName) {
++      const r = await showSaveDialogWithMemory(
++        dialog,
++        dialogParent(),
++        {
++          defaultPath: saveAsSuggestion(null, slidesFirstSaveName(e.sender) || tm('untitledDeck')),
++          filters: [{ name: 'PowerPoint', extensions: ['pptx'] }],
++        },
++        getDraftsDir(),
++      )
++      if (r.canceled || !r.filePath) return { ok: false }
++      session.path = r.filePath
++      await pushRecent(session.path)
++      slidesOpenedHook?.(e.sender, session.path)
++    }
+     // Untitled (new blank file): the first save lands silently in the drafts folder (Save As keeps its dialog)
+     if (!session.path) {
+       const draftsDir = getDraftsDir()
+diff --git a/apps/slides/src/preload/index.ts b/apps/slides/src/preload/index.ts
+index 4b86d06..3df73dc 100644
+--- a/apps/slides/src/preload/index.ts
++++ b/apps/slides/src/preload/index.ts
+@@ -107,6 +107,7 @@ import type {
+ } from '../shared/ipc'
+ 
+ const api: SlidesApi = {
++  kertasFile: (action) => ipcRenderer.invoke('kertas:editor-file', action),
+   getLanguage: () => ipcRenderer.invoke('app:get-language'),
+   onLanguageChanged: (handler) => {
+     const listener = (
+diff --git a/apps/slides/src/renderer/App.tsx b/apps/slides/src/renderer/App.tsx
+index 7018ef1..5a5220b 100644
+--- a/apps/slides/src/renderer/App.tsx
++++ b/apps/slides/src/renderer/App.tsx
+@@ -116,6 +116,7 @@ import {
+ import type { ChartPresetDef, IconDef, SmartArtDef } from './insert-presets'
+ import { GensparkMark, IconAiBeautify, IconAiFactCheck, IconAiImage } from './components/icons'
+ import { ToastHost } from './components/toast'
++import { KERTAS_AI, KERTAS_HOST } from './kertas'
+ import { showToast } from './components/toast-bus'
+ import { t, useI18n } from './i18n/locale'
+ import { AiPanel } from './ai/AiPanel'
+@@ -710,7 +711,7 @@ export function App() {
+       const viewportW =
+         el?.clientWidth ||
+         stageViewportSize.w ||
+-        window.innerWidth - (showThumbs ? thumbsW : 0) - (showAi ? 360 : 34)
++        window.innerWidth - (showThumbs ? thumbsW : 0) - (KERTAS_AI ? (showAi ? 360 : 34) : 0)
+       const viewportH = el?.clientHeight || stageViewportSize.h || window.innerHeight - 150
+       const availW = viewportW - 56
+       // -72: vertical padding is 48 (AI-bar headroom) + 32, minus the same 8px slack as width
+@@ -3632,7 +3633,7 @@ export function App() {
+       />
+ 
+       <div className="app-main">
+-        {slide && viewMode !== 'reading' && viewMode !== 'sorter' && (
++        {KERTAS_AI && slide && viewMode !== 'reading' && viewMode !== 'sorter' && (
+           <div
+             className={`ai-dock${showAi && aiSettings ? '' : ' collapsed'}${
+               !aiSidebarEnabled && !showAi ? ' ai-dock-off' : ''
+@@ -4019,7 +4020,7 @@ export function App() {
+                             : undefined
+                         }
+                       >
+-                        <div className="stage-ai-bar">
++                        {KERTAS_AI && <div className="stage-ai-bar">
+                           <div className="stage-ai-group">
+                             <button
+                               className={`stage-ai-btn${showAi ? ' active' : ''}`}
+@@ -4069,7 +4070,7 @@ export function App() {
+                               </>
+                             )}
+                           </div>
+-                        </div>
++                        </div>}
+                         <div
+                           ref={stageScaleRef}
+                           className="stage-scale"
+diff --git a/apps/slides/src/renderer/components/Ribbon.tsx b/apps/slides/src/renderer/components/Ribbon.tsx
+index 9fa028a..ca451aa 100644
+--- a/apps/slides/src/renderer/components/Ribbon.tsx
++++ b/apps/slides/src/renderer/components/Ribbon.tsx
+@@ -3,6 +3,8 @@
+  * (local state switches tabs, .ribbon-body dispatches); content is trimmed to slide capabilities,
+  * unimplemented items are grayed placeholders.
+  */
++import { KertasFileButton, fileMenuItems } from '../../../../kertas-file-button'
++import { KERTAS_HOST } from '../kertas'
+ import React, {
+   useCallback,
+   useEffect,
+@@ -1716,7 +1718,22 @@ export function Ribbon({
+         }`}
+         onDoubleClick={collapse.onTabsDoubleClick}
+       >
+-        {!IS_MAC && (
++        {KERTAS_HOST ? (
++          <KertasFileButton
++            items={fileMenuItems([
++              { id: 'slides-images', label: 'Export slides as PNG pictures...', icon: 'export' },
++              { id: 'slides-images-jpg', label: 'Export slides as JPG pictures...', icon: 'export' },
++              { id: 'slides-video', label: 'Export as video...', icon: 'export' },
++            ])}
++            onPick={(id) => {
++              // the presentation's own exports stay here; the rest is Kertas's file menu
++              if (id === 'slides-images') onExportImages()
++              else if (id === 'slides-images-jpg') onExportImagesJpg()
++              else if (id === 'slides-video') onExportVideo()
++              else void window.slidesApi.kertasFile(id)
++            }}
++          />
++        ) : !IS_MAC ? (
+           <div className="file-tab-wrap">
+             <button
+               className={`ribbon-tab ribbon-tab-file ${fileOpen ? 'open' : ''}`}
+@@ -1813,7 +1830,7 @@ export function Ribbon({
+               </div>
+             )}
+           </div>
+-        )}
++        ) : null}
+         <button
+           className="qa-btn"
+           data-tip={t('ribbonSaveTip')}
+diff --git a/apps/slides/src/renderer/components/RibbonHomeTab.tsx b/apps/slides/src/renderer/components/RibbonHomeTab.tsx
+index 11fcf51..069c510 100644
+--- a/apps/slides/src/renderer/components/RibbonHomeTab.tsx
++++ b/apps/slides/src/renderer/components/RibbonHomeTab.tsx
+@@ -1,4 +1,5 @@
+ /** Home tab of the slides ribbon. Extracted from Ribbon.tsx. */
++import { KERTAS_AI } from '../kertas'
+ import { useState } from 'react'
+ import { platformShortcuts } from '@genoffice/i18n'
+ import {
+@@ -247,6 +248,8 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
+   }
+   return (
+     <>
++{KERTAS_AI && (
++        <>
+       <Group label="Genspark AI">
+         <button
+           className={`rb-big ai-entry${aiOpen ? ' active' : ''}`}
+@@ -299,6 +302,8 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
+         </button>
+       </Group>
+       <div className="ribbon-sep" />
++        </>
++      )}
+       <Group label={t('ribbonGroupClipboard')}>
+         <button
+           className="rb-big"
+diff --git a/apps/slides/src/renderer/kertas.ts b/apps/slides/src/renderer/kertas.ts
+new file mode 100644
+index 0000000..a040564
+--- /dev/null
++++ b/apps/slides/src/renderer/kertas.ts
+@@ -0,0 +1,7 @@
++/** Kertas Office hosts this editor without the AI assistant: nothing of it is
++ * shown, and nothing is sent anywhere. */
++export const KERTAS_AI: boolean = false
++
++/** Kertas Office is the host: what only the original suite's other apps could
++ * open (Markdown, web pages) is not offered. */
++export const KERTAS_HOST: boolean = true
+diff --git a/apps/slides/src/renderer/kertas/no-ai/AiAskPopover.tsx b/apps/slides/src/renderer/kertas/no-ai/AiAskPopover.tsx
+new file mode 100644
+index 0000000..069c67f
+--- /dev/null
++++ b/apps/slides/src/renderer/kertas/no-ai/AiAskPopover.tsx
+@@ -0,0 +1,25 @@
++// Kertas Office has no AI assistant: no "ask about the selection" button or popover.
++import type { NodeDescriptor } from '../../ai/edit-queue'
++
++export interface AnchorRect {
++  left: number
++  top: number
++  right: number
++  bottom: number
++  viewTop: number
++  viewBottom: number
++}
++
++export interface AskTarget {
++  id: string
++  sourceId: string
++  desc: NodeDescriptor
++}
++
++export function AiAskTrigger(): null {
++  return null
++}
++
++export function AiAskPopover(): null {
++  return null
++}
+diff --git a/apps/slides/src/renderer/kertas/no-ai/AiPanel.tsx b/apps/slides/src/renderer/kertas/no-ai/AiPanel.tsx
+new file mode 100644
+index 0000000..98dfab7
+--- /dev/null
++++ b/apps/slides/src/renderer/kertas/no-ai/AiPanel.tsx
+@@ -0,0 +1,4 @@
++// Kertas Office has no AI assistant: no panel.
++export function AiPanel(): null {
++  return null
++}
+diff --git a/apps/slides/src/renderer/kertas/skin.css b/apps/slides/src/renderer/kertas/skin.css
+new file mode 100644
+index 0000000..71f38a3
+--- /dev/null
++++ b/apps/slides/src/renderer/kertas/skin.css
+@@ -0,0 +1,25 @@
++/* Kertas Office look for the Slides editor: the shared skin plus Kertas's Slides orange.
++ * Loaded last so it wins. */
++@import '../../../../kertas-skin.css';
++
++:root {
++  --kertas-grad: linear-gradient(135deg, #fb923c 0%, #ea580c 50%, #f59e0b 100%);
++  --kertas-grad-shadow: rgb(234 88 12 / 35%);
++  --accent: #ea580c;
++  --accent-dark: #c2410c;
++  --accent-soft: #ffedd5;
++}
++
++[data-theme='dark'] {
++  --accent: #fb923c;
++  --accent-dark: #f97316;
++  --accent-soft: #3d2212;
++}
++
++@media (prefers-color-scheme: dark) {
++  :root:not([data-theme='light']) {
++    --accent: #fb923c;
++    --accent-dark: #f97316;
++    --accent-soft: #3d2212;
++  }
++}
+diff --git a/apps/slides/src/renderer/main.tsx b/apps/slides/src/renderer/main.tsx
+index 9b92cd6..4cb8fa4 100644
+--- a/apps/slides/src/renderer/main.tsx
++++ b/apps/slides/src/renderer/main.tsx
+@@ -19,6 +19,7 @@ import '@genoffice/ui/markdown.css'
+ import '@genoffice/ui/ai-panel-prefs.css'
+ import '@genoffice/ui/ai-scope-quote.css'
+ import './styles.css'
++import './kertas/skin.css'
+ import { applyAiPanelPrefs, installScreenTips } from '@genoffice/ui'
+ import { connectMeasurementUnit } from './measurement-unit'
+ 
+diff --git a/apps/slides/src/shared/ipc.ts b/apps/slides/src/shared/ipc.ts
+index 65cb20b..7814138 100644
+--- a/apps/slides/src/shared/ipc.ts
++++ b/apps/slides/src/shared/ipc.ts
+@@ -1361,6 +1361,8 @@ export type MenuCommand =
+   | 'paste'
+ 
+ export interface SlidesApi {
++  /** Kertas Office: its File menu's commands, carried out by Kertas */
++  kertasFile: (action: string) => Promise<void>
+   /** current UI language (persisted by the shell in app-settings.json) */
+   getLanguage: () => Promise<
+     'zh' | 'en' | 'ja' | 'ko' | 'fr' | 'de' | 'es' | 'th' | 'id' | 'ru' | 'ar'
 diff --git a/packages/docx-engine/src/blank.ts b/packages/docx-engine/src/blank.ts
 index 38c383d..dd068c8 100644
 --- a/packages/docx-engine/src/blank.ts

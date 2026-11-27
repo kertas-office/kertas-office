@@ -102,7 +102,7 @@ function start() {
   // a command waiting for a PDF tab (Sign a PDF), taken once the document is ready
   ipcMain.handle('kertas:pdf-pending', (e) => { const name = pdfPending.get(e.sender.id) || null; pdfPending.delete(e.sender.id); return name; });
   // the File button of the spreadsheet and PDF editors: Kertas carries out the command
-  const FILE_ACTIONS = new Set(['new-doc', 'new-sheet', 'open', 'save', 'save-as', 'export-pdf', 'export-csv', 'print', 'close-tab']);
+  const FILE_ACTIONS = new Set(['new-doc', 'new-sheet', 'new-slides', 'open', 'save', 'save-as', 'export-pdf', 'export-csv', 'print', 'close-tab']);
   ipcMain.handle('kertas:editor-file', (e, action) => {
     const id = tabOf(e.sender.id);
     if (id && FILE_ACTIONS.has(action)) tell('file', id, { action });
@@ -120,6 +120,7 @@ const has = {
   writer: true,
   sheets: fs.existsSync(path.join(ROOT, 'sheets', 'renderer', 'index.html')) && fs.existsSync(SIDECAR),
   pdf: fs.existsSync(path.join(ROOT, 'pdf', 'renderer', 'index.html')),
+  slides: fs.existsSync(path.join(ROOT, 'slides', 'renderer', 'index.html')),
 };
 function startSheetsAndPdf() {
   const openHere = (filePath) => { tell('open-path', null, { path: filePath }); return true; };
@@ -192,6 +193,22 @@ function startSheetsAndPdf() {
     });
     host.setPdfRedactionSavedHook((wc, filePath) => { const id = tabOf(wc.id); if (id) tell('path', id, { path: filePath }); });
   }
+  if (has.slides) {
+    roots.slides = path.join(ROOT, 'slides', 'renderer');
+    host.configureSlidesRuntime({
+      preloadPath: path.join(ROOT, 'slides', 'preload', 'index.js'),
+      rendererFilePath: path.join(ROOT, 'slides', 'renderer', 'index.html'),
+      openGeneratedPath: openHere,
+    });
+    host.registerSlidesIpc();
+    host.setSlidesOpenedHook((wc, filePath) => { const id = tabOf(wc.id); const t = tabs.get(id); if (t) { t.path = filePath; tell('path', id, { path: filePath }); } });
+    host.setSlidesCloseTabHook(() => { const id = activeTab(); if (id) tell('close', id, {}); });
+    // a new deck's first Save asks where to keep it, suggesting the tab's name
+    host.setSlidesFirstSaveAsks?.((wc) => tabs.get(tabOf(wc.id))?.name || null);
+    // the slide show: the editor goes full screen over the whole window, and back
+    host.setSlidesHostWindowHook(() => mainWin);
+    host.setSlidesShowBleed((wc, on) => { const id = tabOf(wc.id); const t = tabs.get(id); if (t) { t.bleed = !!on; place(t); } });
+  }
   host.installRendererProtocol(roots);
 }
 
@@ -244,6 +261,9 @@ function attach(win) {
   if (!host) return;
   host.setDocsShellWindow(win);
   if (has.sheets) host.setSheetsShellWindow(win);
+  if (has.slides) host.setSlidesShellWindow(win);
+  // a slide show covering the window follows it as it goes full screen and back
+  win.on('resize', () => { for (const t of tabs.values()) if (t.bleed) place(t); });
 }
 const tell = (type, id, more) => { if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('kertas:new-writer-event', { type, id, ...more }); };
 const tabOf = (wcId) => { for (const [id, t] of tabs) if (t.wcId === wcId) return id; return null; };
@@ -281,6 +301,7 @@ async function openTab(id, { kind = 'writer', filePath = null, result = null, na
     view = host.createSheetsView({ includeAiHandlers: false, openingWorkbook: true });
     host.queueWorkbookForView(view.webContents, filePath);
   } else if (kind === 'pdf') view = host.createPdfView(filePath || undefined);
+  else if (kind === 'slides') view = host.createSlidesView(filePath || undefined);
   else view = host.createDocsView(filePath || undefined);
   const wc = view.webContents;
   const wcId = wc.id;
@@ -292,7 +313,7 @@ async function openTab(id, { kind = 'writer', filePath = null, result = null, na
   }
   view.setVisible(false);
   mainWin.contentView.addChildView(view);
-  tabs.set(id, { view, wcId, kind, path: filePath, shown: false });
+  tabs.set(id, { view, wcId, kind, path: filePath, name, shown: false });
   if (kind === 'writer') wc.on('page-title-updated', (_e, title) => tell('title', id, { title }));
   // Kertas's own tab keys still work while the editor has the keyboard
   wc.on('before-input-event', (e, input) => {
@@ -314,14 +335,25 @@ function layout(id, rect) {
   if (!t || !mainWin || mainWin.isDestroyed()) return;
   if (!rect) { if (t.shown) { t.shown = false; t.view.setVisible(false); } return; }
   const z = mainWin.webContents.getZoomFactor();
-  t.view.setBounds({ x: Math.round(rect.x * z), y: Math.round(rect.y * z), width: Math.max(0, Math.round(rect.width * z)), height: Math.max(0, Math.round(rect.height * z)) });
+  t.rect = { x: Math.round(rect.x * z), y: Math.round(rect.y * z), width: Math.max(0, Math.round(rect.width * z)), height: Math.max(0, Math.round(rect.height * z)) };
+  place(t);
   if (!t.shown) {
     for (const other of tabs.values()) if (other !== t && other.shown) { other.shown = false; other.view.setVisible(false); }
     t.shown = true;
     t.view.setVisible(true);
     if (t.kind === 'sheets') host.setActiveSheetsWebContents(t.view.webContents);
+    if (t.kind === 'slides') host.setActiveSlidesWebContents(t.view.webContents);
     if (rect.focus !== false) t.view.webContents.focus();
   }
+}
+
+// The view over its pane, or over the whole window during a slide show
+function place(t) {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  if (t.bleed) {
+    const [width, height] = mainWin.getContentSize();
+    t.view.setBounds({ x: 0, y: 0, width, height });
+  } else if (t.rect) t.view.setBounds(t.rect);
 }
 
 // A picture of the tab's editor as it is now, for the page to show in its place while the
@@ -337,6 +369,7 @@ async function isDirty(id) {
   if (!t) return false;
   if (t.kind === 'sheets') return host.sheetsPendingEditCount(t.wcId) > 0;
   if (t.kind === 'pdf') return host.pdfIsDirty(t.wcId);
+  if (t.kind === 'slides') return host.slidesIsDirty(t.wcId);
   return host.docsQueryDirty(t.view.webContents);
 }
 
@@ -344,7 +377,7 @@ async function isDirty(id) {
 async function closeTab(id) {
   const t = tabs.get(id);
   if (!t) return true;
-  const ask = t.kind === 'sheets' ? host.requestSheetsClose : t.kind === 'pdf' ? host.requestPdfClose : host.requestDocsClose;
+  const ask = t.kind === 'sheets' ? host.requestSheetsClose : t.kind === 'pdf' ? host.requestPdfClose : t.kind === 'slides' ? host.requestSlidesClose : host.requestDocsClose;
   if (!(await ask(t.view.webContents, mainWin))) return false;
   tabs.delete(id);
   try { mainWin.contentView.removeChildView(t.view); } catch { /* window already gone */ }
@@ -357,6 +390,7 @@ function command(id, name) {
   const t = tabs.get(id);
   if (!t) return;
   if (t.kind === 'sheets') { host.setActiveSheetsWebContents(t.view.webContents); host.sendSheetsMenuAction(name); }
+  else if (t.kind === 'slides') { host.setActiveSlidesWebContents(t.view.webContents); t.view.webContents.send('slides:menu', name); }
   else if (t.kind === 'pdf') {
     if (name === 'save') host.flushPdfSave(t.view.webContents, true);
     else if (name === 'print') host.sendPdfPrintRequest(t.view.webContents);
