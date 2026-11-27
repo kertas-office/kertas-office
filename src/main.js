@@ -841,7 +841,7 @@ async function renderHome() {
       <div class="new-grid">
         <div class="app-card writer" title="Word-compatible documents (.docx, also opens .doc, .rtf, .odt)">
           <div class="app-head"><div class="app-icon">${icon('doc', 24)}</div><strong>Writer</strong></div>
-          <p class="app-desc">Word documents (.docx)</p>
+          <p class="app-desc">Documents (.docx)</p>
           <div class="actions">
             <button class="chip icon-only" data-cmd="new-doc" title="New blank document" aria-label="New blank document">${icon('plus', 17)}</button>
             <button class="chip icon-only" data-open="writer" title="Open a document" aria-label="Open a document">${icon('open', 17)}</button>
@@ -850,7 +850,7 @@ async function renderHome() {
         </div>
         <div class="app-card sheets" title="Excel-compatible workbooks (.xlsx, .csv, also opens .xls, .ods)">
           <div class="app-head"><div class="app-icon">${icon('sheet', 24)}</div><strong>Sheets</strong></div>
-          <p class="app-desc">Excel workbooks (.xlsx)</p>
+          <p class="app-desc">Spreadsheets (.xlsx)</p>
           <div class="actions">
             <button class="chip icon-only" data-cmd="new-sheet" title="New blank spreadsheet" aria-label="New blank spreadsheet">${icon('plus', 17)}</button>
             <button class="chip icon-only" data-open="sheets" title="Open a spreadsheet" aria-label="Open a spreadsheet">${icon('open', 17)}</button>
@@ -859,7 +859,7 @@ async function renderHome() {
         </div>
         ${isDesktop ? `<div class="app-card slides" title="PowerPoint-compatible presentations (.pptx, also opens .ppt, .odp)">
           <div class="app-head"><div class="app-icon">${icon('slides', 24)}</div><strong>Slides</strong></div>
-          <p class="app-desc">PowerPoint decks (.pptx)</p>
+          <p class="app-desc">Presentations (.pptx)</p>
           <div class="actions">
             <button class="chip icon-only" data-cmd="new-slides" title="New blank presentation" aria-label="New blank presentation">${icon('plus', 17)}</button>
             <button class="chip icon-only" data-open="slides" title="Open a presentation" aria-label="Open a presentation">${icon('open', 17)}</button>
