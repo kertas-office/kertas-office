@@ -842,39 +842,39 @@ async function renderHome() {
         <div class="app-card writer" title="Word-compatible documents (.docx, also opens .doc, .rtf, .odt)">
           <div class="app-head"><div class="app-icon">${icon('doc', 24)}</div><strong>Writer</strong></div>
           <div class="actions">
-            <button class="chip primary" data-cmd="new-doc">${icon('plus', 14)}Blank</button>
-            <button class="chip" data-cmd="templates-writer">${icon('template', 14)}Templates</button>
-            <button class="chip" data-open="writer">${icon('open', 14)}Open</button>
+            <button class="chip primary icon-only" data-cmd="new-doc" title="New blank document" aria-label="New blank document">${icon('plus', 17)}</button>
+            <button class="chip icon-only" data-cmd="templates-writer" title="Document templates" aria-label="Document templates">${icon('template', 17)}</button>
+            <button class="chip icon-only" data-open="writer" title="Open a document" aria-label="Open a document">${icon('open', 17)}</button>
           </div>
         </div>
         <div class="app-card sheets" title="Excel-compatible workbooks (.xlsx, .csv, also opens .xls, .ods)">
           <div class="app-head"><div class="app-icon">${icon('sheet', 24)}</div><strong>Sheets</strong></div>
           <div class="actions">
-            <button class="chip primary" data-cmd="new-sheet">${icon('plus', 14)}Blank</button>
-            <button class="chip" data-cmd="templates-sheets">${icon('template', 14)}Templates</button>
-            <button class="chip" data-open="sheets">${icon('open', 14)}Open</button>
+            <button class="chip primary icon-only" data-cmd="new-sheet" title="New blank spreadsheet" aria-label="New blank spreadsheet">${icon('plus', 17)}</button>
+            <button class="chip icon-only" data-cmd="templates-sheets" title="Spreadsheet templates" aria-label="Spreadsheet templates">${icon('template', 17)}</button>
+            <button class="chip icon-only" data-open="sheets" title="Open a spreadsheet" aria-label="Open a spreadsheet">${icon('open', 17)}</button>
           </div>
         </div>
         ${isDesktop ? `<div class="app-card slides" title="PowerPoint-compatible presentations (.pptx, also opens .ppt, .odp)">
           <div class="app-head"><div class="app-icon">${icon('slides', 24)}</div><strong>Slides</strong></div>
           <div class="actions">
-            <button class="chip primary" data-cmd="new-slides">${icon('plus', 14)}Blank</button>
-            <button class="chip" data-open="slides">${icon('open', 14)}Open</button>
+            <button class="chip primary icon-only" data-cmd="new-slides" title="New blank presentation" aria-label="New blank presentation">${icon('plus', 17)}</button>
+            <button class="chip icon-only" data-open="slides" title="Open a presentation" aria-label="Open a presentation">${icon('open', 17)}</button>
           </div>
         </div>` : ''}
         <div class="app-card pdf" title="Fill forms, comment, sign, protect, redact and organise pages">
           <div class="app-head"><div class="app-icon">${icon('pdf', 24)}</div><strong>PDF</strong></div>
           <div class="actions">
-            <button class="chip primary" data-open="pdf">${icon('open', 14)}Open PDF</button>
-            <button class="chip" data-cmd="merge-pdfs">${icon('merge', 14)}Merge</button>
-            <button class="chip" data-cmd="sign-pdf">${icon('sign', 14)}Sign</button>
+            <button class="chip primary icon-only" data-open="pdf" title="Open a PDF" aria-label="Open a PDF">${icon('open', 17)}</button>
+            <button class="chip icon-only" data-cmd="merge-pdfs" title="Merge PDFs" aria-label="Merge PDFs">${icon('merge', 17)}</button>
+            <button class="chip icon-only" data-cmd="sign-pdf" title="Sign a PDF" aria-label="Sign a PDF">${icon('sign', 17)}</button>
           </div>
         </div>
         ${isDesktop ? `<div class="app-card convert" title="Pictures, PDFs, documents and spreadsheets to other formats, on this computer">
           <div class="app-head"><div class="app-icon">${icon('convert', 24)}</div><strong>Convert</strong></div>
           <div class="actions">
-            <button class="chip primary" data-convert="pick">${icon('open', 14)}Choose files</button>
-            <button class="chip" data-convert="open">${icon('convert', 14)}Open Convert</button>
+            <button class="chip primary icon-only" data-convert="pick" title="Choose files to convert" aria-label="Choose files to convert">${icon('open', 17)}</button>
+            <button class="chip icon-only" data-convert="open" title="Open Convert" aria-label="Open Convert">${icon('convert', 17)}</button>
           </div>
         </div>` : ''}
       </div>

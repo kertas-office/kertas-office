@@ -471,7 +471,7 @@ test('a template and a PDF converted to Word both open in the new Writer', opts,
   await open('sample.docx');
   const before = editors().length;
   await k.locator('#tabs .tab').first().click();
-  await k.getByText('Templates', { exact: true }).first().click();
+  await k.locator('[data-cmd="templates-writer"]').click();
   await sleep(700);
   await k.locator('[data-tpl]').first().click();
   for (let i = 0; i < 40 && editors().length === before; i++) await sleep(300);
