@@ -19,8 +19,10 @@ let forceClose = false; // set when quitting to install an update
 // Serve the built UI from a private app:// origin instead of file://, so module
 // workers (formula engine, PDF renderer) load the same way they do on the web.
 const DIST = path.join(__dirname, '..', 'dist');
+const writer2 = require('./writer2.cjs');
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  ...writer2.schemes(),
 ]);
 function registerAppProtocol() {
   protocol.handle('app', (req) => {
@@ -156,6 +158,7 @@ function createWindow() {
     },
   });
 
+  writer2.attach(mainWindow);
   if (DEV_URL) mainWindow.loadURL(DEV_URL);
   else mainWindow.loadURL('app://kertas/index.html');
 
@@ -223,6 +226,7 @@ function buildMenu() {
 
 // ---------- IPC ----------
 ipcMain.on('kertas:theme', (_e, dark) => {
+  writer2.setTheme(dark);
   if (!mainWindow || process.platform === 'darwin') return;
   try { mainWindow.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#e8ecf5' : '#334155', height: 44 }); } catch { /* not supported */ }
   mainWindow.setBackgroundColor(dark ? '#0b0f1a' : '#eef1f7');
@@ -406,6 +410,44 @@ async function makeDefaultApp() {
   const ok = await new Promise((resolve) => execFile('xdg-mime', ['default', desktop, ...DEFAULT_MIMES], { timeout: 15000 }, (err) => resolve(!err)));
   return { how: ok ? 'done' : 'manual' };
 }
+const NEW_EDITOR_FILES = { writer: /\.docx$/i, sheets: /\.(xlsx|xlsm|csv|xls|ods)$/i, pdf: /\.pdf$/i };
+// The new Writer (trial): whether this build has it, and opening a document in it.
+// It reads the file itself, so the path gets the same checks as any other open.
+ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
+  if (op === 'state') return {
+    available: writer2.available, forced: process.env.KERTAS_NEW_WRITER === '1', off: process.env.KERTAS_NEW_WRITER === '0',
+    sheets: writer2.available && writer2.has.sheets, sheetsForced: process.env.KERTAS_NEW_SHEETS === '1', sheetsOff: process.env.KERTAS_NEW_SHEETS === '0',
+    pdf: writer2.available && writer2.has.pdf, pdfForced: process.env.KERTAS_NEW_PDF === '1', pdfOff: process.env.KERTAS_NEW_PDF === '0',
+  };
+  if (!writer2.available) return false;
+  if (op === 'open') { // { id, path? , result? }: a tab for a file, a converted document, or a blank one
+    const { id, path: filePath = null, result = null, name = null, recoverAs = null } = arg || {};
+    const kind = ['sheets', 'pdf'].includes(arg && arg.kind) ? arg.kind : 'writer';
+    if (filePath != null) {
+      assertReadable(filePath);
+      if (!NEW_EDITOR_FILES[kind].test(filePath)) return false;
+      grant(filePath);
+      await addRecent(filePath);
+    }
+    return writer2.openTab(String(id), { kind, filePath, result, name: name ? String(name) : null, recoverAs: recoverAs ? String(recoverAs) : null });
+  }
+  if (op === 'layout') return writer2.layout(String(arg.id), arg.rect);
+  if (op === 'snapshot') return writer2.snapshot(String(arg));
+  if (op === 'dirty') return writer2.isDirty(String(arg));
+  if (op === 'close') return writer2.closeTab(String(arg));
+  if (op === 'command') return writer2.command(String(arg.id), String(arg.name));
+  if (op === 'stash') return writer2.stash(arg); // document bytes in, a token for a tab out
+  if (op === 'author') return writer2.setAuthor(arg);
+  if (op === 'licences') return writer2.openLicences(); // the editors' licence and notice files
+  if (op === 'sheet-recoveries') return writer2.sheetRecoveries(); // new workbooks a crash interrupted
+  if (op === 'recent') { // a file saved under a new name in one of the editors
+    if (typeof arg === 'string' && path.isAbsolute(arg) && require('fs').existsSync(arg)) await addRecent(arg);
+    return true;
+  }
+  if (op === 'ocr-result') return writer2.ocrResult(arg); // lines read from a page picture
+  if (op === 'convert-pdf') return writer2.convertPdfForTab(arg); // PDF bytes in, a token for the result out
+  return false;
+});
 ipcMain.handle('kertas:default-app', () => makeDefaultApp());
 
 ipcMain.handle('kertas:pin-recent', (_e, { path: p, pinned }) => pinRecent(p, !!pinned));
@@ -435,7 +477,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('open-file', (e, filePath) => { e.preventDefault(); sendOpen(filePath); }); // macOS
   // No page gets camera, microphone, location, notifications or similar. The app's own
   // pages may use the clipboard (Paste buttons); nothing else is ever granted.
-  const trusted = (url) => String(url || '').startsWith('app://kertas/') || (DEV_URL && String(url).startsWith(DEV_URL));
+  const trusted = (url) => String(url || '').startsWith('app://kertas/') || (writer2.available && /^kertas-writer:\/\/(docs|sheets|pdf)\//.test(String(url || ''))) || (DEV_URL && String(url).startsWith(DEV_URL));
   const CLIPBOARD = new Set(['clipboard-read', 'clipboard-sanitized-write']);
   app.on('web-contents-created', (_e, contents) => {
     contents.on('will-attach-webview', (ev) => ev.preventDefault());
@@ -444,7 +486,11 @@ if (!app.requestSingleInstanceLock()) {
     session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => cb(CLIPBOARD.has(permission) && trusted(wc.getURL())));
     session.defaultSession.setPermissionCheckHandler((wc, permission) => CLIPBOARD.has(permission) && trusted(wc?.getURL()));
     session.defaultSession.setDevicePermissionHandler(() => false);
+    // Chromium's spell checker downloads its dictionaries from the internet on Linux (Windows and
+    // macOS use the system's own). Kertas goes online for nothing, so it is switched off there.
+    if (process.platform === 'linux') { session.defaultSession.setSpellCheckerEnabled(false); session.defaultSession.setSpellCheckerLanguages([]); }
     registerAppProtocol();
+    try { writer2.start(); } catch (e) { console.error('The new Writer did not start', e); }
     buildMenu();
     createWindow();
     setupUpdates({

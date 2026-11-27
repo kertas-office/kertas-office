@@ -4,7 +4,7 @@
 <!-- nav: compatibility -->
 
 <section class="page-head wrap-narrow">
-  <div class="meta">Checked against <span data-release-version>v1.2.3</span> · Updated with every release</div>
+  <div class="meta">Checked against <span data-release-version>v1.3.0</span> · Updated with every release</div>
   <h1>Compatibility</h1>
   <p class="lead">What survives a round trip between Kertas and Microsoft Office, what is partial, and what is not built yet. Saved files are checked by reopening them in independent tools before each release.</p>
   <div class="legend">
@@ -37,12 +37,12 @@
     <div><span>Fonts, fills, borders, merges, frozen panes</span><span><span class="st good">Works well</span></span><span></span></div>
     <div><span>Charts</span><span><span class="st good">Works well</span></span><span>Column, bar, line, area, pie, doughnut and scatter, saved as real Excel charts.</span></div>
     <div><span>Conditional formatting and sparklines</span><span><span class="st good">Works well</span></span><span>Also kept when exporting to PDF.</span></div>
-    <div><span>Threaded comments</span><span><span class="st good">Works well</span></span><span>Saved as Excel threaded comments with authors, plus a note copy that LibreOffice, WPS and older Excel can read.</span></div>
+    <div><span>Threaded comments</span><span><span class="st good">Works well</span></span><span>Saved as Excel threaded comments with authors and replies.</span></div>
     <div><span>Named ranges</span><span><span class="st good">Works well</span></span><span>Saved as Excel defined names.</span></div>
     <div><span>Data validation, filters, slicers</span><span><span class="st good">Works well</span></span><span></span></div>
     <div><span>PivotTables made in Kertas</span><span><span class="st good">Works well</span></span><span>Saved as genuine Excel pivots that refresh.</span></div>
-    <div><span>PivotTables from Excel</span><span><span class="st part">Partial</span></span><span>Kept with their values. Kertas can edit pivots with up to two row fields and two values.</span></div>
-    <div><span>CSV</span><span><span class="st good">Works well</span></span><span>Keeps leading zeros, long numbers, the original encoding and separator.</span></div>
+    <div><span>PivotTables from Excel</span><span><span class="st part">Partial</span></span><span>Kept with their values and fields. Very complex Excel pivots may not be fully editable.</span></div>
+    <div><span>CSV</span><span><span class="st good">Works well</span></span><span>Opens and saves comma-separated files; saved as UTF-8, which Excel reads correctly.</span></div>
     <div><span>Older formats (.xls, .ods)</span><span><span class="st part">Partial</span></span><span>Open for editing and save as .xlsx.</span></div>
     <div><span>Macros (VBA)</span><span><span class="st none">Not yet</span></span><span>Macros do not run in Kertas.</span></div>
   </div>
@@ -59,7 +59,7 @@
     <div><span>Redaction</span><span><span class="st good">Works well</span></span><span>Removes the content underneath, not just covers it.</span></div>
     <div><span>Editing existing text</span><span><span class="st part">Partial</span></span><span>Uses the original font where it is available; otherwise a close substitute.</span></div>
     <div><span>OCR and conversion to Word and Excel</span><span><span class="st good">Works well</span></span><span>Accuracy depends on scan quality.</span></div>
-    <div><span>Password-protected PDFs</span><span><span class="st part">Partial</span></span><span>Open, protect and save with encryption. Permission limits set by the author (such as no printing) are removed when saved.</span></div>
+    <div><span>Password-protected PDFs</span><span><span class="st part">Partial</span></span><span>Open, protect, change or remove the password, and save with encryption.</span></div>
   </div>
 </section>
 
