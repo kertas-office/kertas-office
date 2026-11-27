@@ -20,6 +20,7 @@ let forceClose = false; // set when quitting to install an update
 // workers (formula engine, PDF renderer) load the same way they do on the web.
 const DIST = path.join(__dirname, '..', 'dist');
 const writer2 = require('./writer2.cjs');
+require('./convert.cjs').register({ getWindow: () => mainWindow, writer2, findSoffice });
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
   ...writer2.schemes(),

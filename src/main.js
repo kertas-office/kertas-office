@@ -22,6 +22,7 @@ const MODULES = {
   writer: { label: 'W', loader: () => import('./modules/writer.js'), newName: 'Document', ext: 'docx', title: 'Writer' },
   sheets: { label: 'S', loader: () => import('./modules/sheets.js'), newName: 'Book', ext: 'xlsx', title: 'Sheets' },
   pdf: { label: 'P', loader: () => import('./modules/pdf.js'), newName: 'Document', ext: 'pdf', title: 'PDF' },
+  convert: { label: 'C', loader: () => import('./modules/convert.js'), newName: 'Convert', ext: '', title: 'Convert' },
 };
 
 const tabsEl = document.getElementById('tabs');
@@ -33,7 +34,7 @@ const toastEl = document.getElementById('toast');
 /** @type {Map<string, {id, kind, name, path, dirty, el, tabEl, instance}>} */
 const tabs = new Map();
 let activeId = 'home';
-const untitled = { writer: 0, sheets: 0, pdf: 0 };
+const untitled = { writer: 0, sheets: 0, pdf: 0, convert: 0 };
 
 document.body.classList.add(platform);
 const hydrateIcons = (root = document) => root.querySelectorAll('[data-ic]').forEach((n) => { n.innerHTML = icon(n.dataset.ic, 17); n.style.display = 'inline-grid'; });
@@ -51,7 +52,7 @@ export function toast(msg, isError = false) {
 }
 function setStatus(text) { statusEl.textContent = text; }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const BADGE_ICON = { writer: 'doc', sheets: 'sheet', pdf: 'pdf' };
+const BADGE_ICON = { writer: 'doc', sheets: 'sheet', pdf: 'pdf', convert: 'convert' };
 const badge = (kind) => `<span class="badge ${kind}">${icon(BADGE_ICON[kind] || 'doc', 11)}</span>`;
 const isDark = () => document.documentElement.dataset.theme === 'dark';
 const baseName = (n) => n.replace(/\.[^.]+$/, '');
@@ -83,7 +84,7 @@ function activate(id) {
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${id}`));
   const tab = tabs.get(id);
   document.title = tab ? `${tab.name} - Kertas Office` : 'Kertas Office';
-  setStatus(tab ? (tab.path || 'Not saved yet') : 'Ready');
+  setStatus(tab ? (tab.kind === 'convert' ? 'Drop files or choose them to convert' : tab.path || 'Not saved yet') : 'Ready');
   statusRight.textContent = tab ? MODULES[tab.kind].title : 'All files stay on this device';
   if (id === 'home') renderHome();
   tab?.instance?.onShow?.();
@@ -409,7 +410,7 @@ async function confirmRisk(tab) {
 }
 
 async function saveTab(tab, { saveAs = false, format } = {}) {
-  if (!tab?.instance) return false;
+  if (!tab?.instance || tab.kind === 'convert') return false;
   if (tab.native) { window.kertasNative.newWriter('command', { id: tab.id, name: saveAs ? 'save-as' : 'save' }); return true; }
   const ext = format || (tab.kind === 'sheets' && extOf(tab.name) === 'csv' ? 'csv' : MODULES[tab.kind].ext);
   if (tab.risk?.length && !tab.riskOk && (ext === 'docx' || ext === 'xlsx')) {
@@ -503,6 +504,14 @@ async function saveAndOpenPdf(data, name) {
   const out = await saveFile({ data, name, kind: 'pdf', saveAs: true });
   if (out?.path) await openPath(out.path);
   return out;
+}
+/** The Convert app: one tab, brought forward if it is open already */
+async function openConvert({ pick = false } = {}) {
+  let tab = [...tabs.values()].find((t) => t.kind === 'convert');
+  if (tab) activate(tab.id);
+  else tab = await openTab('convert', { name: 'Convert' });
+  if (pick && tab?.instance) await tab.instance.add(await window.kertasNative.convert('pick'));
+  return tab;
 }
 async function mergePdfs() {
   const files = await openFiles('pdf', true);
@@ -669,6 +678,7 @@ const COMMANDS = [
   { id: 'merge-pdfs', group: 'files', label: 'Merge PDFs...', icon: 'merge', run: mergePdfs },
   { id: 'sign-pdf', group: 'files', label: 'Sign a PDF...', icon: 'sign', run: signPdf },
   { id: 'images-to-pdf', group: 'files', label: 'Images to PDF...', icon: 'file-image', run: imagesToPdfCmd },
+  ...(isDesktop ? [{ id: 'convert-files', group: 'files', label: 'Convert files...', icon: 'convert', run: () => openConvert() }] : []),
   { id: 'home', group: 'app', label: 'Go to Home', icon: 'home', run: () => activate('home') },
   { id: 'theme', group: 'app', label: 'Toggle dark mode', icon: 'moon', run: () => applyTheme(!isDark()) },
   ...(isDesktop ? [{ id: 'default-app', group: 'app', label: 'Make Kertas the default app for documents', icon: 'shield-check', run: () => makeDefaultApp() }] : []),
@@ -813,6 +823,14 @@ async function renderHome() {
             <button class="chip" data-cmd="sign-pdf">${icon('sign', 14)}Sign</button>
           </div>
         </div>
+        ${isDesktop ? `<div class="app-card convert">
+          <div class="app-icon">${icon('convert', 24)}</div>
+          <strong>Convert</strong><span class="desc">Pictures, PDFs, documents and spreadsheets to other formats, on this computer</span>
+          <div class="actions">
+            <button class="chip primary" data-convert="pick">${icon('open', 14)}Choose files</button>
+            <button class="chip" data-convert="open">${icon('convert', 14)}Open Convert</button>
+          </div>
+        </div>` : ''}
       </div>
       ${pinned.length ? `<div class="section-head" style="margin-top:30px"><h2>Pinned</h2></div>
       <div class="recent glass">${pinned.map(recentRow).join('')}</div>` : ''}
@@ -829,6 +847,7 @@ async function renderHome() {
     if (b.dataset.default === 'yes') makeDefaultApp(); else { markDefaultAsked(); renderHome(); }
   }));
   home.querySelectorAll('[data-cmd]').forEach((b) => b.addEventListener('click', () => runCommand(b.dataset.cmd)));
+  home.querySelectorAll('[data-convert]').forEach((b) => b.addEventListener('click', () => openConvert({ pick: b.dataset.convert === 'pick' })));
   home.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openDialog(b.dataset.open)));
   home.querySelectorAll('[data-path]').forEach((b) => b.addEventListener('click', () => {
     if (b.dataset.missing) { toast('This file was moved or deleted. Remove it from the list, or open it from its new place.', true); return; }
@@ -925,15 +944,17 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault();
   e.stopPropagation();
   const target = fileDropTarget(e.target);
+  // the Convert tab takes the files by their paths, so a large video is never read here
+  const pathsOnly = target?.dataset.fileDrop === 'paths';
   const records = await Promise.all([...e.dataTransfer.files].map(async (f) => ({
-    name: f.name, path: window.kertasNative?.pathForFile?.(f) || null, data: new Uint8Array(await f.arrayBuffer()),
+    name: f.name, path: window.kertasNative?.pathForFile?.(f) || null, ...(pathsOnly ? {} : { data: new Uint8Array(await f.arrayBuffer()) }),
   })));
   if (target) { await target.kertasFileDrop(records, e); return; }
   await openFileRecords(records);
 }, true);
 
 // Test hook so automated checks can drive the app
-window.__kertas = { openTab, saveTab, tabs, closeTab, activate, exportPdf, runCommand, applyTheme, snapshotAll, newFromTemplate, openTemplates };
+window.__kertas = { openConvert, openTab, saveTab, tabs, closeTab, activate, exportPdf, runCommand, applyTheme, snapshotAll, newFromTemplate, openTemplates };
 
 renderHome();
 

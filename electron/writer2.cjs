@@ -363,7 +363,7 @@ async function savePdfAs(t) {
 // PDF to Word with the layout kept. The work runs in a process of its own (see
 // writer2-pdf-worker.cjs), so the window stays responsive however long it takes; the result
 // waits here until its tab asks for it.
-function convertPdfForTab(data, format = 'docx') {
+function convertPdfForTab(data, format = 'docx', { raw = false, onProgress = null } = {}) {
   if (!host) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
     const child = utilityProcess.fork(path.join(__dirname, 'writer2-pdf-worker.cjs'), [], { serviceName: 'Kertas PDF to Word' });
@@ -372,12 +372,62 @@ function convertPdfForTab(data, format = 'docx') {
     // generous: a scanned book can take minutes; a process that has stopped answering is ended
     const timer = setTimeout(() => finish(reject, new Error('The conversion took too long and was stopped')), 15 * 60 * 1000);
     child.on('message', (msg) => {
-      if (msg.docx) finish(resolve, format === 'docx' ? keepResult(msg.docx) : Buffer.from(msg.docx));
+      if (msg.docx) finish(resolve, format === 'docx' && !raw ? keepResult(msg.docx) : Buffer.from(msg.docx));
       else if (msg.error) finish(reject, new Error(msg.error));
-      else if (msg.total) tell('convert-progress', null, { page: msg.page, total: msg.total, format });
+      else if (msg.total) {
+        if (onProgress) onProgress(msg.page, msg.total);
+        else tell('convert-progress', null, { page: msg.page, total: msg.total, format });
+      }
     });
     child.on('exit', (code) => finish(reject, new Error(`The converter stopped unexpectedly (${code})`)));
     child.once('spawn', () => child.postMessage({ pdf: Buffer.from(data), format, wasm: path.join(ROOT, 'wasm', 'pdfium.wasm') }));
+  });
+}
+
+// A Word document to PDF for the Convert app: the new Writer opens it out of sight and
+// prints it to the target path the way its own Export as PDF does, with no dialog. Pages
+// come out exactly as the Writer lays them out.
+function docxToPdf(filePath, outPath) {
+  if (!host || !has.writer) return Promise.reject(new Error('The Writer is not available in this build'));
+  return new Promise((resolve, reject) => {
+    const view = host.createDocsView(filePath);
+    const wc = view.webContents;
+    windows.add(wc.id);
+    try { wc.setBackgroundThrottling(false); } catch { /* older Electron */ }
+    // the Writer lays pages out only where it is painted: an invisible window that still paints
+    const { BrowserWindow } = require('electron');
+    const holder = new BrowserWindow({ show: false, width: 1280, height: 900, paintWhenInitiallyHidden: true, skipTaskbar: true, webPreferences: { backgroundThrottling: false } });
+    holder.contentView.addChildView(view);
+    view.setBounds({ x: 0, y: 0, width: 1280, height: 900 });
+    let done = false;
+    let tries = 0;
+    let retry = null;
+    const finish = (err, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      clearTimeout(retry);
+      windows.delete(wc.id);
+      try { wc.close({ waitForBeforeUnload: false }); } catch { /* already closed */ }
+      try { holder.destroy(); } catch { /* already gone */ }
+      if (err) reject(err); else resolve(value);
+    };
+    const timer = setTimeout(() => finish(new Error('The document took too long to convert')), 3 * 60 * 1000);
+    host.setKertasAutoPdf(
+      wc.id,
+      outPath,
+      (out, error) => (out ? finish(null, out) : finish(new Error(error || 'The PDF could not be written'))),
+      () => clearTimeout(retry), // the export is under way: no more asking
+    );
+    // the document is laid out a moment after the page loads; asking again covers a slow start
+    const ask = () => {
+      if (done) return;
+      if (++tries > 6) { finish(new Error('The document did not finish loading')); return; }
+      wc.send('menu:command', 'export-pdf');
+      retry = setTimeout(ask, 15000);
+    };
+    wc.once('did-finish-load', () => setTimeout(ask, 2500));
+    wc.once('render-process-gone', () => finish(new Error('The Writer stopped while converting')));
   });
 }
 
@@ -393,4 +443,4 @@ async function openLicences() {
   return shell.openPath(dir);
 }
 const ocrResult = (arg) => ocrAnswer(Number(arg && arg.req), arg && arg.lines);
-module.exports = { available, has, ocrResult, sheetRecoveries, openLicences, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };
+module.exports = { available, has, ocrResult, sheetRecoveries, openLicences, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab, docxToPdf };
