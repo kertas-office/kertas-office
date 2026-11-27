@@ -69,10 +69,36 @@ export function textLooksGarbled(items) {
 }
 
 /**
+ * Is the page a scan: one picture covering most of the page? (Any text on such a page was
+ * added by a scanner app or by OCR, measured from the picture.) Needs pdf.js's OPS table.
+ */
+export function isScan(opList, OPS, pageArea) {
+  if (!opList || !OPS || !pageArea) return false;
+  const mulM = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const stack = [];
+  const { fnArray, argsArray } = opList;
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i];
+    const args = argsArray[i];
+    if (fn === OPS.save) stack.push(ctm);
+    else if (fn === OPS.restore) ctm = stack.pop() || ctm;
+    else if (fn === OPS.transform) ctm = mulM(ctm, args);
+    else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm); if (Array.isArray(args?.[0]) || ArrayBuffer.isView(args?.[0])) ctm = mulM(ctm, args[0]); }
+    else if (fn === OPS.paintFormXObjectEnd) ctm = stack.pop() || ctm;
+    else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject || fn === OPS.paintImageXObjectRepeat) {
+      // an image fills the unit square under the current matrix
+      if (Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2]) >= pageArea * 0.6) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Reads positioned text from an open pdf.js document.
  * Returns [{ width, height, items }] in the format pdf-layout.js expects.
  */
-export async function extractPages(pdf, { Util, onProgress, pages: only } = {}) {
+export async function extractPages(pdf, { Util, OPS, onProgress, pages: only } = {}) {
   const out = [];
   const total = pdf.numPages;
   for (let n = 1; n <= total; n++) {
@@ -81,7 +107,9 @@ export async function extractPages(pdf, { Util, onProgress, pages: only } = {}) 
     const vp = page.getViewport({ scale: 1 });
     const tc = await page.getTextContent({ includeMarkedContent: false });
     // Loading the operator list resolves the fonts, which tells us bold and italic
-    try { await page.getOperatorList(); } catch { /* fonts stay unknown */ }
+    let ops = null;
+    try { ops = await page.getOperatorList(); } catch { /* fonts stay unknown */ }
+    const scan = isScan(ops, OPS, vp.width * vp.height);
     const fonts = new Map();
     const fontOf = (id) => {
       if (!fonts.has(id)) {
@@ -106,7 +134,7 @@ export async function extractPages(pdf, { Util, onProgress, pages: only } = {}) 
       const f = fontOf(it.fontName);
       items.push({ str: it.str, x: t[4], y: t[5], w: it.width * vp.scale, size, bold: f.bold, italic: f.italic, font: f.family, fontName: f.raw || '' });
     }
-    out.push({ width: vp.width, height: vp.height, items, index: n - 1 });
+    out.push({ width: vp.width, height: vp.height, items, index: n - 1, scan });
     page.cleanup?.();
     onProgress?.(n, total);
   }

@@ -6,6 +6,7 @@ import { buildPdf, listFormFields, imagesToPdf } from '../lib/pdf-ops.js';
 import { recodeImage } from '../lib/pdf-recode.js';
 import { openFiles, saveMany, saveFile, saveAnyFile, newWriterOn } from '../lib/platform.js';
 import { extractPages as extractTextPages, pdfToDocx, pdfToSnapshot, fontInfo, textLooksGarbled } from '../lib/pdf-convert.js';
+import { textLayerRough } from '../lib/pdf-layout.js';
 import { compareText, buildReport } from '../lib/pdf-compare.js';
 import { findFont, cssStack } from '../lib/font-catalog.js';
 import { snapshotToXlsx } from '../lib/xlsx-bridge.js';
@@ -1699,7 +1700,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     for (const p of pages) {
       n += 1;
       if (p.kind === 'blank' || !sources[p.src]) continue;
-      const [pg] = await extractTextPages(sources[p.src].doc, { Util: pdfjsLib.Util, pages: [p.index] });
+      const [pg] = await extractTextPages(sources[p.src].doc, { Util: pdfjsLib.Util, OPS: pdfjsLib.OPS, pages: [p.index] });
       if (!pg) continue;
       // Words recognised by OCR count as text too
       // ... and stand in for the page's own text when that was unreadable
@@ -1718,13 +1719,20 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
       setStatus('Reading the PDF...');
       let text = await currentText((n, t) => setStatus(`Reading page ${n} of ${t}...`));
       // Some PDFs draw the right shapes but store other characters: converting that gives gibberish
-      const bad = text.filter((p) => !p.fromOcr && textLooksGarbled(p.items).garbled);
+      const garbled = text.filter((p) => !p.fromOcr && textLooksGarbled(p.items).garbled);
+      // Scans whose text was added by a scanner app, sized word by word: converting that mixes
+      // font sizes and breaks paragraphs, while reading the page again gives a clean result
+      const rough = text.filter((p) => !p.fromOcr && !garbled.includes(p) && p.scan && textLayerRough(p));
+      const bad = [...garbled, ...rough];
       if (bad.length) {
         setStatus('');
         const some = bad.length === text.length ? (text.length === 1 ? 'this page' : `all ${text.length} pages`) : `${bad.length} of ${text.length} pages`;
+        const those = bad.length === 1 ? 'that page' : 'those pages';
         const res = await openDialog({
-          title: 'The text in this PDF cannot be read',
-          description: `The text stored in ${some} is not real text. The page looks right, but the letters behind it are other characters, so it would convert to gibberish (copying from it gives the same). Kertas can read ${bad.length === 1 ? 'that page' : 'those pages'} as pictures instead.`,
+          title: garbled.length ? 'The text in this PDF cannot be read' : 'This PDF is a scan',
+          description: garbled.length
+            ? `The text stored in ${some} is not real text. The page looks right, but the letters behind it are other characters, so it would convert to gibberish (copying from it gives the same). Kertas can read ${those} as pictures instead.`
+            : `The text in ${some} was added by a scanner app and is uneven, so the converted document would mix font sizes and break up paragraphs. Kertas can read ${those} again itself for a much cleaner result.`,
           width: 520,
           fields: [
             { id: 'info', type: 'info', html: '<b>Languages in the document</b>' },
@@ -1789,7 +1797,7 @@ export async function mount(el, { data, name, setDirty, setStatus, toast, fileMe
     if (!other) return;
     const read = async (bytes) => {
       const task = pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false, fontExtraProperties: true });
-      try { return await extractTextPages(await task.promise, { Util: pdfjsLib.Util }); } finally { task.destroy(); }
+      try { return await extractTextPages(await task.promise, { Util: pdfjsLib.Util, OPS: pdfjsLib.OPS }); } finally { task.destroy(); }
     };
     try {
       setStatus('Reading both PDFs...');
