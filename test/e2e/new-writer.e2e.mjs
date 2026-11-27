@@ -482,7 +482,8 @@ test('a template and a PDF converted to Word both open in the new Writer', opts,
   await k.waitForSelector('[title="Turn this PDF into an editable Word document"]', { state: 'attached', timeout: 20000 });
   await sleep(1500);
   const button = k.locator('[title="Turn this PDF into an editable Word document"]').first();
-  if (!(await button.isVisible())) { await k.getByText('Convert', { exact: true }).first().click(); await sleep(400); }
+  // the PDF editor's own Convert tab, not the Convert app's card on Home
+  if (!(await button.isVisible())) { await k.locator('.rb-tab:visible', { hasText: /^Convert$/ }).first().click(); await sleep(400); }
   await button.click();
   for (let i = 0; i < 60 && editors().length === before + 1; i++) await sleep(500);
   assert.equal(editors().length, before + 2, 'the converted document opened as a new-Writer tab');
