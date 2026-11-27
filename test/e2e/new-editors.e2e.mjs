@@ -75,10 +75,10 @@ async function closeAll() {
 }
 
 /** A fresh copy of a fixture, opened through Kertas's own Open command; `w` becomes its editor. */
-async function open(name, kind) {
+async function open(name, kind, from = null) {
   await closeAll();
   file = path.join(dir, `${++n}-${name}`);
-  await copyFile(fixture(name), file);
+  await copyFile(from || fixture(name), file);
   await answerDialogs([file]);
   const had = new Set(editors(kind));
   await k.locator('#tabs .tab').first().click();
@@ -511,6 +511,7 @@ test('Select mode: Bring to front, Send to back and Delete change the file', pdf
   await fileChange(before);
   assert.equal(await first(), 180, 'red went to the front, blue is first now');
   await w.waitForSelector('.kertas-object');
+  await w.keyboard.press('Escape'); // the menu under the selected item can cover the other one
   before = await readFile(file);
   // the blue one is first now; its lower right corner is clear of the red one
   const blue = w.locator('.kertas-object').first();
@@ -628,4 +629,67 @@ test('the name set in About is the author in the new Sheets and PDF editor too',
   await k.evaluate(() => window.kertasNative.newWriter('author', 'Aisha Rahman'));
   const settings = JSON.parse(await readFile(path.join(dir, 'config', 'Kertas Office', 'writer', 'app-settings.json'), 'utf8').catch(async () => readFile(path.join(dir, 'config', 'kertas-office', 'writer', 'app-settings.json'), 'utf8')));
   assert.equal(settings.authorName, 'Aisha Rahman');
+});
+
+test('the Convert tab has To Word, To Excel, pictures, Recognize text and Compress, and To Word opens a document', pdfOpts, async () => {
+  await open('report.pdf', 'pdf');
+  await pdfTab('Convert');
+  for (const label of ['To Word', 'To Excel', 'PNG images', 'JPG images', 'Recognize text', 'Compress'])
+    assert.ok(await w.getByText(label, { exact: true }).isVisible(), `${label} is on the Convert tab`);
+  const docsBefore = editors('docs').length;
+  await w.getByText('To Word', { exact: true }).click();
+  for (let i = 0; i < 160 && editors('docs').length === docsBefore; i++) await sleep(250);
+  assert.equal(editors('docs').length, docsBefore + 1, 'a Writer tab opened with the converted document');
+});
+
+test('Recognize text reads pages that already have text when asked to, and says so when there are no scanned pages', pdfOpts, async () => {
+  await open('report.pdf', 'pdf');
+  await pdfTab('View');
+  await w.getByText('Recognize text', { exact: true }).click();
+  await w.getByText(/Every page already has text/).waitFor({ timeout: 15000 });
+  await pdfTab('Convert');
+  await w.getByText('Recognize text', { exact: true }).click();
+  await w.getByText('This page', { exact: true }).click();
+  let found = false;
+  for (let i = 0; i < 240 && !found; i++) {
+    await sleep(500);
+    found = (await w.locator('.pdf-ocr-layer span').count()) > 5;
+  }
+  assert.ok(found, 'recognised words are laid over the page');
+  await w.getByText(/Text recognized on 1 page/).waitFor({ timeout: 15000 });
+  assert.deepEqual(w.errors, []);
+});
+
+test('Clear form empties every field, and the save keeps it empty', pdfOpts, async () => {
+  const filled = await PDFDocument.load(await readFile(fixture('form.pdf')));
+  const form = filled.getForm();
+  form.getTextField('name').setText('Alice Tan');
+  form.getTextField('email').setText('alice@example.com');
+  form.getCheckBox('terms').check();
+  const src = path.join(dir, 'filled-form.pdf');
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(src, await filled.save());
+  await open('filled-form.pdf', 'pdf', src);
+  await pdfTab('Fill Form');
+  await w.getByText('Clear form', { exact: true }).click();
+  await sleep(800);
+  await press('pdf', 'S');
+  for (let i = 0; i < 40; i++) { if ((await PDFDocument.load(await readFile(file))).getForm().getTextField('name').getText() === undefined) break; await sleep(250); }
+  const after = (await PDFDocument.load(await readFile(file))).getForm();
+  assert.ok(!after.getTextField('name').getText(), 'name is empty');
+  assert.ok(!after.getTextField('email').getText(), 'email is empty');
+  assert.equal(after.getCheckBox('terms').isChecked(), false, 'the box is unticked');
+});
+
+test('Select mode: Duplicate puts a copy a little lower and to the right, and leaves the original', pdfOpts, async () => {
+  const PDFName = await openItems();
+  const before = await readFile(file);
+  await w.locator('.kertas-object').first().click({ position: { x: 10, y: 10 } });
+  await w.getByText('Duplicate', { exact: true }).click();
+  await fileChange(before);
+  const { list } = await annotsOf(PDFName);
+  assert.equal(list.length, 3);
+  assert.deepEqual(rectOf(list[0], PDFName), [100, 600, 250, 700], 'the original stays');
+  assert.deepEqual(rectOf(list[2], PDFName), [112, 588, 262, 688], 'the copy is 12 points right and down');
+  assert.deepEqual(w.errors, []);
 });
