@@ -115,7 +115,7 @@
     "exceljs": "^4.4.0",
     "fontkit": "^2.0.4",
     "jszip": "^3.10.2",
-    "lucide": "^1.78.0",
+    "lucide": "^1.79.0",
     "node-forge": "^1.4.4",
     "nspell": "^2.1.5",
     "pdfjs-dist": "^6.5.438",
