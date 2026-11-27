@@ -4873,7 +4873,7 @@ index e799e6b..6591e76 100644
    mergePdf: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePdf, request),
    mergePages: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePages, request),
 diff --git a/apps/pdf/src/renderer/App.tsx b/apps/pdf/src/renderer/App.tsx
-index 32f6de1..597c550 100644
+index 32f6de1..6b42f75 100644
 --- a/apps/pdf/src/renderer/App.tsx
 +++ b/apps/pdf/src/renderer/App.tsx
 @@ -8,6 +8,15 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
@@ -4955,7 +4955,7 @@ index 32f6de1..597c550 100644
        if (!doc) return
        const live = ocrAbortRef.current
        const controller = live && !live.signal.aborted ? live : new AbortController()
-@@ -2566,6 +2603,7 @@ export default function App() {
+@@ -2566,9 +2603,14 @@ export default function App() {
              fromPage: () => currentOrigIdxRef.current,
              ...(pending === null ? {} : { pending }),
              ...(manualLimit === undefined ? {} : { limit: manualLimit }),
@@ -4963,7 +4963,14 @@ index 32f6de1..597c550 100644
              signal: controller.signal,
              geom: (origIdx) => pageGeomRef.current(origIdx),
              render: renderPageForOcr,
-@@ -2583,6 +2621,12 @@ export default function App() {
++            // Kertas reads several pages at once: one per spare core, up to four
++            ...(KERTAS_HOST
++              ? { concurrency: Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1)) }
++              : {}),
+             ocrPage: (png) => window.pdfApi.ocrPage(png),
+             onPage: (origIdx, data) => setOcrPages((prev) => new Map(prev).set(origIdx, data)),
+             onProgress: (done, total) =>
+@@ -2583,6 +2625,12 @@ export default function App() {
          // would stick until the document reloads
          if (manualLimit !== undefined && result && result.total === 0)
            showNoticeRef.current(t('ocrNothing'))
@@ -4976,7 +4983,7 @@ index 32f6de1..597c550 100644
          // A finished pass and a platform without an OCR engine are not worth a
          // toast; a cap or a user cancel is, and it says how far the pass got
          setOcrRunning(false)
-@@ -5322,7 +5366,22 @@ export default function App() {
+@@ -5322,7 +5370,22 @@ export default function App() {
    }
  
    /** Ribbon button → file picker; the picked image then enters click-to-place mode */
@@ -4999,7 +5006,7 @@ index 32f6de1..597c550 100644
      setEditTextMode(false)
      setTextDraft(null)
      setPendingTextInsert(null)
-@@ -5417,8 +5476,22 @@ export default function App() {
+@@ -5417,8 +5480,22 @@ export default function App() {
      const pick = imagePick
      if (!pick) return
      const fill = pendingStaticFill
@@ -5022,7 +5029,7 @@ index 32f6de1..597c550 100644
      if (fill === 'check' || fill === 'cross') {
        void placeFormMark(fill, pick, origIdx, vx, vy)
        return
-@@ -5439,6 +5512,7 @@ export default function App() {
+@@ -5439,6 +5516,7 @@ export default function App() {
      image: string,
      rect: [number, number, number, number],
      fill: StaticFormFillKind | null,
@@ -5030,7 +5037,7 @@ index 32f6de1..597c550 100644
    ) => {
      const id = newId()
      const staticFill: StaticFormFillRecord | undefined = fill
-@@ -5466,7 +5540,7 @@ export default function App() {
+@@ -5466,7 +5544,7 @@ export default function App() {
            pageIndex: origIdx,
            image,
            rect,
@@ -5039,7 +5046,7 @@ index 32f6de1..597c550 100644
            rotate: ((pageGeom(origIdx).rot % 360) + 360) % 360,
          },
          staticFill,
-@@ -6557,6 +6631,11 @@ export default function App() {
+@@ -6557,6 +6635,11 @@ export default function App() {
  
    const reduceFileSize = async (): Promise<void> => {
      if (!filePath) return
@@ -5051,7 +5058,7 @@ index 32f6de1..597c550 100644
      const outcome = await window.pdfApi.reduceFileSize(filePath)
      if (!outcome.ok) {
        if (!('canceled' in outcome)) showNotice(outcome.reason)
-@@ -6569,6 +6648,64 @@ export default function App() {
+@@ -6569,6 +6652,64 @@ export default function App() {
      showNotice(savedPct > 0 ? t('reduceDone', { pct: savedPct }) : t('reduceAlreadySmall'))
    }
  
@@ -5116,7 +5123,7 @@ index 32f6de1..597c550 100644
    const insertPdf = (afterOrigIdx: number) => {
      // the flush bakes the visible order into the file, so the anchor becomes its visible position
      const afterPageIndex = visListOf(orderRef.current).indexOf(afterOrigIdx)
-@@ -7640,7 +7777,12 @@ export default function App() {
+@@ -7640,7 +7781,12 @@ export default function App() {
      if (convertBusy) return
      setConvertBusy(true)
      try {
@@ -5130,7 +5137,7 @@ index 32f6de1..597c550 100644
      } catch {
        // No shell conversion flow in standalone mode; shell-side errors show their own dialogs
      } finally {
-@@ -8026,6 +8168,23 @@ export default function App() {
+@@ -8026,6 +8172,23 @@ export default function App() {
            </span>
            <span>{t('attachments')}</span>
          </button>
@@ -5154,7 +5161,7 @@ index 32f6de1..597c550 100644
          {searchBtn}
          <button
            className={`rb-big${spread === 2 ? ' active' : ''}`}
-@@ -8049,10 +8208,17 @@ export default function App() {
+@@ -8049,10 +8212,17 @@ export default function App() {
      </div>
    )
  
@@ -5172,7 +5179,7 @@ index 32f6de1..597c550 100644
            <button
              className="qa-btn"
              data-tip={`${t('save')} (${platformShortcuts('⌘S')})`}
-@@ -8094,6 +8260,18 @@ export default function App() {
+@@ -8094,6 +8264,18 @@ export default function App() {
                {t(labelKey)}
              </button>
            ))}
@@ -5191,7 +5198,7 @@ index 32f6de1..597c550 100644
            {!readOnly && (
              <button
                className={`ribbon-tab ribbon-tab-context ${collapse.tabClass(ribbonTab === 'fillForm')}`}
-@@ -8142,7 +8320,8 @@ export default function App() {
+@@ -8142,7 +8324,8 @@ export default function App() {
          <div className="ribbon-body" data-ribbon-body="">
            {ribbonTab === 'home' && (
              <>
@@ -5201,7 +5208,7 @@ index 32f6de1..597c550 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8190,6 +8369,8 @@ export default function App() {
+@@ -8190,6 +8373,8 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -5210,7 +5217,7 @@ index 32f6de1..597c550 100644
                {markupGroup}
                <div className="ribbon-sep" />
                {/* Edit entries lead; Search moved after page/zoom (⌘F is the common path) */}
-@@ -8221,11 +8402,15 @@ export default function App() {
+@@ -8221,11 +8406,15 @@ export default function App() {
                          <button onClick={() => void convertTo('xlsx')}>
                            {t('convertToExcel')}
                          </button>
@@ -5226,7 +5233,7 @@ index 32f6de1..597c550 100644
                          <div className="rb-menu-sep" />
                          <button
                            title={t('exportImagesAll')}
-@@ -8281,8 +8466,96 @@ export default function App() {
+@@ -8281,8 +8470,96 @@ export default function App() {
                </div>
              </>
            )}
@@ -5323,7 +5330,7 @@ index 32f6de1..597c550 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8313,10 +8586,41 @@ export default function App() {
+@@ -8313,10 +8590,41 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -5365,7 +5372,7 @@ index 32f6de1..597c550 100644
                    {DRAW_TOOLS.map(({ tool, icon: DrawIcon, key }) => (
                      <button
                        key={tool}
-@@ -8329,6 +8633,7 @@ export default function App() {
+@@ -8329,6 +8637,7 @@ export default function App() {
                          setPendingTextInsert(null)
                          setImagePick(null)
                          setEditImageMode(false)
@@ -5373,7 +5380,7 @@ index 32f6de1..597c550 100644
                          if (tool === 'measure' && drawTool === 'measure') {
                            // a second click disarms the tool like every other
                            // one and asks the next measure line to re-open the
-@@ -8346,6 +8651,13 @@ export default function App() {
+@@ -8346,6 +8655,13 @@ export default function App() {
                        <span>{t(key)}</span>
                      </button>
                    ))}
@@ -5387,7 +5394,7 @@ index 32f6de1..597c550 100644
                    <button
                      className={`rb-big${drawTool === 'redact' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8566,6 +8878,7 @@ export default function App() {
+@@ -8566,6 +8882,7 @@ export default function App() {
              <>
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
@@ -5395,7 +5402,7 @@ index 32f6de1..597c550 100644
                    <button
                      className="rb-big ai-entry"
                      disabled={readOnly}
-@@ -8577,6 +8890,7 @@ export default function App() {
+@@ -8577,6 +8894,7 @@ export default function App() {
                      </span>
                      <span>{t('aiFillFormBtn')}</span>
                    </button>
@@ -5403,7 +5410,7 @@ index 32f6de1..597c550 100644
                    <button
                      className={`rb-big${pendingStaticFill === 'text' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8697,6 +9011,49 @@ export default function App() {
+@@ -8697,6 +9015,49 @@ export default function App() {
                      </span>
                      <span>{t('formComplete')}</span>
                    </button>
@@ -5453,7 +5460,7 @@ index 32f6de1..597c550 100644
                  </div>
                </div>
              </>
-@@ -8945,6 +9302,22 @@ export default function App() {
+@@ -8945,6 +9306,22 @@ export default function App() {
                      </span>
                      <span>{t('insertBlankPage')}</span>
                    </button>
@@ -5476,7 +5483,7 @@ index 32f6de1..597c550 100644
                    <button
                      className="rb-big"
                      disabled={readOnly || pageCount === 0}
-@@ -9063,6 +9436,7 @@ export default function App() {
+@@ -9063,6 +9440,7 @@ export default function App() {
                      </span>
                      <span>{t('ocrRecognize')}</span>
                    </button>
@@ -5484,7 +5491,7 @@ index 32f6de1..597c550 100644
                  </div>
                </div>
                <div className="ribbon-sep" />
-@@ -9085,6 +9459,7 @@ export default function App() {
+@@ -9085,6 +9463,7 @@ export default function App() {
        <div className="app-main">
          {/* dock wrapper animates the width between panel and rail (docs-style 180ms ease);
                the panel stays mounted while collapsed so the chat history survives */}
@@ -5492,7 +5499,7 @@ index 32f6de1..597c550 100644
          <div
            className={`ai-dock${aiCollapsed ? ' collapsed' : ''}${
              !aiSidebarEnabled && aiCollapsed ? ' ai-dock-off' : ''
-@@ -9109,6 +9484,7 @@ export default function App() {
+@@ -9109,6 +9488,7 @@ export default function App() {
              onClearSelection={() => setAiSelection(null)}
            />
          </div>
@@ -5500,7 +5507,7 @@ index 32f6de1..597c550 100644
          <div className="app-content">
            {digitalSignatures.length > 0 && (
              <div className={`pdf-sig-banner ${overallSignatureStatus(digitalSignatures)}`}>
-@@ -9258,6 +9634,22 @@ export default function App() {
+@@ -9258,6 +9638,22 @@ export default function App() {
                  />
                </div>
              )}
@@ -5523,7 +5530,7 @@ index 32f6de1..597c550 100644
              {sidebar === 'attachments' && (
                <div className="pdf-thumbs" style={{ width: sidebarW }}>
                  <div className="pdf-outline-header">
-@@ -9620,7 +10012,13 @@ export default function App() {
+@@ -9620,7 +10016,13 @@ export default function App() {
                                  pendingStaticFill ? t('formPlaceStaticHint') : t('imagePlaceHint')
                                }
                                onPlace={(vx, vy) => placeImage(origIdx, vx, vy)}
@@ -5538,7 +5545,7 @@ index 32f6de1..597c550 100644
                              />
                            )}
                            {/* Paragraph boxes (WPS-style): every text block outlined while
-@@ -10537,6 +10935,24 @@ export default function App() {
+@@ -10537,6 +10939,24 @@ export default function App() {
                                  onMove={readOnly ? undefined : moveDrawing}
                                  onResize={readOnly ? undefined : resizeDrawing}
                                />
@@ -5563,7 +5570,7 @@ index 32f6de1..597c550 100644
                                <RedactionLayer
                                  active={
                                    !readOnly && !redactionCopyInFlight && drawTool === 'redact'
-@@ -10617,6 +11033,7 @@ export default function App() {
+@@ -10617,6 +11037,7 @@ export default function App() {
                                        labels={{
                                          required: t('formDesignRequired'),
                                          multiLine: t('formDesignMultiLine'),
@@ -5571,7 +5578,7 @@ index 32f6de1..597c550 100644
                                          defaultValue: t('formDesignDefaultValue'),
                                          defaultChecked: t('formDesignDefaultChecked'),
                                          remove: t('formDesignDelete'),
-@@ -10821,7 +11238,7 @@ export default function App() {
+@@ -10821,7 +11242,7 @@ export default function App() {
                  </button>
                </div>
              )}
@@ -5580,7 +5587,7 @@ index 32f6de1..597c550 100644
                <div
                  className="pdf-sel-popup"
                  style={{ left: selPopup.x, top: selPopup.y }}
-@@ -10895,9 +11312,10 @@ export default function App() {
+@@ -10895,9 +11316,10 @@ export default function App() {
                      >
                        <span className="sel-swatch sel-swatch-st">S</span>
                      </button>
@@ -5592,7 +5599,7 @@ index 32f6de1..597c550 100644
                  <button
                    type="button"
                    className="pdf-sel-ask"
-@@ -10913,9 +11331,10 @@ export default function App() {
+@@ -10913,9 +11335,10 @@ export default function App() {
                    </svg>
                    {t('aiAskBtn')}
                  </button>
@@ -5604,7 +5611,7 @@ index 32f6de1..597c550 100644
                <AiAskPopover
                  rect={askPop.rect}
                  excerpt={askPop.excerpt}
-@@ -11170,6 +11589,16 @@ export default function App() {
+@@ -11170,6 +11593,16 @@ export default function App() {
                  >
                    {t('insertBlankPage')}
                  </button>
@@ -6678,10 +6685,29 @@ index 3188d6c..2d675fb 100644
  
  installScreenTips()
 diff --git a/apps/pdf/src/renderer/ocr-layer.tsx b/apps/pdf/src/renderer/ocr-layer.tsx
-index 71eadd4..65400ed 100644
+index 71eadd4..affbfaa 100644
 --- a/apps/pdf/src/renderer/ocr-layer.tsx
 +++ b/apps/pdf/src/renderer/ocr-layer.tsx
-@@ -228,6 +228,8 @@ export async function runAutoOcr(opts: {
+@@ -8,6 +8,7 @@
+  * Word boxes are stored in PDF user space (like markups), so unsaved page
+  * rotations re-project them instead of invalidating the recognition.
+  */
++import { KERTAS_HOST } from './kertas'
+ import type { ReactElement } from 'react'
+ import type { PDFDocumentProxy } from 'pdfjs-dist'
+ import type { PdfOcrLine } from '../shared/ipc'
+@@ -180,7 +181,9 @@ export async function renderPageForOcr(
+     const canvas = document.createElement('canvas')
+     canvas.width = Math.floor(viewport.width)
+     canvas.height = Math.floor(viewport.height)
+-    await page.render({ canvas, viewport }).promise
++    // Kertas Office: the print intent draws without waiting for screen frames, so reading
++    // goes on while the window is minimized (screen drawing pauses there)
++    await page.render({ canvas, viewport, ...(KERTAS_HOST ? { intent: 'print' as const } : {}) }).promise
+     const png = canvas.toDataURL('image/png').split(',')[1]
+     return png && png.length > 0 ? png : null
+   } catch {
+@@ -228,8 +231,12 @@ export async function runAutoOcr(opts: {
        the pages that pass never reached: the order is already settled, so it is
        followed rather than rebuilt, and a page is not paid for a second time. */
    pending?: readonly number[]
@@ -6689,8 +6715,12 @@ index 71eadd4..65400ed 100644
 +  only?: readonly number[]
    signal: AbortSignal
    limit?: number
++  /** Kertas Office: pages read side by side (Kertas reads with several workers) */
++  concurrency?: number
    geom: (origIdx: number) => PageGeom
-@@ -238,7 +240,9 @@ export async function runAutoOcr(opts: {
+   render: (doc: PDFDocumentProxy, origIdx: number, geom: PageGeom) => Promise<string | null>
+   ocrPage: (png: string) => Promise<PdfOcrLine[] | null>
+@@ -238,7 +245,9 @@ export async function runAutoOcr(opts: {
  }): Promise<AutoOcrResult> {
    const limit = opts.limit ?? AUTO_OCR_PAGE_CAP
    const index = await opts.cache.get(opts.doc)
@@ -6701,6 +6731,85 @@ index 71eadd4..65400ed 100644
    // A continuation walks the queue it was handed as it stands. A first pass
    // builds one from the whole document, rotating so the pages after the reading
    // position come first; pages that rotation had already walked before the cap
+@@ -266,36 +275,51 @@ export async function runAutoOcr(opts: {
+   })
+   let done = 0
+   let attempted = 0
+-  for (let at = 0; at < queue.length; at += 1) {
+-    if (attempted >= limit) return finish('cap', done, attempted, queue.slice(at))
+-    if (opts.signal.aborted) return finish('cancelled', done, attempted, null)
+-    opts.onProgress(done, total)
+-    // one geometry snapshot for render and box conversion: a rotation between
+-    // the two awaits must not remap boxes through different axes
+-    const geom = opts.geom(queue[at]!)
+-    const png = await opts.render(opts.doc, queue[at]!, geom)
+-    // a cancel after the render must not pay for the engine call
+-    if (opts.signal.aborted) return finish('cancelled', done, attempted, null)
+-    if (!png) {
++  // pages are started in queue order; with several readers the next page renders while
++  // the others are being read, and results come back in any order
++  let next = 0
++  let noEngine = false
++  const reader = async (): Promise<void> => {
++    while (!noEngine && !opts.signal.aborted && next < queue.length && next < limit) {
++      const origIdx = queue[next]!
++      next += 1
++      opts.onProgress(done, total)
++      // one geometry snapshot for render and box conversion: a rotation between
++      // the two awaits must not remap boxes through different axes
++      const geom = opts.geom(origIdx)
++      const png = await opts.render(opts.doc, origIdx, geom)
++      // a cancel after the render must not pay for the engine call
++      if (opts.signal.aborted) return
++      if (!png) {
++        attempted += 1
++        continue // no bitmap; the next page may still render
++      }
++      let lines: PdfOcrLine[] | null
++      try {
++        lines = await opts.ocrPage(png)
++      } catch {
++        attempted += 1
++        continue // this page failed; the rest may still recognize
++      }
++      if (lines === null) {
++        noEngine = true
++        return
++      }
++      // an engine call already in flight is kept: the work is paid for
++      const data = buildOcrPageData(lines, geom)
++      if (data) {
++        opts.onPage(origIdx, data)
++        done += 1
++        opts.onProgress(done, total)
++      }
+       attempted += 1
+-      continue // no bitmap; the next page may still render
+     }
+-    let lines: PdfOcrLine[] | null
+-    try {
+-      lines = await opts.ocrPage(png)
+-    } catch {
+-      attempted += 1
+-      continue // this page failed; the rest may still recognize
+-    }
+-    if (lines === null) return finish('noEngine', done, attempted, null)
+-    // an engine call already in flight is kept: the work is paid for
+-    const data = buildOcrPageData(lines, geom)
+-    if (data) {
+-      opts.onPage(queue[at]!, data)
+-      done += 1
+-    }
+-    attempted += 1
+   }
++  const width = Math.max(1, Math.min(opts.concurrency ?? 1, queue.length || 1))
++  await Promise.all(Array.from({ length: width }, reader))
++  if (noEngine) return finish('noEngine', done, attempted, null)
++  if (opts.signal.aborted) return finish('cancelled', done, attempted, null)
++  if (next < queue.length) return finish('cap', done, attempted, queue.slice(next))
+   return finish('complete', done, attempted, null)
+ }
+ 
 diff --git a/apps/pdf/src/shared/ipc.ts b/apps/pdf/src/shared/ipc.ts
 index bab2848..f9b0c09 100644
 --- a/apps/pdf/src/shared/ipc.ts
