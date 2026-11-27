@@ -4376,10 +4376,10 @@ index 0000000..98aa098
 +})
 diff --git a/apps/pdf/src/main/kertas-pdf.ts b/apps/pdf/src/main/kertas-pdf.ts
 new file mode 100644
-index 0000000..20c43de
+index 0000000..bf86161
 --- /dev/null
 +++ b/apps/pdf/src/main/kertas-pdf.ts
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,333 @@
 +// Kertas Office's additions to the PDF editor's main process: duplicating a page,
 +// flattening a form, and saving which layers a file opens with. Each works on the file on
 +// disk (the editor saves pending edits first) and the editor reloads it afterwards.
@@ -4506,6 +4506,7 @@ index 0000000..20c43de
 +  | { type: 'move'; id: string; rect: Rect; to: Rect }
 +  | { type: 'order'; id: string; rect: Rect; where: 'front' | 'back' }
 +  | { type: 'delete'; id: string; rect: Rect }
++  | { type: 'duplicate'; id: string; rect: Rect }
 +  | { type: 'layer'; id: string; rect: Rect; layer: string | null }
 +  | { type: 'newLayer'; id: string | null; rect: Rect | null; name: string }
 +  | { type: 'stamp'; rect: Rect; png: string; label: string; author: string }
@@ -4649,6 +4650,30 @@ index 0000000..20c43de
 +        const r = annots.get(i)
 +        if (r instanceof PDFRef && r.objectNumber === popup.objectNumber) annots.remove(i)
 +      }
++    } else if (op.type === 'duplicate') {
++      // a copy a little down and to the right, on top of everything; its pop-up stays with the original
++      const copy = dict.clone(doc.context)
++      copy.delete(PDFName.of('Popup'))
++      copy.delete(PDFName.of('NM'))
++      // the clone is shallow: give the copy its own point lists before moving them
++      for (const key of ['QuadPoints', 'L', 'Vertices', 'CL']) {
++        const arr = copy.lookupMaybe(PDFName.of(key), PDFArray)
++        if (arr) copy.set(PDFName.of(key), arr.clone(doc.context))
++      }
++      const ink = copy.lookupMaybe(PDFName.of('InkList'), PDFArray)
++      if (ink) {
++        const paths = doc.context.obj([]) as PDFArray
++        for (let i = 0; i < ink.size(); i++) {
++          const path = ink.lookup(i)
++          if (path instanceof PDFArray) paths.push(path.clone(doc.context))
++        }
++        copy.set(PDFName.of('InkList'), paths)
++      }
++      const step = 12
++      const r = rectOf(copy)
++      if (r) copy.set(PDFName.of('Rect'), doc.context.obj([r[0] + step, r[1] - step, r[2] + step, r[3] - step]))
++      mapAnnotPoints(copy, (x, y) => [x + step, y - step])
++      annots.push(doc.context.register(copy))
 +    } else if (op.type === 'layer') {
 +      if (op.layer === null) dict.delete(PDFName.of('OC'))
 +      else {
@@ -4801,10 +4826,10 @@ index e799e6b..6591e76 100644
    mergePdf: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePdf, request),
    mergePages: (request) => ipcRenderer.invoke(PDF_CHANNELS.mergePages, request),
 diff --git a/apps/pdf/src/renderer/App.tsx b/apps/pdf/src/renderer/App.tsx
-index 32f6de1..5022941 100644
+index 32f6de1..597c550 100644
 --- a/apps/pdf/src/renderer/App.tsx
 +++ b/apps/pdf/src/renderer/App.tsx
-@@ -8,6 +8,14 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
+@@ -8,6 +8,15 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
  import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
  import { AiPanel, GensparkMark } from './ai/AiPanel'
  import { AiAskPopover, type AskAnchorRect } from './AiAskPopover'
@@ -4814,12 +4839,22 @@ index 32f6de1..5022941 100644
 +import { renderStamp, STAMP_PX_PER_PT } from './kertas/stamps'
 +import { LayersPanel } from './kertas/LayersPanel'
 +import { OcrLanguages } from './kertas/OcrLanguages'
++import { RecognizeMenu, type RecognizePages } from './kertas/RecognizeMenu'
 +import { ObjectLayer, type ObjectOp } from './kertas/ObjectLayer'
 +import type { StampKind } from './kertas/stamps'
  import {
    createSavedAnnotCountsLoader,
    loadSavedAnnots,
-@@ -479,8 +487,12 @@ export default function App() {
+@@ -415,7 +424,7 @@ const RIBBON_TABS = [
+   { id: 'page', labelKey: 'ribbonTabPage' },
+   { id: 'view', labelKey: 'ribbonTabView' },
+ ] as const
+-type RibbonTab = (typeof RIBBON_TABS)[number]['id'] | 'fillForm' | 'formDesign'
++type RibbonTab = (typeof RIBBON_TABS)[number]['id'] | 'fillForm' | 'formDesign' | 'convert'
+ 
+ /** The file's bytes before and after a change written to it at once */
+ interface WrittenStep {
+@@ -479,8 +488,12 @@ export default function App() {
    const [currentPage, setCurrentPage] = useState(1)
    const [pageInput, setPageInput] = useState('1')
    const [sidebar, setSidebar] = useState<
@@ -4833,7 +4868,7 @@ index 32f6de1..5022941 100644
    const [compareResult, setCompareResult] = useState<CompareResult | null>(null)
    const [compareName, setCompareName] = useState<string | null>(null)
    const [compareBusy, setCompareBusy] = useState(false)
-@@ -864,6 +876,30 @@ export default function App() {
+@@ -864,6 +877,30 @@ export default function App() {
    const [savedStaticFormFills, setSavedStaticFormFills] = useState<StaticFormFillRecord[]>([])
    /** Picked image awaiting click-to-place (same overlay flow as signatures) */
    const [imagePick, setImagePick] = useState<Extract<SignatureData, { kind: 'image' }> | null>(null)
@@ -4864,7 +4899,37 @@ index 32f6de1..5022941 100644
    const [pendingStaticFill, setPendingStaticFill] = useState<StaticFormFillKind | null>(null)
    const [staticTextDialog, setStaticTextDialog] = useState(false)
    const [staticTextPurpose, setStaticTextPurpose] = useState<'form' | 'insert'>('form')
-@@ -5322,7 +5358,22 @@ export default function App() {
+@@ -2545,7 +2582,7 @@ export default function App() {
+   // ref so the pass callback can sit above it
+   const showNoticeRef = useRef<(msg: string) => void>(() => undefined)
+   const startOcrPass = useCallback(
+-    (pending: number[] | null, doneBefore = 0, manualLimit?: number) => {
++    (pending: number[] | null, doneBefore = 0, manualLimit?: number, only?: number[]) => {
+       if (!doc) return
+       const live = ocrAbortRef.current
+       const controller = live && !live.signal.aborted ? live : new AbortController()
+@@ -2566,6 +2603,7 @@ export default function App() {
+             fromPage: () => currentOrigIdxRef.current,
+             ...(pending === null ? {} : { pending }),
+             ...(manualLimit === undefined ? {} : { limit: manualLimit }),
++            ...(only ? { only } : {}),
+             signal: controller.signal,
+             geom: (origIdx) => pageGeomRef.current(origIdx),
+             render: renderPageForOcr,
+@@ -2583,6 +2621,12 @@ export default function App() {
+         // would stick until the document reloads
+         if (manualLimit !== undefined && result && result.total === 0)
+           showNoticeRef.current(t('ocrNothing'))
++        else if (KERTAS_HOST && manualLimit !== undefined && result?.stop === 'complete')
++          showNoticeRef.current(
++            result.done > 0
++              ? `Text recognized on ${result.done} page${result.done === 1 ? '' : 's'}. Save to keep it, or convert to Word or Excel.`
++              : 'No text was found on those pages.',
++          )
+         // A finished pass and a platform without an OCR engine are not worth a
+         // toast; a cap or a user cancel is, and it says how far the pass got
+         setOcrRunning(false)
+@@ -5322,7 +5366,22 @@ export default function App() {
    }
  
    /** Ribbon button → file picker; the picked image then enters click-to-place mode */
@@ -4887,7 +4952,7 @@ index 32f6de1..5022941 100644
      setEditTextMode(false)
      setTextDraft(null)
      setPendingTextInsert(null)
-@@ -5417,8 +5468,22 @@ export default function App() {
+@@ -5417,8 +5476,22 @@ export default function App() {
      const pick = imagePick
      if (!pick) return
      const fill = pendingStaticFill
@@ -4910,7 +4975,7 @@ index 32f6de1..5022941 100644
      if (fill === 'check' || fill === 'cross') {
        void placeFormMark(fill, pick, origIdx, vx, vy)
        return
-@@ -5439,6 +5504,7 @@ export default function App() {
+@@ -5439,6 +5512,7 @@ export default function App() {
      image: string,
      rect: [number, number, number, number],
      fill: StaticFormFillKind | null,
@@ -4918,7 +4983,7 @@ index 32f6de1..5022941 100644
    ) => {
      const id = newId()
      const staticFill: StaticFormFillRecord | undefined = fill
-@@ -5466,7 +5532,7 @@ export default function App() {
+@@ -5466,7 +5540,7 @@ export default function App() {
            pageIndex: origIdx,
            image,
            rect,
@@ -4927,7 +4992,7 @@ index 32f6de1..5022941 100644
            rotate: ((pageGeom(origIdx).rot % 360) + 360) % 360,
          },
          staticFill,
-@@ -6557,6 +6623,11 @@ export default function App() {
+@@ -6557,6 +6631,11 @@ export default function App() {
  
    const reduceFileSize = async (): Promise<void> => {
      if (!filePath) return
@@ -4939,7 +5004,7 @@ index 32f6de1..5022941 100644
      const outcome = await window.pdfApi.reduceFileSize(filePath)
      if (!outcome.ok) {
        if (!('canceled' in outcome)) showNotice(outcome.reason)
-@@ -6569,6 +6640,64 @@ export default function App() {
+@@ -6569,6 +6648,64 @@ export default function App() {
      showNotice(savedPct > 0 ? t('reduceDone', { pct: savedPct }) : t('reduceAlreadySmall'))
    }
  
@@ -5004,7 +5069,7 @@ index 32f6de1..5022941 100644
    const insertPdf = (afterOrigIdx: number) => {
      // the flush bakes the visible order into the file, so the anchor becomes its visible position
      const afterPageIndex = visListOf(orderRef.current).indexOf(afterOrigIdx)
-@@ -7640,7 +7769,12 @@ export default function App() {
+@@ -7640,7 +7777,12 @@ export default function App() {
      if (convertBusy) return
      setConvertBusy(true)
      try {
@@ -5018,7 +5083,7 @@ index 32f6de1..5022941 100644
      } catch {
        // No shell conversion flow in standalone mode; shell-side errors show their own dialogs
      } finally {
-@@ -8026,6 +8160,23 @@ export default function App() {
+@@ -8026,6 +8168,23 @@ export default function App() {
            </span>
            <span>{t('attachments')}</span>
          </button>
@@ -5042,7 +5107,7 @@ index 32f6de1..5022941 100644
          {searchBtn}
          <button
            className={`rb-big${spread === 2 ? ' active' : ''}`}
-@@ -8049,10 +8200,17 @@ export default function App() {
+@@ -8049,10 +8208,17 @@ export default function App() {
      </div>
    )
  
@@ -5060,7 +5125,26 @@ index 32f6de1..5022941 100644
            <button
              className="qa-btn"
              data-tip={`${t('save')} (${platformShortcuts('⌘S')})`}
-@@ -8142,7 +8300,8 @@ export default function App() {
+@@ -8094,6 +8260,18 @@ export default function App() {
+               {t(labelKey)}
+             </button>
+           ))}
++          {KERTAS_HOST && (
++            <button
++              className={`ribbon-tab ${collapse.tabClass(ribbonTab === 'convert')}`}
++              data-tip={collapse.tabTip(ribbonTab === 'convert')}
++              onClick={() => {
++                collapse.onTabPress(ribbonTab === 'convert')
++                setRibbonTab('convert')
++              }}
++            >
++              Convert
++            </button>
++          )}
+           {!readOnly && (
+             <button
+               className={`ribbon-tab ribbon-tab-context ${collapse.tabClass(ribbonTab === 'fillForm')}`}
+@@ -8142,7 +8320,8 @@ export default function App() {
          <div className="ribbon-body" data-ribbon-body="">
            {ribbonTab === 'home' && (
              <>
@@ -5070,7 +5154,7 @@ index 32f6de1..5022941 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8190,6 +8349,8 @@ export default function App() {
+@@ -8190,6 +8369,8 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -5079,7 +5163,7 @@ index 32f6de1..5022941 100644
                {markupGroup}
                <div className="ribbon-sep" />
                {/* Edit entries lead; Search moved after page/zoom (⌘F is the common path) */}
-@@ -8221,11 +8382,15 @@ export default function App() {
+@@ -8221,11 +8402,15 @@ export default function App() {
                          <button onClick={() => void convertTo('xlsx')}>
                            {t('convertToExcel')}
                          </button>
@@ -5095,8 +5179,96 @@ index 32f6de1..5022941 100644
                          <div className="rb-menu-sep" />
                          <button
                            title={t('exportImagesAll')}
-@@ -8283,6 +8448,8 @@ export default function App() {
+@@ -8281,8 +8466,96 @@ export default function App() {
+               </div>
+             </>
            )}
++          {ribbonTab === 'convert' && KERTAS_HOST && (
++            <>
++              <div className="ribbon-group">
++                <div className="ribbon-group-items">
++                  <button
++                    className="rb-big"
++                    data-tip="Turn this PDF into an editable Word document"
++                    disabled={status !== 'ready' || convertBusy || exporting !== null}
++                    onClick={() => void convertTo('docx')}
++                  >
++                    <span className="rb-big-icon"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><path d="M8.5 12.5l1.2 4.5 1.3-3.5 1.3 3.5 1.2-4.5" /></svg></span>
++                    <span>To Word</span>
++                  </button>
++                  <button
++                    className="rb-big"
++                    data-tip="Put the tables and text of this PDF into a workbook"
++                    disabled={status !== 'ready' || convertBusy || exporting !== null}
++                    onClick={() => void convertTo('xlsx')}
++                  >
++                    <span className="rb-big-icon"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 9.5h16M4 14.5h16M10 9.5V20" /></svg></span>
++                    <span>To Excel</span>
++                  </button>
++                </div>
++              </div>
++              <div className="ribbon-sep" />
++              <div className="ribbon-group">
++                <div className="ribbon-group-items">
++                  <button
++                    className="rb-big"
++                    data-tip={t('exportImagesAll')}
++                    disabled={status !== 'ready' || exporting !== null}
++                    onClick={() => void exportImages(true)}
++                  >
++                    <span className="rb-big-icon"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="M20.5 16l-5-5-8 8" /></svg></span>
++                    <span>PNG images</span>
++                  </button>
++                  <button
++                    className="rb-big"
++                    data-tip={t('exportImagesAllJpg')}
++                    disabled={status !== 'ready' || exporting !== null}
++                    onClick={() => void exportImages(true, 'jpg')}
++                  >
++                    <span className="rb-big-icon"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="M20.5 16l-5-5-8 8" /></svg></span>
++                    <span>JPG images</span>
++                  </button>
++                </div>
++              </div>
++              <div className="ribbon-sep" />
++              <div className="ribbon-group">
++                <div className="ribbon-group-items">
++                  <RecognizeMenu
++                    disabled={status !== 'ready' || ocrRunning}
++                    running={ocrRunning}
++                    onStop={() => ocrAbortRef.current?.abort()}
++                    onRun={(pages: RecognizePages) =>
++                      startOcrPass(
++                        null,
++                        0,
++                        Number.POSITIVE_INFINITY,
++                        pages === 'scanned'
++                          ? undefined
++                          : pages === 'current'
++                            ? [currentOrigIdxRef.current]
++                            : [...visList],
++                      )
++                    }
++                  />
++                  <OcrLanguages disabled={status !== 'ready' || ocrRunning} />
++                </div>
++              </div>
++              <div className="ribbon-sep" />
++              <div className="ribbon-group">
++                <div className="ribbon-group-items">
++                  <button
++                    className="rb-big"
++                    disabled={status !== 'ready' || readOnly}
++                    data-tip="Save a smaller copy of this PDF"
++                    onClick={() => void reduceFileSize()}
++                  >
++                    <span className="rb-big-icon"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15.5 4.5 A 8.5 8.5 0 1 0 19.5 11" /><path d="M15.5 2.5 L15.5 7.5 L10.5 7.5" /></svg></span>
++                    <span>Compress</span>
++                  </button>
++                </div>
++              </div>
++            </>
++          )}
            {ribbonTab === 'annotate' && (
              <>
 +              {KERTAS_AI && (
@@ -5104,7 +5276,7 @@ index 32f6de1..5022941 100644
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
                    <button
-@@ -8313,10 +8480,41 @@ export default function App() {
+@@ -8313,10 +8586,41 @@ export default function App() {
                  </div>
                </div>
                <div className="ribbon-sep" />
@@ -5146,7 +5318,7 @@ index 32f6de1..5022941 100644
                    {DRAW_TOOLS.map(({ tool, icon: DrawIcon, key }) => (
                      <button
                        key={tool}
-@@ -8329,6 +8527,7 @@ export default function App() {
+@@ -8329,6 +8633,7 @@ export default function App() {
                          setPendingTextInsert(null)
                          setImagePick(null)
                          setEditImageMode(false)
@@ -5154,7 +5326,7 @@ index 32f6de1..5022941 100644
                          if (tool === 'measure' && drawTool === 'measure') {
                            // a second click disarms the tool like every other
                            // one and asks the next measure line to re-open the
-@@ -8346,6 +8545,13 @@ export default function App() {
+@@ -8346,6 +8651,13 @@ export default function App() {
                        <span>{t(key)}</span>
                      </button>
                    ))}
@@ -5168,7 +5340,7 @@ index 32f6de1..5022941 100644
                    <button
                      className={`rb-big${drawTool === 'redact' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8566,6 +8772,7 @@ export default function App() {
+@@ -8566,6 +8878,7 @@ export default function App() {
              <>
                <div className="ribbon-group">
                  <div className="ribbon-group-items">
@@ -5176,7 +5348,7 @@ index 32f6de1..5022941 100644
                    <button
                      className="rb-big ai-entry"
                      disabled={readOnly}
-@@ -8577,6 +8784,7 @@ export default function App() {
+@@ -8577,6 +8890,7 @@ export default function App() {
                      </span>
                      <span>{t('aiFillFormBtn')}</span>
                    </button>
@@ -5184,7 +5356,7 @@ index 32f6de1..5022941 100644
                    <button
                      className={`rb-big${pendingStaticFill === 'text' ? ' active' : ''}`}
                      disabled={readOnly}
-@@ -8697,6 +8905,23 @@ export default function App() {
+@@ -8697,6 +9011,49 @@ export default function App() {
                      </span>
                      <span>{t('formComplete')}</span>
                    </button>
@@ -5205,10 +5377,36 @@ index 32f6de1..5022941 100644
 +                      <span>Flatten</span>
 +                    </button>
 +                  )}
++                  {KERTAS_HOST && (
++                    <button
++                      className="rb-big"
++                      disabled={readOnly || !formCatalog || formCatalog.fields.size === 0}
++                      data-tip="Clear form: empty every field (Undo brings the values back)"
++                      onClick={() => {
++                        const ops: Op[] = []
++                        for (const f of formCatalog?.fields.values() ?? []) {
++                          if (f.kind === 'checkbox')
++                            ops.push({ op: 'setFormValue', value: { name: f.name, kind: 'checkbox', checked: false } })
++                          else if (f.kind === 'text' || f.kind === 'radio' || f.kind === 'choice')
++                            ops.push({ op: 'setFormValue', value: { name: f.name, kind: f.kind, value: '' } })
++                        }
++                        if (ops.length > 0) applyEditOps(ops)
++                      }}
++                    >
++                      <span className="rb-big-icon">
++                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
++                          <path d="M6 4h12v16H6z" />
++                          <path d="M9 9h6M9 13h4" />
++                          <path d="M14.5 15.5l4 4M18.5 15.5l-4 4" />
++                        </svg>
++                      </span>
++                      <span>Clear form</span>
++                    </button>
++                  )}
                  </div>
                </div>
              </>
-@@ -8945,6 +9170,22 @@ export default function App() {
+@@ -8945,6 +9302,22 @@ export default function App() {
                      </span>
                      <span>{t('insertBlankPage')}</span>
                    </button>
@@ -5231,7 +5429,7 @@ index 32f6de1..5022941 100644
                    <button
                      className="rb-big"
                      disabled={readOnly || pageCount === 0}
-@@ -9063,6 +9304,7 @@ export default function App() {
+@@ -9063,6 +9436,7 @@ export default function App() {
                      </span>
                      <span>{t('ocrRecognize')}</span>
                    </button>
@@ -5239,7 +5437,7 @@ index 32f6de1..5022941 100644
                  </div>
                </div>
                <div className="ribbon-sep" />
-@@ -9085,6 +9327,7 @@ export default function App() {
+@@ -9085,6 +9459,7 @@ export default function App() {
        <div className="app-main">
          {/* dock wrapper animates the width between panel and rail (docs-style 180ms ease);
                the panel stays mounted while collapsed so the chat history survives */}
@@ -5247,7 +5445,7 @@ index 32f6de1..5022941 100644
          <div
            className={`ai-dock${aiCollapsed ? ' collapsed' : ''}${
              !aiSidebarEnabled && aiCollapsed ? ' ai-dock-off' : ''
-@@ -9109,6 +9352,7 @@ export default function App() {
+@@ -9109,6 +9484,7 @@ export default function App() {
              onClearSelection={() => setAiSelection(null)}
            />
          </div>
@@ -5255,7 +5453,7 @@ index 32f6de1..5022941 100644
          <div className="app-content">
            {digitalSignatures.length > 0 && (
              <div className={`pdf-sig-banner ${overallSignatureStatus(digitalSignatures)}`}>
-@@ -9258,6 +9502,22 @@ export default function App() {
+@@ -9258,6 +9634,22 @@ export default function App() {
                  />
                </div>
              )}
@@ -5278,7 +5476,7 @@ index 32f6de1..5022941 100644
              {sidebar === 'attachments' && (
                <div className="pdf-thumbs" style={{ width: sidebarW }}>
                  <div className="pdf-outline-header">
-@@ -9620,7 +9880,13 @@ export default function App() {
+@@ -9620,7 +10012,13 @@ export default function App() {
                                  pendingStaticFill ? t('formPlaceStaticHint') : t('imagePlaceHint')
                                }
                                onPlace={(vx, vy) => placeImage(origIdx, vx, vy)}
@@ -5293,7 +5491,7 @@ index 32f6de1..5022941 100644
                              />
                            )}
                            {/* Paragraph boxes (WPS-style): every text block outlined while
-@@ -10537,6 +10803,24 @@ export default function App() {
+@@ -10537,6 +10935,24 @@ export default function App() {
                                  onMove={readOnly ? undefined : moveDrawing}
                                  onResize={readOnly ? undefined : resizeDrawing}
                                />
@@ -5318,7 +5516,7 @@ index 32f6de1..5022941 100644
                                <RedactionLayer
                                  active={
                                    !readOnly && !redactionCopyInFlight && drawTool === 'redact'
-@@ -10617,6 +10901,7 @@ export default function App() {
+@@ -10617,6 +11033,7 @@ export default function App() {
                                        labels={{
                                          required: t('formDesignRequired'),
                                          multiLine: t('formDesignMultiLine'),
@@ -5326,7 +5524,7 @@ index 32f6de1..5022941 100644
                                          defaultValue: t('formDesignDefaultValue'),
                                          defaultChecked: t('formDesignDefaultChecked'),
                                          remove: t('formDesignDelete'),
-@@ -10821,7 +11106,7 @@ export default function App() {
+@@ -10821,7 +11238,7 @@ export default function App() {
                  </button>
                </div>
              )}
@@ -5335,7 +5533,7 @@ index 32f6de1..5022941 100644
                <div
                  className="pdf-sel-popup"
                  style={{ left: selPopup.x, top: selPopup.y }}
-@@ -10895,9 +11180,10 @@ export default function App() {
+@@ -10895,9 +11312,10 @@ export default function App() {
                      >
                        <span className="sel-swatch sel-swatch-st">S</span>
                      </button>
@@ -5347,7 +5545,7 @@ index 32f6de1..5022941 100644
                  <button
                    type="button"
                    className="pdf-sel-ask"
-@@ -10913,9 +11199,10 @@ export default function App() {
+@@ -10913,9 +11331,10 @@ export default function App() {
                    </svg>
                    {t('aiAskBtn')}
                  </button>
@@ -5359,7 +5557,7 @@ index 32f6de1..5022941 100644
                <AiAskPopover
                  rect={askPop.rect}
                  excerpt={askPop.excerpt}
-@@ -11170,6 +11457,16 @@ export default function App() {
+@@ -11170,6 +11589,16 @@ export default function App() {
                  >
                    {t('insertBlankPage')}
                  </button>
@@ -5477,6 +5675,19 @@ index 2546271..4b2f239 100644
  
    // Capture the node: React may clear canvasRef before passive unmount cleanup runs.
    useEffect(() => {
+diff --git a/apps/pdf/src/renderer/i18n/strings.ts b/apps/pdf/src/renderer/i18n/strings.ts
+index 09c9ba2..26296c3 100644
+--- a/apps/pdf/src/renderer/i18n/strings.ts
++++ b/apps/pdf/src/renderer/i18n/strings.ts
+@@ -1115,7 +1115,7 @@ export const strings = {
+     searchWholeWord: 'Whole words',
+     ocrRecognize: 'Recognize text',
+     ocrRecognizeTip: 'Run OCR over every scanned page of this document (no page cap)',
+-    ocrNothing: 'No scanned pages left to recognize.',
++    ocrNothing: 'Every page already has text. To read pages again, use Convert > Recognize text and pick This page or All pages.',
+     texteditReveal:
+       'Show the text on the page after editing; off keeps it in the invisible search layer',
+     ocrRunning: 'Recognizing scanned pages: {done} / {total}',
 diff --git a/apps/pdf/src/renderer/kertas.ts b/apps/pdf/src/renderer/kertas.ts
 new file mode 100644
 index 0000000..3dae050
@@ -5549,10 +5760,10 @@ index 0000000..e0e8140
 +}
 diff --git a/apps/pdf/src/renderer/kertas/ObjectLayer.tsx b/apps/pdf/src/renderer/kertas/ObjectLayer.tsx
 new file mode 100644
-index 0000000..92e309e
+index 0000000..dfa72c2
 --- /dev/null
 +++ b/apps/pdf/src/renderer/kertas/ObjectLayer.tsx
-@@ -0,0 +1,256 @@
+@@ -0,0 +1,263 @@
 +// Select mode (Kertas Office): the items on a page (shapes, drawings, stamps, comments, text
 +// boxes) can be picked, dragged to move, resized from a corner, put in front of or behind each
 +// other, put on a layer, or deleted. Every change goes to the file through the host and the
@@ -5567,6 +5778,7 @@ index 0000000..92e309e
 +  | { type: 'move'; id: string; rect: Rect; to: Rect }
 +  | { type: 'order'; id: string; rect: Rect; where: 'front' | 'back' }
 +  | { type: 'delete'; id: string; rect: Rect }
++  | { type: 'duplicate'; id: string; rect: Rect }
 +  | { type: 'layer'; id: string; rect: Rect; layer: string | null }
 +  | { type: 'newLayer'; id: string; rect: Rect; name: string }
 +
@@ -5670,6 +5882,9 @@ index 0000000..92e309e
 +      if (e.key === 'Delete' || e.key === 'Backspace') {
 +        e.preventDefault()
 +        onApply({ type: 'delete', id: it.id, rect: it.rect })
++      } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'd') {
++        e.preventDefault()
++        onApply({ type: 'duplicate', id: it.id, rect: it.rect })
 +      } else if (e.key === 'Escape') setSel(null)
 +    }
 +    window.addEventListener('keydown', key)
@@ -5769,6 +5984,9 @@ index 0000000..92e309e
 +              }
 +            >
 +              Layer
++            </button>
++            <button type="button" title="Duplicate (Ctrl+D)" onClick={() => onApply({ type: 'duplicate', id: selected.id, rect: selected.rect })}>
++              Duplicate
 +            </button>
 +            <button type="button" className="is-danger" onClick={() => onApply({ type: 'delete', id: selected.id, rect: selected.rect })}>
 +              Delete
@@ -5894,6 +6112,73 @@ index 0000000..234721b
 +              <span>{l.label}</span>
 +            </label>
 +          ))}
++        </div>
++      )}
++    </div>
++  )
++}
+diff --git a/apps/pdf/src/renderer/kertas/RecognizeMenu.tsx b/apps/pdf/src/renderer/kertas/RecognizeMenu.tsx
+new file mode 100644
+index 0000000..8ba5f07
+--- /dev/null
++++ b/apps/pdf/src/renderer/kertas/RecognizeMenu.tsx
+@@ -0,0 +1,61 @@
++// Recognize text with a choice of pages, as in Kertas Office's earlier PDF editor: the scanned
++// pages (the editor's own pick), the page on screen, or every page, text or not.
++import { useEffect, useRef, useState, type ReactElement } from 'react'
++
++export type RecognizePages = 'scanned' | 'current' | 'all'
++
++export function RecognizeMenu({
++  disabled,
++  running,
++  onRun,
++  onStop,
++}: {
++  disabled: boolean
++  running: boolean
++  onRun: (pages: RecognizePages) => void
++  onStop: () => void
++}): ReactElement {
++  const [open, setOpen] = useState(false)
++  const wrap = useRef<HTMLDivElement>(null)
++  useEffect(() => {
++    if (!open) return
++    const away = (e: PointerEvent): void => {
++      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
++    }
++    window.addEventListener('pointerdown', away, true)
++    return () => window.removeEventListener('pointerdown', away, true)
++  }, [open])
++  const pick = (pages: RecognizePages): void => {
++    setOpen(false)
++    onRun(pages)
++  }
++  return (
++    <div ref={wrap} className="rb-drop-wrap">
++      <button
++        className={`rb-big${open ? ' active' : ''}`}
++        disabled={disabled && !running}
++        data-tip={
++          running
++            ? 'Stop reading text'
++            : 'Read the text in scanned pages so it can be searched, copied and converted'
++        }
++        onClick={() => (running ? onStop() : setOpen((v) => !v))}
++      >
++        <span className="rb-big-icon">
++          <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
++            <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
++            <path d="M8 9.5h8M12 9.5v6" />
++          </svg>
++        </span>
++        <span>{running ? 'Stop' : 'Recognize text'}</span>
++      </button>
++      {open && (
++        <div className="rb-drop rb-menu">
++          <button onClick={() => pick('scanned')}>Scanned pages</button>
++          <button onClick={() => pick('current')}>This page</button>
++          <button onClick={() => pick('all')}>All pages</button>
 +        </div>
 +      )}
 +    </div>
@@ -6345,6 +6630,30 @@ index 3188d6c..2d675fb 100644
  import { applyAiPanelPrefs, installScreenTips } from '@genoffice/ui'
  
  installScreenTips()
+diff --git a/apps/pdf/src/renderer/ocr-layer.tsx b/apps/pdf/src/renderer/ocr-layer.tsx
+index 71eadd4..65400ed 100644
+--- a/apps/pdf/src/renderer/ocr-layer.tsx
++++ b/apps/pdf/src/renderer/ocr-layer.tsx
+@@ -228,6 +228,8 @@ export async function runAutoOcr(opts: {
+       the pages that pass never reached: the order is already settled, so it is
+       followed rather than rebuilt, and a page is not paid for a second time. */
+   pending?: readonly number[]
++  /** Kertas Office: read exactly these pages (this page, all pages), text or not */
++  only?: readonly number[]
+   signal: AbortSignal
+   limit?: number
+   geom: (origIdx: number) => PageGeom
+@@ -238,7 +240,9 @@ export async function runAutoOcr(opts: {
+ }): Promise<AutoOcrResult> {
+   const limit = opts.limit ?? AUTO_OCR_PAGE_CAP
+   const index = await opts.cache.get(opts.doc)
+-  const scanned = index.map((entry, i) => (isScannedEntry(entry) ? i : -1)).filter((i) => i >= 0)
++  const scanned = opts.only
++    ? opts.only.filter((i) => i >= 0 && i < index.length)
++    : index.map((entry, i) => (isScannedEntry(entry) ? i : -1)).filter((i) => i >= 0)
+   // A continuation walks the queue it was handed as it stands. A first pass
+   // builds one from the whole document, rotating so the pages after the reading
+   // position come first; pages that rotation had already walked before the cap
 diff --git a/apps/pdf/src/shared/ipc.ts b/apps/pdf/src/shared/ipc.ts
 index bab2848..f9b0c09 100644
 --- a/apps/pdf/src/shared/ipc.ts
