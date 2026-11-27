@@ -6,6 +6,12 @@ updates:
     target-branch: develop
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      # the previous Sheets engine; it stays as is until it is removed
+      - dependency-name: "@univerjs/*"
+      # Kertas patches a crash in fontkit 2 (scripts/patch-deps.cjs)
+      - dependency-name: fontkit
+        update-types: ["version-update:semver-major"]
     groups:
       minor-and-patch:
         update-types: [minor, patch]
