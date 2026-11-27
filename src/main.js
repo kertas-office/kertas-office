@@ -841,6 +841,7 @@ async function renderHome() {
       <div class="new-grid">
         <div class="app-card writer" title="Word-compatible documents (.docx, also opens .doc, .rtf, .odt)">
           <div class="app-head"><div class="app-icon">${icon('doc', 24)}</div><strong>Writer</strong></div>
+          <p class="app-desc">Word documents (.docx)</p>
           <div class="actions">
             <button class="chip icon-only" data-cmd="new-doc" title="New blank document" aria-label="New blank document">${icon('plus', 17)}</button>
             <button class="chip icon-only" data-open="writer" title="Open a document" aria-label="Open a document">${icon('open', 17)}</button>
@@ -849,6 +850,7 @@ async function renderHome() {
         </div>
         <div class="app-card sheets" title="Excel-compatible workbooks (.xlsx, .csv, also opens .xls, .ods)">
           <div class="app-head"><div class="app-icon">${icon('sheet', 24)}</div><strong>Sheets</strong></div>
+          <p class="app-desc">Excel workbooks (.xlsx)</p>
           <div class="actions">
             <button class="chip icon-only" data-cmd="new-sheet" title="New blank spreadsheet" aria-label="New blank spreadsheet">${icon('plus', 17)}</button>
             <button class="chip icon-only" data-open="sheets" title="Open a spreadsheet" aria-label="Open a spreadsheet">${icon('open', 17)}</button>
@@ -857,6 +859,7 @@ async function renderHome() {
         </div>
         ${isDesktop ? `<div class="app-card slides" title="PowerPoint-compatible presentations (.pptx, also opens .ppt, .odp)">
           <div class="app-head"><div class="app-icon">${icon('slides', 24)}</div><strong>Slides</strong></div>
+          <p class="app-desc">PowerPoint decks (.pptx)</p>
           <div class="actions">
             <button class="chip icon-only" data-cmd="new-slides" title="New blank presentation" aria-label="New blank presentation">${icon('plus', 17)}</button>
             <button class="chip icon-only" data-open="slides" title="Open a presentation" aria-label="Open a presentation">${icon('open', 17)}</button>
@@ -864,6 +867,7 @@ async function renderHome() {
         </div>` : ''}
         <div class="app-card pdf" title="Fill forms, comment, sign, protect, redact and organise pages">
           <div class="app-head"><div class="app-icon">${icon('pdf', 24)}</div><strong>PDF</strong></div>
+          <p class="app-desc">Fill, sign and organise</p>
           <div class="actions">
             <button class="chip icon-only" data-open="pdf" title="Open a PDF" aria-label="Open a PDF">${icon('open', 17)}</button>
             <button class="chip icon-only" data-cmd="merge-pdfs" title="Merge PDFs" aria-label="Merge PDFs">${icon('merge', 17)}</button>
@@ -872,6 +876,7 @@ async function renderHome() {
         </div>
         ${isDesktop ? `<div class="app-card convert" title="Pictures, PDFs, documents and spreadsheets to other formats, on this computer">
           <div class="app-head"><div class="app-icon">${icon('convert', 24)}</div><strong>Convert</strong></div>
+          <p class="app-desc">Change file formats</p>
           <div class="actions">
             <button class="chip icon-only" data-convert="pick" title="Choose files to convert" aria-label="Choose files to convert">${icon('open', 17)}</button>
             <button class="chip icon-only" data-convert="open" title="Open Convert" aria-label="Open Convert">${icon('convert', 17)}</button>
