@@ -157,9 +157,10 @@ test('a new slide added with Ctrl+M is saved as a fourth slide', opts, async () 
   await sleep(1200);
   assert.equal(await w.locator('.slide-list .thumb').count(), 4);
   await press('S');
-  for (let i = 0; i < 40 && await dirtyTabs(); i++) await sleep(250);
-  const zip = await JSZip.loadAsync(await readFile(file));
-  assert.equal(Object.keys(zip.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f)).length, 4);
+  const slideCount = async () => Object.keys((await JSZip.loadAsync(await readFile(file))).files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f)).length;
+  let count = 0;
+  for (let i = 0; i < 40 && (count = await slideCount().catch(() => 0)) !== 4; i++) await sleep(250);
+  assert.equal(count, 4);
 });
 
 test('Export as PDF from the File button writes one page per slide', opts, async () => {
@@ -236,11 +237,11 @@ test('a template from the Slides card opens as a new deck, and its first Save as
   await closeAll();
   await k.locator('#tabs .tab').first().click();
   await k.locator('.app-card.slides [data-cmd="templates-slides"]').click();
-  assert.equal(await k.locator('.tpl-gallery.slides [data-tpl]').count(), 6);
+  assert.equal(await k.locator('.tpl-gallery.slides [data-tpl]').count(), 12);
   const had = new Set(editors());
   await k.locator('.tpl-gallery.slides [data-tpl="pitch-deck"]').click();
   await waitEditor(had);
-  assert.equal(await w.locator('.slide-list .thumb').count(), 7);
+  assert.equal(await w.locator('.slide-list .thumb').count(), 8);
   assert.ok((await tabTitles()).some((t) => /^Pitch deck \d+\.pptx$/.test(t)), (await tabTitles()).join(','));
   await answerDialogs([], 'my-pitch.pptx');
   await w.locator('textarea[placeholder*="notes" i]').first().click();
@@ -252,7 +253,11 @@ test('a template from the Slides card opens as a new deck, and its first Save as
   for (let i = 0; i < 60 && !existsSync(out); i++) await sleep(250);
   await sleep(800);
   const slides = await partsText(await readFile(out), /^ppt\/slides\/slide\d+\.xml$/);
-  assert.match(slides, /The simplest way for small/);
+  assert.match(slides, /The order page every small shop/);
+  // the deck keeps its own fonts, so it looks the same on other computers
+  const saved = await JSZip.loadAsync(await readFile(out));
+  assert.ok(Object.keys(saved.files).some((f) => /^ppt\/fonts\/.+\.fntdata$/.test(f)), 'the fonts are still embedded');
+  assert.match(await saved.file('ppt/presentation.xml').async('string'), /typeface="Plus Jakarta Sans"/);
   assert.match(await partsText(await readFile(out), /^ppt\/notesSlides\/.*\.xml$/), /Open with the shop story/);
   // the template itself is untouched
   const zip = await JSZip.loadAsync(await readFile(path.join(ROOT, 'src', 'templates', 'pitch-deck.pptx')));

@@ -20,7 +20,7 @@ const windows = new Set(); // webContents ids of the editor's windows
 function schemes() {
   if (!available) return [];
   host = require(MAIN);
-  return [host.RENDERER_SCHEME_PRIVILEGE, host.DOCX_MEDIA_SCHEME_PRIVILEGE];
+  return [host.RENDERER_SCHEME_PRIVILEGE, host.DOCX_MEDIA_SCHEME_PRIVILEGE, host.SLIDE_MEDIA_SCHEME_PRIVILEGE].filter(Boolean);
 }
 
 // What the editor asks its host about. (The editor's AI assistant is not part of Kertas's

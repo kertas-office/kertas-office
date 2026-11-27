@@ -694,10 +694,10 @@ index 8ce14e6..3da818a 100644
        try {
 diff --git a/apps/docs/src/main/kertas-entry.ts b/apps/docs/src/main/kertas-entry.ts
 new file mode 100644
-index 0000000..f9068f8
+index 0000000..dc3e75a
 --- /dev/null
 +++ b/apps/docs/src/main/kertas-entry.ts
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,98 @@
 +// Entry used when Kertas Office hosts this editor: the same main-process code,
 +// without starting an app of its own.
 +export {
@@ -716,6 +716,7 @@ index 0000000..f9068f8
 +export {
 +  RENDERER_SCHEME_PRIVILEGE,
 +  DOCX_MEDIA_SCHEME_PRIVILEGE,
++  SLIDE_MEDIA_SCHEME_PRIVILEGE,
 +} from '@genoffice/electron-utils/renderer-scheme'
 +
 +import { app as electronApp, type WebContents } from 'electron'
