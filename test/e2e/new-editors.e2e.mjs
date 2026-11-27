@@ -417,6 +417,8 @@ test('a scanned PDF converts to Word with its recognised text', pdfOpts, async (
   await sleep(1500);
   const text = (await doc.locator('.ProseMirror').innerText()).replace(/\s+/g, ' ').trim();
   assert.ok(text.length > 30, `the document has the page's words: "${text.slice(0, 80)}"`);
+  // a scan goes through Kertas's converter: paragraphs in one font, not words placed one by one
+  assert.ok(await k.getByText(/Converted to Word from the recognised text/).count() > 0, 'Kertas rebuilt the scan as paragraphs');
 });
 
 test('an older .xls workbook opens in the new Sheets when LibreOffice is not installed', sheetsOpts, async () => {

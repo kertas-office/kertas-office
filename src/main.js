@@ -294,6 +294,38 @@ async function ocrForEditor(req, png, langs) {
   window.kertasNative.newWriter('ocr-result', { req, lines }).catch(() => {});
 }
 
+// Converting a scanned PDF to Word from the new PDF editor. Its own converter places every
+// recognised word where it sat on the picture, which on a scan gives broken lines and mixed
+// sizes; Kertas's converter rebuilds headings, paragraphs, lists and tables in one font, at
+// the size the line spacing shows. Answers true when it converted (mostly scanned pages),
+// false to let the editor's converter do a typeset PDF, which it lays out better.
+async function convertScanForEditor(req, path) {
+  let done = false;
+  let task = null;
+  try {
+    const bytes = new Uint8Array((await readPath(path)).data);
+    const [pdfjs, { default: workerUrl }, { extractPages, pdfToDocx }] = await Promise.all([
+      import('pdfjs-dist'), import('pdfjs-dist/build/pdf.worker.min.mjs?url'), import('./lib/pdf-convert.js'),
+    ]);
+    if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+    task = pdfjs.getDocument({ data: bytes, isEvalSupported: false });
+    const doc = await task.promise;
+    const pages = await extractPages(doc, { Util: pdfjs.Util, OPS: pdfjs.OPS });
+    const withText = pages.filter((p) => p.items.some((it) => it.str.trim()));
+    if (withText.length && withText.filter((p) => p.scan).length * 2 >= withText.length) {
+      setStatus('Building the Word document...');
+      const base = String(path).split(/[\\/]/).pop().replace(/\.pdf$/i, '');
+      const data = await pdfToDocx(pages, { title: base });
+      await openTab('writer', { name: `${base}.docx`, data });
+      toast('Converted to Word from the recognised text. Check it, then save.');
+      setStatus('');
+      done = true;
+    }
+  } catch (e) { console.error('Converting the scan failed', e); }
+  finally { task?.destroy?.(); }
+  window.kertasNative.newWriter('ask-result', { req, value: done }).catch(() => {});
+}
+
 // Compress for the new PDF editor: Kertas's own, with its picture levels. A smaller copy
 // is saved; the open document is not changed.
 async function compressPdfFile(path) {
@@ -345,6 +377,7 @@ onNative('new-writer', (ev) => {
   else if (ev.type === 'error') toast(ev.message);
   else if (ev.type === 'compress' && ev.path) compressPdfFile(ev.path);
   else if (ev.type === 'ocr') ocrForEditor(ev.req, ev.png, ev.langs);
+  else if (ev.type === 'convert-scan') convertScanForEditor(ev.req, ev.path);
   else if (ev.type === 'file' && tab) { // the File button of the new Sheets and PDF editors
     if (activeId !== tab.id) activate(tab.id);
     if (ev.action === 'export-csv') window.kertasNative.newWriter('command', { id: tab.id, name: 'export-csv' });

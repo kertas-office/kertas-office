@@ -446,6 +446,7 @@ ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
     return true;
   }
   if (op === 'ocr-result') return writer2.ocrResult(arg); // lines read from a page picture
+  if (op === 'ask-result') return writer2.askResult(arg); // the page's answer to a question from the host
   if (op === 'convert-pdf') return writer2.convertPdfForTab(arg); // PDF bytes in, a token for the result out
   return false;
 });

@@ -319,7 +319,47 @@ export function uniformRuns(runs) {
 }
 
 /** Whole-document analysis: body size, heading levels, blocks per page */
+/**
+ * On a scanned page the text was placed by recognition (or a scanner app), and the size it
+ * was stored at is often smaller than the type on the picture: what is stored is whatever
+ * fits each word's box. The distance from one line to the next is reliable, though, and
+ * ordinary text is set at about 1.2 times its size apart, so each scanned page gets the
+ * factor that brings its sizes up to match (1 where they already fit).
+ */
+export function scanScales(pages) {
+  return pages.map((p) => {
+    const items = p.items.filter((it) => it.str.trim() && it.size > 0);
+    if (!p.scan || items.length < 20) return 1;
+    const size = median(items.map((it) => it.size));
+    // baselines, close ones merged into one line
+    const ys = [...new Set(items.map((it) => Math.round(it.y * 2) / 2))].sort((a, b) => a - b);
+    const lines = [];
+    for (const y of ys) if (!lines.length || y - lines[lines.length - 1] > size * 0.5) lines.push(y);
+    const gaps = lines.slice(1).map((y, i) => y - lines[i]).filter((g) => g > size * 0.8 && g < size * 4);
+    if (gaps.length < 4) return 1;
+    const k = median(gaps) / 1.2 / size;
+    return k >= 1.15 && k <= 2.5 ? k : 1;
+  });
+}
+
 export function analyse(input) {
+  // the layout is read at the stored sizes (paragraph breaks are judged against them);
+  // the sizes written out are the corrected ones
+  const scales = scanScales(input);
+  const result = analyseAsStored(input);
+  if (scales.every((k) => k === 1)) return result;
+  const scaleRuns = (runs, k) => runs.map((r) => ({ ...r, size: Math.round(r.size * k * 2) / 2 }));
+  result.pages.forEach((pg, i) => {
+    const k = scales[i] || 1;
+    if (k === 1) return;
+    pg.blocks = pg.blocks.map((b) => (b.runs ? { ...b, runs: scaleRuns(b.runs, k) } : b.items ? { ...b, items: b.items.map((it) => scaleRuns(it, k)) } : b));
+  });
+  const used = scales.filter((k, i) => k !== 1 && !result.pages[i].empty);
+  if (used.length) result.bodySize = Math.round(result.bodySize * median(used) * 2) / 2;
+  return result;
+}
+
+function analyseAsStored(input) {
   const pages = settleSizes(input);
   const all = pages.flatMap((p) => buildLines(p));
   const weighted = all.flatMap((l) => Array(Math.min(50, Math.ceil(l.text.length / 10))).fill(l.size));

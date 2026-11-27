@@ -158,6 +158,13 @@ function startSheetsAndPdf() {
       tell('ocr', null, { req, png, langs });
     }));
     ocrAnswer = (req, lines) => asks.get(req)?.(lines);
+    // a question for the Kertas page, answered through ask-result (false if no answer comes)
+    askPage = (kind, id, payload, wait = 10 * 60 * 1000) => new Promise((resolve) => {
+      const req = ++askSeq;
+      const timer = setTimeout(() => { asks.delete(req); resolve(false); }, wait);
+      asks.set(req, (value) => { clearTimeout(timer); asks.delete(req); resolve(value); });
+      tell(kind, id, { req, ...payload });
+    });
     // Compress is Kertas's own (picture levels), run by the Kertas page on the tab's file
     ipcMain.handle('pdf:kertas-compress', (e) => {
       const id = tabOf(e.sender.id);
@@ -170,6 +177,9 @@ function startSheetsAndPdf() {
       if (!t || t.kind !== 'pdf' || !t.path || converting || !['docx', 'xlsx'].includes(format)) return;
       converting = true;
       try {
+        // A scan converts best with Kertas's own converter, which rebuilds paragraphs in one
+        // font and size from the recognised text; the page answers true when it did that
+        if (format === 'docx' && await askPage('convert-scan', tabOf(e.sender.id), { path: t.path }) === true) return;
         const out = await convertPdfForTab(await fs.promises.readFile(t.path), format);
         if (format === 'docx') { tell('result', null, { token: out }); return; }
         const { dialog } = require('electron');
@@ -443,4 +453,6 @@ async function openLicences() {
   return shell.openPath(dir);
 }
 const ocrResult = (arg) => ocrAnswer(Number(arg && arg.req), arg && arg.lines);
-module.exports = { available, has, ocrResult, sheetRecoveries, openLicences, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab, docxToPdf };
+let askPage = async () => false;
+const askResult = (arg) => ocrAnswer(Number(arg && arg.req), arg && arg.value);
+module.exports = { available, has, ocrResult, askResult, sheetRecoveries, openLicences, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab, docxToPdf };
