@@ -692,10 +692,10 @@ async function makeDefaultApp() {
   markDefaultAsked();
   const res = await window.kertasNative?.makeDefaultApp?.() || { how: 'manual' };
   const steps = {
-    settings: { title: 'Choose Kertas in Settings', text: 'Windows Settings is now open at Default apps. Set Kertas Office for .docx, .xlsx and .pdf (and any other types you like). Windows asks you to do this yourself so no app can take over your files without asking.' },
+    settings: { title: 'Choose Kertas in Settings', text: 'Windows Settings is now open at Default apps. Set Kertas Office for .docx, .xlsx, .pptx and .pdf (and any other types you like). Windows asks you to do this yourself so no app can take over your files without asking.' },
     mac: { title: 'Make Kertas the default on your Mac', text: 'In Finder, select a .docx file and press Cmd+I. Under "Open with", choose Kertas Office, then click "Change All". Do the same for a .xlsx and a .pdf file.' },
     appimage: { title: 'Make Kertas the default', text: 'This copy runs as an AppImage, which has no menu entry of its own for your desktop to use. Install the .deb package (or add the AppImage to your menu with AppImageLauncher), then use this command again.' },
-    manual: { title: 'Make Kertas the default', text: 'Right-click a .docx, .xlsx or .pdf file, choose "Open with", pick Kertas Office and tick "Always use this app".' },
+    manual: { title: 'Make Kertas the default', text: 'Right-click a .docx, .xlsx, .pptx or .pdf file, choose "Open with", pick Kertas Office and tick "Always use this app".' },
     dev: { title: 'Not in a development build', text: 'The installed app registers itself for documents. Try this in a build made with npm run dist.' },
   };
   if (res.how === 'done') { toast('Kertas now opens your documents, spreadsheets and PDFs'); renderHome(); return; }
@@ -830,7 +830,7 @@ async function renderHome() {
         </div>
       </div>
       ${isDesktop && !defaultAsked() ? `<div class="default-offer glass">
-        <div class="do-text">${icon('shield-check', 18)}<div><strong>Open your files with Kertas?</strong><span>Make Kertas the app that opens .docx, .xlsx and .pdf files when you double-click them.</span></div></div>
+        <div class="do-text">${icon('shield-check', 18)}<div><strong>Open your files with Kertas?</strong><span>Make Kertas the app that opens your documents, spreadsheets, presentations and PDFs when you double-click them.</span></div></div>
         <button class="chip primary" data-default="yes">Set as default</button><button class="chip" data-default="no">Not now</button>
       </div>` : ''}
       ${recovered.length ? `<div class="recovered glass">

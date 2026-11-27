@@ -125,6 +125,7 @@ module.exports = {
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword', 'application/rtf',
       'application/vnd.oasis.opendocument.text', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel', 'application/vnd.oasis.opendocument.spreadsheet', 'text/csv', 'application/pdf',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/vnd.ms-powerpoint', 'application/vnd.oasis.opendocument.presentation',
     ],
   },
   appImage: { artifactName: 'Kertas-Office-linux-${arch}.${ext}' },
