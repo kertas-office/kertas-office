@@ -1,7 +1,8 @@
-// Ready-made documents and workbooks offered from the Home screen (Writer card and Sheets card,
-// "Templates"). Each one is a real .docx or .xlsx in src/templates/, with a preview picture.
+// Ready-made documents, workbooks and presentations offered from the Home screen (the Writer,
+// Sheets and Slides cards, "Templates"). Each one is a real .docx, .xlsx or .pptx in
+// src/templates/, with a preview picture (the decks are made by scripts/templates/).
 // Opening a template starts a new, unsaved file: the first save asks where to put it.
-const files = import.meta.glob('../templates/*.{docx,xlsx,jpg}', { query: '?url', import: 'default', eager: true });
+const files = import.meta.glob('../templates/*.{docx,xlsx,pptx,jpg}', { query: '?url', import: 'default', eager: true });
 const url = (name) => files[`../templates/${name}`];
 
 export const TEMPLATES = [
@@ -21,8 +22,14 @@ export const TEMPLATES = [
   { id: 'timesheet', kind: 'sheets', name: 'Weekly timesheet', desc: 'Start, finish and breaks per day; hours, overtime and pay' },
   { id: 'inventory', kind: 'sheets', name: 'Inventory', desc: 'Stock levels and value; items to reorder are flagged' },
   { id: 'loan-calculator', kind: 'sheets', name: 'Loan calculator', desc: 'Monthly payment, total interest and the full repayment schedule' },
+  { id: 'simple', kind: 'slides', name: 'Simple', desc: 'Clean white slides: title, points, two columns, picture, quote and thank-you' },
+  { id: 'pitch-deck', kind: 'slides', name: 'Pitch deck', desc: 'Problem, solution, market, traction chart, team and the ask' },
+  { id: 'business-review', kind: 'slides', name: 'Business review', desc: 'Quarterly results: key figures, revenue chart, wins and priorities' },
+  { id: 'project-status', kind: 'slides', name: 'Project status', desc: 'Status lights, milestone timeline, risks table and next steps' },
+  { id: 'training', kind: 'slides', name: 'Training session', desc: 'Goals, section dividers, step cards, a practice task and a recap' },
+  { id: 'product-launch', kind: 'slides', name: 'Product launch', desc: 'Dark and bold: new features, speed chart, plans and launch dates' },
 ].map((t) => {
-  const ext = t.kind === 'writer' ? 'docx' : 'xlsx';
+  const ext = { writer: 'docx', sheets: 'xlsx', slides: 'pptx' }[t.kind];
   return { ...t, ext, file: url(`${t.id}.${ext}`), preview: url(`${t.id}.jpg`) };
 });
 

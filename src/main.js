@@ -118,7 +118,11 @@ async function openTab(kind, { name, path = null, data = null, html = null, resu
   const onDisk = path && !converted;
   if (kind === 'slides') {
     if (await newEditorOn('slides')) {
-      try { const t = await openNativeWriter({ kind, name, path: onDisk ? path : null }); if (t) return t; } catch (e) { console.error(e); }
+      try {
+        const token = !onDisk && data ? await window.kertasNative.newWriter('stash', data) : null;
+        const t = await openNativeWriter({ kind, name, path: onDisk ? path : null, result: token });
+        if (t) return t;
+      } catch (e) { console.error(e); }
     }
     toast('Presentations need the desktop app with the Slides editor', true);
     return null;
@@ -660,15 +664,15 @@ async function newFromTemplate(id) {
 function openTemplates(kind) {
   document.querySelector('.tpl-backdrop')?.remove();
   const list = templatesFor(kind);
-  const blank = kind === 'writer' ? 'Blank document' : 'Blank workbook';
+  const blank = { writer: 'Blank document', sheets: 'Blank workbook', slides: 'Blank presentation' }[kind];
   const back = document.createElement('div');
   back.className = 'modal-backdrop tpl-backdrop';
   back.innerHTML = `<div class="modal glass tpl-gallery ${kind}" role="dialog" aria-modal="true" aria-labelledby="tpl-title">
-      <div class="tpl-head"><div><h3 id="tpl-title">${kind === 'writer' ? 'Writer' : 'Sheets'} templates</h3>
-        <p>Each one opens as a new file with example content to replace. ${kind === 'sheets' ? 'Blue figures are the ones to type; the rest works itself out.' : 'Fonts, spacing and page numbers are already set.'}</p></div>
+      <div class="tpl-head"><div><h3 id="tpl-title">${MODULES[kind].title} templates</h3>
+        <p>Each one opens as a new file with example content to replace. ${{ sheets: 'Blue figures are the ones to type; the rest works itself out.', writer: 'Fonts, spacing and page numbers are already set.', slides: 'Colours, fonts and layouts are already set; every text can be typed over.' }[kind]}</p></div>
         <button class="icon-btn" data-close title="Close (Esc)">${icon('close', 16)}</button></div>
       <div class="tpl-grid">
-        <button class="tpl-card blank" data-blank><span class="tpl-pic"><span class="tpl-plus">${icon('plus', 28)}</span></span><strong>${blank}</strong><span class="desc">Start from an empty ${kind === 'writer' ? 'page' : 'sheet'}</span></button>
+        <button class="tpl-card blank" data-blank><span class="tpl-pic"><span class="tpl-plus">${icon('plus', 28)}</span></span><strong>${blank}</strong><span class="desc">Start from an empty ${{ writer: 'page', sheets: 'sheet', slides: 'slide' }[kind]}</span></button>
         ${list.map((t) => `<button class="tpl-card" data-tpl="${t.id}"><span class="tpl-pic"><img src="${t.preview}" alt="" loading="lazy"></span><strong>${esc(t.name)}</strong><span class="desc">${esc(t.desc)}</span></button>`).join('')}
       </div></div>`;
   const close = () => { back.remove(); document.removeEventListener('keydown', onKey, true); };
@@ -693,7 +697,7 @@ async function makeDefaultApp() {
   const res = await window.kertasNative?.makeDefaultApp?.() || { how: 'manual' };
   const steps = {
     settings: { title: 'Choose Kertas in Settings', text: 'Windows Settings is now open at Default apps. Set Kertas Office for .docx, .xlsx, .pptx and .pdf (and any other types you like). Windows asks you to do this yourself so no app can take over your files without asking.' },
-    mac: { title: 'Make Kertas the default on your Mac', text: 'In Finder, select a .docx file and press Cmd+I. Under "Open with", choose Kertas Office, then click "Change All". Do the same for a .xlsx and a .pdf file.' },
+    mac: { title: 'Make Kertas the default on your Mac', text: 'In Finder, select a .docx file and press Cmd+I. Under "Open with", choose Kertas Office, then click "Change All". Do the same for a .xlsx, a .pptx and a .pdf file.' },
     appimage: { title: 'Make Kertas the default', text: 'This copy runs as an AppImage, which has no menu entry of its own for your desktop to use. Install the .deb package (or add the AppImage to your menu with AppImageLauncher), then use this command again.' },
     manual: { title: 'Make Kertas the default', text: 'Right-click a .docx, .xlsx, .pptx or .pdf file, choose "Open with", pick Kertas Office and tick "Always use this app".' },
     dev: { title: 'Not in a development build', text: 'The installed app registers itself for documents. Try this in a build made with npm run dist.' },
@@ -712,6 +716,7 @@ const COMMANDS = [
   ...(isDesktop ? [{ id: 'new-slides', group: 'files', label: 'New presentation', icon: 'slides', run: () => openTab('slides') }] : []),
   { id: 'templates-writer', group: 'files', label: 'New document from a template...', icon: 'template', run: () => openTemplates('writer') },
   { id: 'templates-sheets', group: 'files', label: 'New workbook from a template...', icon: 'template', run: () => openTemplates('sheets') },
+  ...(isDesktop ? [{ id: 'templates-slides', group: 'files', label: 'New presentation from a template...', icon: 'template', run: () => openTemplates('slides') }] : []),
   { id: 'open', group: 'files', label: 'Open...', icon: 'open', key: 'Ctrl+O', run: () => openDialog() },
   { id: 'save', label: 'Save', icon: 'save', key: 'Ctrl+S', run: () => active() && saveTab(active()), needsTab: true },
   { id: 'save-as', group: 'files', label: 'Save as...', icon: 'save-as', key: 'Ctrl+Shift+S', run: () => active() && saveTab(active(), { saveAs: true }), needsTab: true },
@@ -863,6 +868,7 @@ async function renderHome() {
           <div class="actions">
             <button class="chip icon-only" data-cmd="new-slides" title="New blank presentation" aria-label="New blank presentation">${icon('plus', 17)}</button>
             <button class="chip icon-only" data-open="slides" title="Open a presentation" aria-label="Open a presentation">${icon('open', 17)}</button>
+            <button class="chip icon-only" data-cmd="templates-slides" title="Presentation templates" aria-label="Presentation templates">${icon('template', 17)}</button>
           </div>
         </div>` : ''}
         <div class="app-card pdf" title="Fill forms, comment, sign, protect, redact and organise pages">

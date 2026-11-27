@@ -1124,6 +1124,7 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 .tpl-card:hover, .tpl-card:focus-visible { border-color: var(--line-strong); box-shadow: 0 6px 18px rgba(15, 23, 42, .10); transform: translateY(-1px); outline: none; }
 .tpl-gallery.writer .tpl-card:focus-visible { box-shadow: 0 0 0 2px #2563eb; }
 .tpl-gallery.sheets .tpl-card:focus-visible { box-shadow: 0 0 0 2px #059669; }
+.tpl-gallery.slides .tpl-card:focus-visible { box-shadow: 0 0 0 2px #ea580c; }
 .tpl-card strong { font-size: 13.5px; padding: 0 12px; margin-top: 6px; }
 .tpl-card .desc { font-size: 12px; color: var(--muted); padding: 0 12px; line-height: 1.4; }
 .tpl-pic { display: block; position: relative; height: 190px; flex: none; border-radius: var(--r-lg) var(--r-lg) 0 0; background: #f1f5f9; border-bottom: 1px solid var(--line); overflow: hidden; }
@@ -1133,6 +1134,7 @@ svg.annots .h-e, svg.annots .h-w { cursor: ew-resize; }
 .tpl-plus { width: 54px; height: 54px; border-radius: 14px; display: grid; place-items: center; color: #fff; }
 .tpl-gallery.writer .tpl-plus { background: linear-gradient(180deg, #3b82f6, #2563eb); }
 .tpl-gallery.sheets .tpl-plus { background: linear-gradient(180deg, #10b981, #059669); }
+.tpl-gallery.slides .tpl-plus { background: linear-gradient(180deg, #fb923c, #ea580c); }
 
 /* Document text: Word and WPS do not join letters like "fi" or "fl" unless the document asks
    for it, so neither does Kertas. Text on the page also uses the system's normal smoothing

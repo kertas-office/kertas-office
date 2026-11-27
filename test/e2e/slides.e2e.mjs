@@ -231,3 +231,30 @@ test('a slide copied and pasted with Ctrl+C and Ctrl+V becomes a new slide (the 
   assert.equal(await w.locator('.slide-list .thumb').count(), 4);
   assert.deepEqual(w.errors, []);
 });
+
+test('a template from the Slides card opens as a new deck, and its first Save asks where to keep it', opts, async () => {
+  await closeAll();
+  await k.locator('#tabs .tab').first().click();
+  await k.locator('.app-card.slides [data-cmd="templates-slides"]').click();
+  assert.equal(await k.locator('.tpl-gallery.slides [data-tpl]').count(), 6);
+  const had = new Set(editors());
+  await k.locator('.tpl-gallery.slides [data-tpl="pitch-deck"]').click();
+  await waitEditor(had);
+  assert.equal(await w.locator('.slide-list .thumb').count(), 7);
+  assert.ok((await tabTitles()).some((t) => /^Pitch deck \d+\.pptx$/.test(t)), (await tabTitles()).join(','));
+  await answerDialogs([], 'my-pitch.pptx');
+  await w.locator('textarea[placeholder*="notes" i]').first().click();
+  await w.keyboard.type('Open with the shop story');
+  await w.locator('.slide-list .thumb').nth(1).click();
+  await sleep(1000);
+  await press('S');
+  const out = path.join(dir, 'my-pitch.pptx');
+  for (let i = 0; i < 60 && !existsSync(out); i++) await sleep(250);
+  await sleep(800);
+  const slides = await partsText(await readFile(out), /^ppt\/slides\/slide\d+\.xml$/);
+  assert.match(slides, /The simplest way for small/);
+  assert.match(await partsText(await readFile(out), /^ppt\/notesSlides\/.*\.xml$/), /Open with the shop story/);
+  // the template itself is untouched
+  const zip = await JSZip.loadAsync(await readFile(path.join(ROOT, 'src', 'templates', 'pitch-deck.pptx')));
+  assert.equal(Object.keys(zip.files).some((f) => f.startsWith('ppt/notesSlides/')), false);
+});

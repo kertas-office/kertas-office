@@ -7498,7 +7498,7 @@ index 77e5eff..0767f3b 100644
    } catch {
      return false
 diff --git a/apps/slides/src/main/slides-main.ts b/apps/slides/src/main/slides-main.ts
-index 08c89a8..e043494 100644
+index 08c89a8..c835bb6 100644
 --- a/apps/slides/src/main/slides-main.ts
 +++ b/apps/slides/src/main/slides-main.ts
 @@ -5,7 +5,6 @@
@@ -7525,7 +7525,24 @@ index 08c89a8..e043494 100644
  import { DEFAULT_PICTURE_DPI, pictureFrame } from './picture-frame'
  import { refineComplexWidths, shapedMetricsReady } from './shaped-metrics'
  import { cfbKind, isCfbHeader } from './cfb-sniff'
-@@ -473,6 +474,13 @@ export function setSlidesOpenedHook(fn: ((wc: WebContents, path: string) => void
+@@ -361,6 +362,8 @@ export { registerAiIpc } from './ai-ipc'
+ let pendingOpenPath: string | null = null
+ /** tab mode: each view queues its own path; the renderer consumes it after mounting */
+ const pendingByWc = new Map<number, string>()
++// Views whose queued file is a template: it opens as a new, untitled deck (Kertas Office)
++const openAsNewWc = new Set<number>()
+ /**
+  * Renderer freeze watchdog: the freeze is sporadic and has never
+  * reproduced under instrumentation, so when it does happen, capture the
+@@ -451,6 +454,7 @@ function trackSlidesWebContents(wc: WebContents): void {
+     else untitledRecovery.delete(wc.id)
+     sessions.delete(wc.id)
+     pendingByWc.delete(wc.id)
++    openAsNewWc.delete(wc.id)
+     lastSlidePaste.delete(wc.id)
+     closeSaveWaiters.get(wc.id)?.(false)
+     closeSaveWaiters.delete(wc.id)
+@@ -473,6 +477,13 @@ export function setSlidesOpenedHook(fn: ((wc: WebContents, path: string) => void
    slidesOpenedHook = fn
  }
  
@@ -7539,7 +7556,25 @@ index 08c89a8..e043494 100644
  /** Detached editor windows (createSlidesWindow), keyed by webContents id — their titles are owned here */
  const standaloneWindows = new Map<number, BrowserWindow>()
  
-@@ -2706,7 +2714,7 @@ export function registerSlidesIpc(): void {
+@@ -960,6 +971,17 @@ async function openAndBuild(
+     }
+   }
+   const raw = await readFile(path)
++  // a template: its contents open as a new deck, with no path, no recent entry, and Save asking where to go
++  if (openAsNewWc.delete(wc.id)) {
++    await shapedMetricsReady()
++    const opened = await openPptx(new Uint8Array(raw))
++    adoptEmbeddedFonts(opened)
++    sessions.set(wc.id, { path: '', opened, fitWidthPx, undoStack: [], redoStack: [] })
++    scheduleHistoryNotify(sessions.get(wc.id)!)
++    let slides = buildAllRenderSlides(opened, fitWidthPx)
++    if (await refineComplexWidths(wc)) slides = buildAllRenderSlides(opened, fitWidthPx)
++    return { path: '', slides, size: { cx: opened.deck.size.cx, cy: opened.deck.size.cy }, defaultFont: deckDefaultFont(opened) }
++  }
+   // a 0-byte .pptx is an empty deck, not a corrupt one: open the blank template
+   // under the file's own path so Save writes back to it
+   const { bytes, recovered } = await maybeRecoverBytes(
+@@ -2706,7 +2728,7 @@ export function registerSlidesIpc(): void {
      const pngs = op.pngs?.length === bundles.length ? op.pngs : undefined
      slideClipboard = { bundles, ...(pngs ? { pngs } : {}) }
      // Marker so plain ⌘V knows the latest copy was a slide (element copies / external copies overwrite it)
@@ -7548,7 +7583,7 @@ index 08c89a8..e043494 100644
      return true
    })
  
-@@ -3632,31 +3640,25 @@ export function registerSlidesIpc(): void {
+@@ -3632,31 +3654,25 @@ export function registerSlidesIpc(): void {
  
    // Our marker still present = the last copy came from this app -> use internal element paste
    // (on macOS custom formats don't appear in availableFormats, so check via readBuffer)
@@ -7592,7 +7627,7 @@ index 08c89a8..e043494 100644
    })
  
    ipcMain.handle('slides:copy-elements', (e, op: CopyElementsOp) => {
-@@ -3677,7 +3679,7 @@ export function registerSlidesIpc(): void {
+@@ -3677,7 +3693,7 @@ export function registerSlidesIpc(): void {
          senderId: e.sender.id,
        }
        // Write our marker to the OS clipboard: an external copy overwrites it, so at paste time it tells whether internal or external is newer
@@ -7601,7 +7636,7 @@ index 08c89a8..e043494 100644
      }
      return items.length
    })
-@@ -4683,6 +4685,22 @@ export function registerSlidesIpc(): void {
+@@ -4683,6 +4699,22 @@ export function registerSlidesIpc(): void {
    ipcMain.handle('slides:save', async (e) => {
      const session = sessions.get(e.sender.id)
      if (!session) return { ok: false, error: 'no file open' }
@@ -7624,6 +7659,27 @@ index 08c89a8..e043494 100644
      // Untitled (new blank file): the first save lands silently in the drafts folder (Save As keeps its dialog)
      if (!session.path) {
        const draftsDir = getDraftsDir()
+@@ -5223,7 +5255,7 @@ function armVibrancy(view: WebContentsView): void {
+ }
+ 
+ /** Tab version of createSlidesWindow: same runtime/IPC, hosted in the shell's WebContentsView */
+-export function createSlidesView(openPath?: string | null): WebContentsView {
++export function createSlidesView(openPath?: string | null, { asNew = false }: { asNew?: boolean } = {}): WebContentsView {
+   const view = new WebContentsView({
+     webPreferences: {
+       preload: runtime.preloadPath,
+@@ -5236,7 +5268,10 @@ export function createSlidesView(openPath?: string | null): WebContentsView {
+   trackSlidesWebContents(view.webContents)
+   armVibrancy(view)
+   // The renderer calls consumePendingOpen on mount; use that to avoid a did-finish-load timing race
+-  if (openPath && existsSync(openPath)) pendingByWc.set(view.webContents.id, openPath)
++  if (openPath && existsSync(openPath)) {
++    pendingByWc.set(view.webContents.id, openPath)
++    if (asNew) openAsNewWc.add(view.webContents.id)
++  }
+   // mode=tab: the shell's tab strip owns the traffic lights / caption buttons,
+   // so the ribbon must not reserve space for them
+   void view.webContents.loadURL(rendererUrl(runtime.rendererDevUrl, 'slides', { mode: 'tab' }))
 diff --git a/apps/slides/src/preload/index.ts b/apps/slides/src/preload/index.ts
 index 4b86d06..3df73dc 100644
 --- a/apps/slides/src/preload/index.ts

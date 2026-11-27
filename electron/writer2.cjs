@@ -301,7 +301,17 @@ async function openTab(id, { kind = 'writer', filePath = null, result = null, na
     view = host.createSheetsView({ includeAiHandlers: false, openingWorkbook: true });
     host.queueWorkbookForView(view.webContents, filePath);
   } else if (kind === 'pdf') view = host.createPdfView(filePath || undefined);
-  else if (kind === 'slides') view = host.createSlidesView(filePath || undefined);
+  else if (kind === 'slides') {
+    // a template (or other deck that is not a file yet) opens from a temporary copy as a new deck
+    const bytes = !filePath && result && results.get(result);
+    if (bytes) {
+      results.delete(result);
+      const tmp = path.join(os.tmpdir(), `kertas-slides-${require('crypto').randomUUID()}.pptx`);
+      await fs.promises.writeFile(tmp, bytes);
+      view = host.createSlidesView(tmp, { asNew: true });
+      setTimeout(() => fs.promises.unlink(tmp).catch(() => {}), 60000);
+    } else view = host.createSlidesView(filePath || undefined);
+  }
   else view = host.createDocsView(filePath || undefined);
   const wc = view.webContents;
   const wcId = wc.id;
