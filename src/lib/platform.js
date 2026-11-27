@@ -118,6 +118,7 @@ export function onNative(event, cb) {
   if (event === 'menu') native.onMenu(cb);
   if (event === 'request-close') native.onRequestClose(cb);
   if (event === 'update' && native.onUpdate) native.onUpdate(cb);
+  if (event === 'new-writer' && native.onNewWriter) native.onNewWriter(cb);
 }
 
 /** Desktop updates: op 'state' | 'check' | 'install' | 'set-auto' */
@@ -230,4 +231,25 @@ export async function recoveryRead(id) {
   if (native?.recovery) return native.recovery('read', { id });
   const row = await idbDo('readonly', (st) => st.get(id));
   return row ? new Uint8Array(row.data) : null;
+}
+
+// The new editors for Word documents, spreadsheets and PDFs, as tabs of the window. On unless
+// switched off in About; KERTAS_NEW_WRITER / _SHEETS / _PDF = 1 or 0 decide it for a run.
+let newWriterState = null;
+export function newWriterInfo() {
+  if (!newWriterState) newWriterState = (window.kertasNative?.newWriter ? window.kertasNative.newWriter('state') : Promise.resolve({ available: false })).catch(() => ({ available: false }));
+  return newWriterState;
+}
+// On unless switched off in About (the previous editors stay one release, as a way back)
+export const newWriterChosen = () => { try { return localStorage.getItem('kertas-new-writer') !== '0'; } catch { return true; } };
+export async function newWriterOn() {
+  const st = await newWriterInfo();
+  return !!st.available && !st.off && (st.forced || newWriterChosen());
+}
+// The same for spreadsheets and PDFs, each with a switch of its own
+export const newEditorChosen = (kind) => { try { return localStorage.getItem(`kertas-new-${kind}`) !== '0'; } catch { return true; } };
+export async function newEditorOn(kind) {
+  if (kind === 'writer') return newWriterOn();
+  const st = await newWriterInfo();
+  return !!st[kind] && !st[`${kind}Off`] && (st[`${kind}Forced`] || newEditorChosen(kind));
 }
