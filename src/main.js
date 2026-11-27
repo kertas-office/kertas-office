@@ -839,44 +839,39 @@ async function renderHome() {
           <button class="chip primary" data-recover="${esc(r.id)}">Open</button><button class="chip" data-discard="${esc(r.id)}">Discard</button></div>`).join('')}
       </div>` : ''}
       <div class="new-grid">
-        <div class="app-card writer">
-          <div class="app-icon">${icon('doc', 24)}</div>
-          <strong>Writer</strong><span class="desc">Word-compatible documents (.docx, also opens .doc, .rtf, .odt)</span>
+        <div class="app-card writer" title="Word-compatible documents (.docx, also opens .doc, .rtf, .odt)">
+          <div class="app-head"><div class="app-icon">${icon('doc', 24)}</div><strong>Writer</strong></div>
           <div class="actions">
             <button class="chip primary" data-cmd="new-doc">${icon('plus', 14)}Blank</button>
             <button class="chip" data-cmd="templates-writer">${icon('template', 14)}Templates</button>
             <button class="chip" data-open="writer">${icon('open', 14)}Open</button>
           </div>
         </div>
-        <div class="app-card sheets">
-          <div class="app-icon">${icon('sheet', 24)}</div>
-          <strong>Sheets</strong><span class="desc">Excel-compatible workbooks (.xlsx, .csv, also opens .xls, .ods)</span>
+        <div class="app-card sheets" title="Excel-compatible workbooks (.xlsx, .csv, also opens .xls, .ods)">
+          <div class="app-head"><div class="app-icon">${icon('sheet', 24)}</div><strong>Sheets</strong></div>
           <div class="actions">
             <button class="chip primary" data-cmd="new-sheet">${icon('plus', 14)}Blank</button>
             <button class="chip" data-cmd="templates-sheets">${icon('template', 14)}Templates</button>
             <button class="chip" data-open="sheets">${icon('open', 14)}Open</button>
           </div>
         </div>
-        ${isDesktop ? `<div class="app-card slides">
-          <div class="app-icon">${icon('slides', 24)}</div>
-          <strong>Slides</strong><span class="desc">PowerPoint-compatible presentations (.pptx, also opens .ppt, .odp)</span>
+        ${isDesktop ? `<div class="app-card slides" title="PowerPoint-compatible presentations (.pptx, also opens .ppt, .odp)">
+          <div class="app-head"><div class="app-icon">${icon('slides', 24)}</div><strong>Slides</strong></div>
           <div class="actions">
             <button class="chip primary" data-cmd="new-slides">${icon('plus', 14)}Blank</button>
             <button class="chip" data-open="slides">${icon('open', 14)}Open</button>
           </div>
         </div>` : ''}
-        <div class="app-card pdf">
-          <div class="app-icon">${icon('pdf', 24)}</div>
-          <strong>PDF</strong><span class="desc">Fill forms, comment, sign, protect, redact and organise pages</span>
+        <div class="app-card pdf" title="Fill forms, comment, sign, protect, redact and organise pages">
+          <div class="app-head"><div class="app-icon">${icon('pdf', 24)}</div><strong>PDF</strong></div>
           <div class="actions">
             <button class="chip primary" data-open="pdf">${icon('open', 14)}Open PDF</button>
             <button class="chip" data-cmd="merge-pdfs">${icon('merge', 14)}Merge</button>
             <button class="chip" data-cmd="sign-pdf">${icon('sign', 14)}Sign</button>
           </div>
         </div>
-        ${isDesktop ? `<div class="app-card convert">
-          <div class="app-icon">${icon('convert', 24)}</div>
-          <strong>Convert</strong><span class="desc">Pictures, PDFs, documents and spreadsheets to other formats, on this computer</span>
+        ${isDesktop ? `<div class="app-card convert" title="Pictures, PDFs, documents and spreadsheets to other formats, on this computer">
+          <div class="app-head"><div class="app-icon">${icon('convert', 24)}</div><strong>Convert</strong></div>
           <div class="actions">
             <button class="chip primary" data-convert="pick">${icon('open', 14)}Choose files</button>
             <button class="chip" data-convert="open">${icon('convert', 14)}Open Convert</button>

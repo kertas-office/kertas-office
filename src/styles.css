@@ -192,13 +192,12 @@ kbd {
   border: 1px solid var(--line-strong); background: var(--surface-2); box-shadow: inset 0 -1px 0 var(--line);
 }
 
-.new-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 18px; }
-@media (max-width: 1180px) { .new-grid { grid-template-columns: repeat(2, 1fr); } }
+.new-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 14px; margin-bottom: 18px; }
 .app-card {
   position: relative; overflow: hidden; text-align: left; padding: 22px; border-radius: var(--r-xl); border: 1px solid var(--line);
   background: var(--surface); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
   box-shadow: var(--gloss), var(--shadow); transition: transform .25s var(--ease), box-shadow .25s var(--ease), border-color .25s;
-  min-height: 164px; display: flex; flex-direction: column; gap: 6px;
+  padding: 18px; display: flex; flex-direction: column; gap: 14px;
 }
 .app-card::before {
   /* glossy sheen */
@@ -218,7 +217,7 @@ kbd {
 .app-card.convert { --glow: var(--grad-convert); }
 .app-card.slides { --glow: var(--grad-slides); }
 .app-icon {
-  width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center; color: #fff; margin-bottom: 10px;
+  width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; color: #fff; flex: none;
   box-shadow: inset 0 1px 0 rgba(255,255,255,.5), inset 0 -8px 16px rgba(0,0,0,.12), 0 10px 20px -8px var(--glow-color, rgba(0,0,0,.4));
 }
 .writer .app-icon { background: var(--grad-writer); --glow-color: rgba(37,99,235,.7); }
@@ -226,9 +225,11 @@ kbd {
 .pdf .app-icon { background: var(--grad-pdf); --glow-color: rgba(225,29,72,.7); }
 .convert .app-icon { background: var(--grad-convert); --glow-color: rgba(13,148,136,.7); }
 .slides .app-icon { background: var(--grad-slides); --glow-color: rgba(234,88,12,.7); }
+.app-head { display: flex; align-items: center; gap: 12px; position: relative; z-index: 1; }
 .app-card strong { font-size: 16px; letter-spacing: -.015em; position: relative; z-index: 1; }
-.app-card .desc { color: var(--muted); font-size: 12.5px; position: relative; z-index: 1; }
-.app-card .actions { margin-top: auto; display: flex; flex-wrap: wrap; gap: 6px; position: relative; z-index: 1; padding-top: 12px; }
+/* one button per row, all the card's width */
+.app-card .actions { display: flex; flex-direction: column; gap: 6px; position: relative; z-index: 1; }
+.app-card .actions .chip { width: 100%; justify-content: flex-start; height: 30px; }
 .chip {
   white-space: nowrap;
   display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 999px;
