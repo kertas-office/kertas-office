@@ -49,6 +49,12 @@ export async function convertFile(item, to, opts = {}) {
 
   if (group === 'pdf') {
     if (to === 'docx' || to === 'xlsx') {
+      // a scan with recognised text converts as paragraphs in one font (Kertas's converter)
+      if (to === 'docx') {
+        const { scannedToDocx } = await import('./pdf.js');
+        const docx = await scannedToDocx(await io.read(item.path), base);
+        if (docx) { await put(`${base}.docx`, docx); return written; }
+      }
       await put(`${base}.${to}`, await io.pdfToOffice(item.path, to, opts.job));
       return written;
     }

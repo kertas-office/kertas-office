@@ -76,6 +76,19 @@ async function pageCount(bytes) {
   return (await PDFDocument.load(bytes, { updateMetadata: false, ignoreEncryption: true })).getPageCount();
 }
 
+/** A PDF whose pages with text are mostly scans, as a Word document rebuilt in paragraphs
+ *  (one font, sized from the line spacing); null for a typeset PDF */
+export async function scannedToDocx(bytes, title) {
+  const doc = await load(bytes);
+  try {
+    const { extractPages, pdfToDocx } = await import('../pdf-convert.js');
+    const pages = await extractPages(doc, { Util: pdfjsLib.Util, OPS: pdfjsLib.OPS });
+    const withText = pages.filter((p) => p.items.some((it) => it.str.trim()));
+    if (!withText.length || withText.filter((p) => p.scan).length * 2 < withText.length) return null;
+    return pdfToDocx(pages, { title });
+  } finally { await doc.release(); }
+}
+
 /** All the PDFs as one, in the order given */
 export async function mergePdfs(list) {
   const { buildPdf } = await import('../pdf-ops.js');

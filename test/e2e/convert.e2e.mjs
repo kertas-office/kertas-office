@@ -122,6 +122,16 @@ test('a PDF becomes Word, Excel, pictures per page, text, a smaller copy and one
   assert.ok(files.includes('report (compressed).pdf'));
 });
 
+test('a scan with recognised text converts to Word as paragraphs in one size', async () => {
+  const sub = await addFiles(['convert/scan-recognised.pdf']);
+  await convert('scan-recognised.pdf', 'docx');
+  const xml = await (await JSZip.loadAsync(await readFile(path.join(sub, 'scan-recognised.docx')))).file('word/document.xml').async('string');
+  assert.match(xml, /Lorem ipsum/);
+  const sizes = new Set([...xml.matchAll(/<w:sz w:val="(\d+)"/g)].map((m) => m[1]));
+  assert.ok(sizes.size <= 2, `one body size (and perhaps a heading): ${[...sizes].join(', ')}`);
+  assert.ok([...sizes].some((v) => Number(v) >= 20), 'the size comes from the line spacing, not the 8 pt it was stored at');
+});
+
 test('documents: Markdown, HTML and text to Word and PDF, and Word to text, HTML and Markdown', async () => {
   const sub = await addFiles(['convert/notes.md', 'convert/page.html', 'convert/plain.txt', 'sample.docx']);
   await convert('notes.md', 'docx');
