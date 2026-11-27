@@ -1,0 +1,2 @@
+# the editor patch must keep its LF line endings on every platform
+scripts/writer2/genoffice.patch -text

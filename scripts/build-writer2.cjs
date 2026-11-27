@@ -40,6 +40,10 @@ if (!given) {
     fs.rmSync(SRC, { recursive: true, force: true });
     fs.mkdirSync(SRC, { recursive: true });
     run('git', ['init', '-q'], SRC);
+    // keep the source's own line endings: on Windows git would turn them into CRLF
+    // and the patch (LF) would no longer apply
+    run('git', ['config', 'core.autocrlf', 'false'], SRC);
+    run('git', ['config', 'core.eol', 'lf'], SRC);
     run('git', ['remote', 'add', 'origin', REPO], SRC);
     run('git', ['fetch', '-q', '--depth', '1', 'origin', COMMIT], SRC);
     run('git', ['checkout', '-q', 'FETCH_HEAD'], SRC);
