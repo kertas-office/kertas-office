@@ -6,7 +6,7 @@ const os = require('os');
 const fs = require('fs/promises');
 
 const DEV_URL = process.env.KERTAS_DEV_URL;
-const SUPPORTED = ['.docx', '.xlsx', '.csv', '.pdf', '.doc', '.rtf', '.odt', '.xls', '.xlsm', '.xlsb', '.ods'];
+const SUPPORTED = ['.docx', '.xlsx', '.csv', '.pdf', '.doc', '.rtf', '.odt', '.xls', '.xlsm', '.xlsb', '.ods', '.pptx', '.ppt', '.odp', '.otp'];
 const { convertLegacy, findSoffice } = require('./legacy.cjs');
 const { setupUpdates } = require('./updates.cjs');
 const RECENT_FILE = () => path.join(app.getPath('userData'), 'recent.json');
@@ -20,6 +20,7 @@ let forceClose = false; // set when quitting to install an update
 // workers (formula engine, PDF renderer) load the same way they do on the web.
 const DIST = path.join(__dirname, '..', 'dist');
 const writer2 = require('./writer2.cjs');
+require('./convert.cjs').register({ getWindow: () => mainWindow, writer2, findSoffice });
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
   ...writer2.schemes(),
@@ -58,7 +59,7 @@ function filesFromArgv(argv) {
 }
 
 // Only documents Kertas edits go in Recent, not pictures or certificates picked along the way
-const RECENT_TYPES = /\.(docx|docm|dotx|doc|rtf|odt|xlsx|xlsm|xltx|xls|xlsb|ods|csv|pdf)$/i;
+const RECENT_TYPES = /\.(docx|docm|dotx|doc|rtf|odt|xlsx|xlsm|xltx|xls|xlsb|ods|csv|pdf|pptx|ppt|odp|otp)$/i;
 
 async function readRecent() {
   try { return JSON.parse(await fs.readFile(RECENT_FILE(), 'utf8')).filter((r) => RECENT_TYPES.test(r.path || '')); } catch { return []; }
@@ -273,9 +274,10 @@ const FILTERS = {
 };
 // Opening also accepts older and OpenDocument formats (they are saved as .docx / .xlsx)
 const OPEN_FILTERS = {
-  all: [{ name: 'All supported files', extensions: ['docx', 'doc', 'rtf', 'odt', 'xlsx', 'xlsm', 'xlsb', 'xls', 'ods', 'csv', 'pdf'] }, ...FILTERS.writer, ...FILTERS.sheets.slice(0, 1), ...FILTERS.pdf],
+  all: [{ name: 'All supported files', extensions: ['docx', 'doc', 'rtf', 'odt', 'xlsx', 'xlsm', 'xlsb', 'xls', 'ods', 'csv', 'pdf', 'pptx', 'ppt', 'odp'] }, ...FILTERS.writer, ...FILTERS.sheets.slice(0, 1), ...FILTERS.pdf, { name: 'Presentations', extensions: ['pptx', 'ppt', 'odp'] }],
   writer: [{ name: 'Documents', extensions: ['docx', 'doc', 'rtf', 'odt'] }],
   sheets: [{ name: 'Spreadsheets', extensions: ['xlsx', 'xlsm', 'xlsb', 'xls', 'ods', 'csv'] }],
+  slides: [{ name: 'Presentations', extensions: ['pptx', 'ppt', 'odp'] }],
 };
 
 ipcMain.handle('kertas:open-dialog', async (_e, { kind = 'all', multi = true } = {}) => {
@@ -391,6 +393,7 @@ const DEFAULT_MIMES = [
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword', 'application/rtf',
   'application/vnd.oasis.opendocument.text', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel', 'application/vnd.oasis.opendocument.spreadsheet', 'text/csv', 'application/pdf',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/vnd.ms-powerpoint', 'application/vnd.oasis.opendocument.presentation',
 ];
 async function makeDefaultApp() {
   if (!app.isPackaged) return { how: 'dev' };
@@ -410,7 +413,7 @@ async function makeDefaultApp() {
   const ok = await new Promise((resolve) => execFile('xdg-mime', ['default', desktop, ...DEFAULT_MIMES], { timeout: 15000 }, (err) => resolve(!err)));
   return { how: ok ? 'done' : 'manual' };
 }
-const NEW_EDITOR_FILES = { writer: /\.docx$/i, sheets: /\.(xlsx|xlsm|csv|xls|ods)$/i, pdf: /\.pdf$/i };
+const NEW_EDITOR_FILES = { writer: /\.docx$/i, sheets: /\.(xlsx|xlsm|csv|xls|ods)$/i, pdf: /\.pdf$/i, slides: /\.(pptx|ppt|odp|otp)$/i };
 // The new Writer (trial): whether this build has it, and opening a document in it.
 // It reads the file itself, so the path gets the same checks as any other open.
 ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
@@ -418,11 +421,13 @@ ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
     available: writer2.available, forced: process.env.KERTAS_NEW_WRITER === '1', off: process.env.KERTAS_NEW_WRITER === '0',
     sheets: writer2.available && writer2.has.sheets, sheetsForced: process.env.KERTAS_NEW_SHEETS === '1', sheetsOff: process.env.KERTAS_NEW_SHEETS === '0',
     pdf: writer2.available && writer2.has.pdf, pdfForced: process.env.KERTAS_NEW_PDF === '1', pdfOff: process.env.KERTAS_NEW_PDF === '0',
+    // presentations have no previous editor: Slides is on whenever the build has it
+    slides: writer2.available && writer2.has.slides, slidesForced: true, slidesOff: false,
   };
   if (!writer2.available) return false;
   if (op === 'open') { // { id, path? , result? }: a tab for a file, a converted document, or a blank one
     const { id, path: filePath = null, result = null, name = null, recoverAs = null } = arg || {};
-    const kind = ['sheets', 'pdf'].includes(arg && arg.kind) ? arg.kind : 'writer';
+    const kind = ['sheets', 'pdf', 'slides'].includes(arg && arg.kind) ? arg.kind : 'writer';
     if (filePath != null) {
       assertReadable(filePath);
       if (!NEW_EDITOR_FILES[kind].test(filePath)) return false;
@@ -445,6 +450,7 @@ ipcMain.handle('kertas:new-writer', async (_e, op, arg) => {
     return true;
   }
   if (op === 'ocr-result') return writer2.ocrResult(arg); // lines read from a page picture
+  if (op === 'ask-result') return writer2.askResult(arg); // the page's answer to a question from the host
   if (op === 'convert-pdf') return writer2.convertPdfForTab(arg); // PDF bytes in, a token for the result out
   return false;
 });

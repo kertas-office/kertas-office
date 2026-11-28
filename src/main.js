@@ -22,6 +22,9 @@ const MODULES = {
   writer: { label: 'W', loader: () => import('./modules/writer.js'), newName: 'Document', ext: 'docx', title: 'Writer' },
   sheets: { label: 'S', loader: () => import('./modules/sheets.js'), newName: 'Book', ext: 'xlsx', title: 'Sheets' },
   pdf: { label: 'P', loader: () => import('./modules/pdf.js'), newName: 'Document', ext: 'pdf', title: 'PDF' },
+  convert: { label: 'C', loader: () => import('./modules/convert.js'), newName: 'Convert', ext: '', title: 'Convert' },
+  // presentations open only in the Slides editor (there is no previous one)
+  slides: { label: 'S', loader: null, newName: 'Presentation', ext: 'pptx', title: 'Slides' },
 };
 
 const tabsEl = document.getElementById('tabs');
@@ -33,7 +36,7 @@ const toastEl = document.getElementById('toast');
 /** @type {Map<string, {id, kind, name, path, dirty, el, tabEl, instance}>} */
 const tabs = new Map();
 let activeId = 'home';
-const untitled = { writer: 0, sheets: 0, pdf: 0 };
+const untitled = { writer: 0, sheets: 0, pdf: 0, convert: 0, slides: 0 };
 
 document.body.classList.add(platform);
 const hydrateIcons = (root = document) => root.querySelectorAll('[data-ic]').forEach((n) => { n.innerHTML = icon(n.dataset.ic, 17); n.style.display = 'inline-grid'; });
@@ -51,7 +54,7 @@ export function toast(msg, isError = false) {
 }
 function setStatus(text) { statusEl.textContent = text; }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const BADGE_ICON = { writer: 'doc', sheets: 'sheet', pdf: 'pdf' };
+const BADGE_ICON = { writer: 'doc', sheets: 'sheet', pdf: 'pdf', convert: 'convert', slides: 'slides' };
 const badge = (kind) => `<span class="badge ${kind}">${icon(BADGE_ICON[kind] || 'doc', 11)}</span>`;
 const isDark = () => document.documentElement.dataset.theme === 'dark';
 const baseName = (n) => n.replace(/\.[^.]+$/, '');
@@ -83,7 +86,7 @@ function activate(id) {
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${id}`));
   const tab = tabs.get(id);
   document.title = tab ? `${tab.name} - Kertas Office` : 'Kertas Office';
-  setStatus(tab ? (tab.path || 'Not saved yet') : 'Ready');
+  setStatus(tab ? (tab.kind === 'convert' ? 'Drop files or choose them to convert' : tab.path || 'Not saved yet') : 'Ready');
   statusRight.textContent = tab ? MODULES[tab.kind].title : 'All files stay on this device';
   if (id === 'home') renderHome();
   tab?.instance?.onShow?.();
@@ -113,6 +116,17 @@ async function openTab(kind, { name, path = null, data = null, html = null, resu
   // to them by its path; a workbook that is not a file yet (new, a template, a converted
   // older format) goes by its contents and is saved under a name of its own
   const onDisk = path && !converted;
+  if (kind === 'slides') {
+    if (await newEditorOn('slides')) {
+      try {
+        const token = !onDisk && data ? await window.kertasNative.newWriter('stash', data) : null;
+        const t = await openNativeWriter({ kind, name, path: onDisk ? path : null, result: token });
+        if (t) return t;
+      } catch (e) { console.error(e); }
+    }
+    toast('Presentations need the desktop app with the Slides editor', true);
+    return null;
+  }
   if ((kind === 'sheets' || kind === 'pdf') && !classic && !html && !result && await newEditorOn(kind)
     && (onDisk ? NEW_EDITOR_FILES[kind].test(path) : kind === 'sheets')) {
     try {
@@ -293,6 +307,38 @@ async function ocrForEditor(req, png, langs) {
   window.kertasNative.newWriter('ocr-result', { req, lines }).catch(() => {});
 }
 
+// Converting a scanned PDF to Word from the new PDF editor. Its own converter places every
+// recognised word where it sat on the picture, which on a scan gives broken lines and mixed
+// sizes; Kertas's converter rebuilds headings, paragraphs, lists and tables in one font, at
+// the size the line spacing shows. Answers true when it converted (mostly scanned pages),
+// false to let the editor's converter do a typeset PDF, which it lays out better.
+async function convertScanForEditor(req, path) {
+  let done = false;
+  let task = null;
+  try {
+    const bytes = new Uint8Array((await readPath(path)).data);
+    const [pdfjs, { default: workerUrl }, { extractPages, pdfToDocx }] = await Promise.all([
+      import('pdfjs-dist'), import('pdfjs-dist/build/pdf.worker.min.mjs?url'), import('./lib/pdf-convert.js'),
+    ]);
+    if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+    task = pdfjs.getDocument({ data: bytes, isEvalSupported: false });
+    const doc = await task.promise;
+    const pages = await extractPages(doc, { Util: pdfjs.Util, OPS: pdfjs.OPS });
+    const withText = pages.filter((p) => p.items.some((it) => it.str.trim()));
+    if (withText.length && withText.filter((p) => p.scan).length * 2 >= withText.length) {
+      setStatus('Building the Word document...');
+      const base = String(path).split(/[\\/]/).pop().replace(/\.pdf$/i, '');
+      const data = await pdfToDocx(pages, { title: base });
+      await openTab('writer', { name: `${base}.docx`, data });
+      toast('Converted to Word from the recognised text. Check it, then save.');
+      setStatus('');
+      done = true;
+    }
+  } catch (e) { console.error('Converting the scan failed', e); }
+  finally { task?.destroy?.(); }
+  window.kertasNative.newWriter('ask-result', { req, value: done }).catch(() => {});
+}
+
 // Compress for the new PDF editor: Kertas's own, with its picture levels. A smaller copy
 // is saved; the open document is not changed.
 async function compressPdfFile(path) {
@@ -344,7 +390,8 @@ onNative('new-writer', (ev) => {
   else if (ev.type === 'error') toast(ev.message);
   else if (ev.type === 'compress' && ev.path) compressPdfFile(ev.path);
   else if (ev.type === 'ocr') ocrForEditor(ev.req, ev.png, ev.langs);
-  else if (ev.type === 'file' && tab) { // the File button of the new Sheets and PDF editors
+  else if (ev.type === 'convert-scan') convertScanForEditor(ev.req, ev.path);
+  else if (ev.type === 'file' && tab) { // the File button of the new Sheets, PDF and Slides editors
     if (activeId !== tab.id) activate(tab.id);
     if (ev.action === 'export-csv') window.kertasNative.newWriter('command', { id: tab.id, name: 'export-csv' });
     else runCommand(ev.action);
@@ -409,7 +456,7 @@ async function confirmRisk(tab) {
 }
 
 async function saveTab(tab, { saveAs = false, format } = {}) {
-  if (!tab?.instance) return false;
+  if (!tab?.instance || tab.kind === 'convert') return false;
   if (tab.native) { window.kertasNative.newWriter('command', { id: tab.id, name: saveAs ? 'save-as' : 'save' }); return true; }
   const ext = format || (tab.kind === 'sheets' && extOf(tab.name) === 'csv' ? 'csv' : MODULES[tab.kind].ext);
   if (tab.risk?.length && !tab.riskOk && (ext === 'docx' || ext === 'xlsx')) {
@@ -503,6 +550,14 @@ async function saveAndOpenPdf(data, name) {
   const out = await saveFile({ data, name, kind: 'pdf', saveAs: true });
   if (out?.path) await openPath(out.path);
   return out;
+}
+/** The Convert app: one tab, brought forward if it is open already */
+async function openConvert({ pick = false } = {}) {
+  let tab = [...tabs.values()].find((t) => t.kind === 'convert');
+  if (tab) activate(tab.id);
+  else tab = await openTab('convert', { name: 'Convert' });
+  if (pick && tab?.instance) await tab.instance.add(await window.kertasNative.convert('pick'));
+  return tab;
 }
 async function mergePdfs() {
   const files = await openFiles('pdf', true);
@@ -609,15 +664,15 @@ async function newFromTemplate(id) {
 function openTemplates(kind) {
   document.querySelector('.tpl-backdrop')?.remove();
   const list = templatesFor(kind);
-  const blank = kind === 'writer' ? 'Blank document' : 'Blank workbook';
+  const blank = { writer: 'Blank document', sheets: 'Blank workbook', slides: 'Blank presentation' }[kind];
   const back = document.createElement('div');
   back.className = 'modal-backdrop tpl-backdrop';
   back.innerHTML = `<div class="modal glass tpl-gallery ${kind}" role="dialog" aria-modal="true" aria-labelledby="tpl-title">
-      <div class="tpl-head"><div><h3 id="tpl-title">${kind === 'writer' ? 'Writer' : 'Sheets'} templates</h3>
-        <p>Each one opens as a new file with example content to replace. ${kind === 'sheets' ? 'Blue figures are the ones to type; the rest works itself out.' : 'Fonts, spacing and page numbers are already set.'}</p></div>
+      <div class="tpl-head"><div><h3 id="tpl-title">${MODULES[kind].title} templates</h3>
+        <p>Each one opens as a new file with example content to replace. ${{ sheets: 'Blue figures are the ones to type; the rest works itself out.', writer: 'Fonts, spacing and page numbers are already set.', slides: 'Colours, fonts and layouts are already set; every text can be typed over.' }[kind]}</p></div>
         <button class="icon-btn" data-close title="Close (Esc)">${icon('close', 16)}</button></div>
       <div class="tpl-grid">
-        <button class="tpl-card blank" data-blank><span class="tpl-pic"><span class="tpl-plus">${icon('plus', 28)}</span></span><strong>${blank}</strong><span class="desc">Start from an empty ${kind === 'writer' ? 'page' : 'sheet'}</span></button>
+        <button class="tpl-card blank" data-blank><span class="tpl-pic"><span class="tpl-plus">${icon('plus', 28)}</span></span><strong>${blank}</strong><span class="desc">Start from an empty ${{ writer: 'page', sheets: 'sheet', slides: 'slide' }[kind]}</span></button>
         ${list.map((t) => `<button class="tpl-card" data-tpl="${t.id}"><span class="tpl-pic"><img src="${t.preview}" alt="" loading="lazy"></span><strong>${esc(t.name)}</strong><span class="desc">${esc(t.desc)}</span></button>`).join('')}
       </div></div>`;
   const close = () => { back.remove(); document.removeEventListener('keydown', onKey, true); };
@@ -641,10 +696,10 @@ async function makeDefaultApp() {
   markDefaultAsked();
   const res = await window.kertasNative?.makeDefaultApp?.() || { how: 'manual' };
   const steps = {
-    settings: { title: 'Choose Kertas in Settings', text: 'Windows Settings is now open at Default apps. Set Kertas Office for .docx, .xlsx and .pdf (and any other types you like). Windows asks you to do this yourself so no app can take over your files without asking.' },
-    mac: { title: 'Make Kertas the default on your Mac', text: 'In Finder, select a .docx file and press Cmd+I. Under "Open with", choose Kertas Office, then click "Change All". Do the same for a .xlsx and a .pdf file.' },
+    settings: { title: 'Choose Kertas in Settings', text: 'Windows Settings is now open at Default apps. Set Kertas Office for .docx, .xlsx, .pptx and .pdf (and any other types you like). Windows asks you to do this yourself so no app can take over your files without asking.' },
+    mac: { title: 'Make Kertas the default on your Mac', text: 'In Finder, select a .docx file and press Cmd+I. Under "Open with", choose Kertas Office, then click "Change All". Do the same for a .xlsx, a .pptx and a .pdf file.' },
     appimage: { title: 'Make Kertas the default', text: 'This copy runs as an AppImage, which has no menu entry of its own for your desktop to use. Install the .deb package (or add the AppImage to your menu with AppImageLauncher), then use this command again.' },
-    manual: { title: 'Make Kertas the default', text: 'Right-click a .docx, .xlsx or .pdf file, choose "Open with", pick Kertas Office and tick "Always use this app".' },
+    manual: { title: 'Make Kertas the default', text: 'Right-click a .docx, .xlsx, .pptx or .pdf file, choose "Open with", pick Kertas Office and tick "Always use this app".' },
     dev: { title: 'Not in a development build', text: 'The installed app registers itself for documents. Try this in a build made with npm run dist.' },
   };
   if (res.how === 'done') { toast('Kertas now opens your documents, spreadsheets and PDFs'); renderHome(); return; }
@@ -658,8 +713,10 @@ const active = () => tabs.get(activeId);
 const COMMANDS = [
   { id: 'new-doc', group: 'files', label: 'New document', icon: 'doc', key: 'Ctrl+N', run: () => newDocument() },
   { id: 'new-sheet', group: 'files', label: 'New spreadsheet', icon: 'sheet', key: 'Ctrl+Shift+N', run: () => openTab('sheets') },
+  ...(isDesktop ? [{ id: 'new-slides', group: 'files', label: 'New presentation', icon: 'slides', run: () => openTab('slides') }] : []),
   { id: 'templates-writer', group: 'files', label: 'New document from a template...', icon: 'template', run: () => openTemplates('writer') },
   { id: 'templates-sheets', group: 'files', label: 'New workbook from a template...', icon: 'template', run: () => openTemplates('sheets') },
+  ...(isDesktop ? [{ id: 'templates-slides', group: 'files', label: 'New presentation from a template...', icon: 'template', run: () => openTemplates('slides') }] : []),
   { id: 'open', group: 'files', label: 'Open...', icon: 'open', key: 'Ctrl+O', run: () => openDialog() },
   { id: 'save', label: 'Save', icon: 'save', key: 'Ctrl+S', run: () => active() && saveTab(active()), needsTab: true },
   { id: 'save-as', group: 'files', label: 'Save as...', icon: 'save-as', key: 'Ctrl+Shift+S', run: () => active() && saveTab(active(), { saveAs: true }), needsTab: true },
@@ -669,6 +726,7 @@ const COMMANDS = [
   { id: 'merge-pdfs', group: 'files', label: 'Merge PDFs...', icon: 'merge', run: mergePdfs },
   { id: 'sign-pdf', group: 'files', label: 'Sign a PDF...', icon: 'sign', run: signPdf },
   { id: 'images-to-pdf', group: 'files', label: 'Images to PDF...', icon: 'file-image', run: imagesToPdfCmd },
+  ...(isDesktop ? [{ id: 'convert-files', group: 'files', label: 'Convert files...', icon: 'convert', run: () => openConvert() }] : []),
   { id: 'home', group: 'app', label: 'Go to Home', icon: 'home', run: () => activate('home') },
   { id: 'theme', group: 'app', label: 'Toggle dark mode', icon: 'moon', run: () => applyTheme(!isDark()) },
   ...(isDesktop ? [{ id: 'default-app', group: 'app', label: 'Make Kertas the default app for documents', icon: 'shield-check', run: () => makeDefaultApp() }] : []),
@@ -680,7 +738,7 @@ const runCommand = (id) => COMMANDS.find((c) => c.id === id)?.run();
 
 function fileMenuFor() {
   const pick = (id) => { const c = COMMANDS.find((x) => x.id === id); return { id, label: c.label, icon: c.icon, shortcut: c.key, action: c.run }; };
-  return [pick('new-doc'), pick('new-sheet'), pick('open'), 'sep', pick('save'), pick('save-as'), pick('export-pdf'), pick('print'), 'sep', pick('close-tab')];
+  return [pick('new-doc'), pick('new-sheet'), ...(COMMANDS.some((c) => c.id === 'new-slides') ? [pick('new-slides')] : []), pick('open'), 'sep', pick('save'), pick('save-as'), pick('export-pdf'), pick('print'), 'sep', pick('close-tab')];
 }
 
 // Command palette (Ctrl+K)
@@ -701,7 +759,7 @@ function openPalette() {
   const close = () => back.remove();
   const render = async () => {
     const q = input.value.toLowerCase().trim();
-    const recent = (await recentFiles()).slice(0, 8).map((r) => ({ label: r.name, sub: r.path, icon: kindForName(r.name) === 'sheets' ? 'sheet' : kindForName(r.name) === 'pdf' ? 'pdf' : 'doc', run: () => openPath(r.path) }));
+    const recent = (await recentFiles()).slice(0, 8).map((r) => ({ label: r.name, sub: r.path, icon: BADGE_ICON[kindForName(r.name)] || 'doc', run: () => openPath(r.path) }));
     items = [...COMMANDS.filter((c) => !c.needsTab || active()).map((c) => ({ label: c.label, key: c.key, icon: c.icon, run: c.run, group: c.group })), ...recent.map((r) => ({ ...r, group: 'recent' }))]
       .filter((it) => !q || it.label.toLowerCase().includes(q) || it.sub?.toLowerCase().includes(q));
     sel = Math.min(sel, Math.max(0, items.length - 1));
@@ -768,7 +826,7 @@ async function renderHome() {
         <div>
           <div class="hero-greet">${greet}</div>
           <h1>Your workspace.</h1>
-          <p>Documents, spreadsheets and PDFs. All offline.</p>
+          <p>${isDesktop ? "Documents, spreadsheets, presentations and PDFs" : "Documents, spreadsheets and PDFs"}. All offline.</p>
           <div class="local-badge">${icon('shield-check', 15)}<span><strong>Everything stays on this computer.</strong> No account and no uploads.</span></div>
         </div>
         <div class="hero-side">
@@ -777,7 +835,7 @@ async function renderHome() {
         </div>
       </div>
       ${isDesktop && !defaultAsked() ? `<div class="default-offer glass">
-        <div class="do-text">${icon('shield-check', 18)}<div><strong>Open your files with Kertas?</strong><span>Make Kertas the app that opens .docx, .xlsx and .pdf files when you double-click them.</span></div></div>
+        <div class="do-text">${icon('shield-check', 18)}<div><strong>Open your files with Kertas?</strong><span>Make Kertas the app that opens your documents, spreadsheets, presentations and PDFs when you double-click them.</span></div></div>
         <button class="chip primary" data-default="yes">Set as default</button><button class="chip" data-default="no">Not now</button>
       </div>` : ''}
       ${recovered.length ? `<div class="recovered glass">
@@ -786,33 +844,50 @@ async function renderHome() {
           <button class="chip primary" data-recover="${esc(r.id)}">Open</button><button class="chip" data-discard="${esc(r.id)}">Discard</button></div>`).join('')}
       </div>` : ''}
       <div class="new-grid">
-        <div class="app-card writer">
-          <div class="app-icon">${icon('doc', 24)}</div>
-          <strong>Writer</strong><span class="desc">Word-compatible documents (.docx, also opens .doc, .rtf, .odt)</span>
+        <div class="app-card writer" title="Word-compatible documents (.docx, also opens .doc, .rtf, .odt)">
+          <div class="app-head"><div class="app-icon">${icon('doc', 24)}</div><strong>Writer</strong></div>
+          <p class="app-desc">Documents (.docx)</p>
           <div class="actions">
-            <button class="chip primary" data-cmd="new-doc">${icon('plus', 14)}Blank</button>
-            <button class="chip" data-cmd="templates-writer">${icon('template', 14)}Templates</button>
-            <button class="chip" data-open="writer">${icon('open', 14)}Open</button>
+            <button class="chip icon-only" data-cmd="new-doc" title="New blank document" aria-label="New blank document">${icon('plus', 17)}</button>
+            <button class="chip icon-only" data-open="writer" title="Open a document" aria-label="Open a document">${icon('open', 17)}</button>
+            <button class="chip icon-only" data-cmd="templates-writer" title="Document templates" aria-label="Document templates">${icon('template', 17)}</button>
           </div>
         </div>
-        <div class="app-card sheets">
-          <div class="app-icon">${icon('sheet', 24)}</div>
-          <strong>Sheets</strong><span class="desc">Excel-compatible workbooks (.xlsx, .csv, also opens .xls, .ods)</span>
+        <div class="app-card sheets" title="Excel-compatible workbooks (.xlsx, .csv, also opens .xls, .ods)">
+          <div class="app-head"><div class="app-icon">${icon('sheet', 24)}</div><strong>Sheets</strong></div>
+          <p class="app-desc">Spreadsheets (.xlsx)</p>
           <div class="actions">
-            <button class="chip primary" data-cmd="new-sheet">${icon('plus', 14)}Blank</button>
-            <button class="chip" data-cmd="templates-sheets">${icon('template', 14)}Templates</button>
-            <button class="chip" data-open="sheets">${icon('open', 14)}Open</button>
+            <button class="chip icon-only" data-cmd="new-sheet" title="New blank spreadsheet" aria-label="New blank spreadsheet">${icon('plus', 17)}</button>
+            <button class="chip icon-only" data-open="sheets" title="Open a spreadsheet" aria-label="Open a spreadsheet">${icon('open', 17)}</button>
+            <button class="chip icon-only" data-cmd="templates-sheets" title="Spreadsheet templates" aria-label="Spreadsheet templates">${icon('template', 17)}</button>
           </div>
         </div>
-        <div class="app-card pdf">
-          <div class="app-icon">${icon('pdf', 24)}</div>
-          <strong>PDF</strong><span class="desc">Fill forms, comment, sign, protect, redact and organise pages</span>
+        ${isDesktop ? `<div class="app-card slides" title="PowerPoint-compatible presentations (.pptx, also opens .ppt, .odp)">
+          <div class="app-head"><div class="app-icon">${icon('slides', 24)}</div><strong>Slides</strong></div>
+          <p class="app-desc">Presentations (.pptx)</p>
           <div class="actions">
-            <button class="chip primary" data-open="pdf">${icon('open', 14)}Open PDF</button>
-            <button class="chip" data-cmd="merge-pdfs">${icon('merge', 14)}Merge</button>
-            <button class="chip" data-cmd="sign-pdf">${icon('sign', 14)}Sign</button>
+            <button class="chip icon-only" data-cmd="new-slides" title="New blank presentation" aria-label="New blank presentation">${icon('plus', 17)}</button>
+            <button class="chip icon-only" data-open="slides" title="Open a presentation" aria-label="Open a presentation">${icon('open', 17)}</button>
+            <button class="chip icon-only" data-cmd="templates-slides" title="Presentation templates" aria-label="Presentation templates">${icon('template', 17)}</button>
+          </div>
+        </div>` : ''}
+        <div class="app-card pdf" title="Fill forms, comment, sign, protect, redact and organise pages">
+          <div class="app-head"><div class="app-icon">${icon('pdf', 24)}</div><strong>PDF</strong></div>
+          <p class="app-desc">Fill, sign and organise</p>
+          <div class="actions">
+            <button class="chip icon-only" data-open="pdf" title="Open a PDF" aria-label="Open a PDF">${icon('open', 17)}</button>
+            <button class="chip icon-only" data-cmd="merge-pdfs" title="Merge PDFs" aria-label="Merge PDFs">${icon('merge', 17)}</button>
+            <button class="chip icon-only" data-cmd="sign-pdf" title="Sign a PDF" aria-label="Sign a PDF">${icon('sign', 17)}</button>
           </div>
         </div>
+        ${isDesktop ? `<div class="app-card convert" title="Pictures, PDFs, documents and spreadsheets to other formats, on this computer">
+          <div class="app-head"><div class="app-icon">${icon('convert', 24)}</div><strong>Convert</strong></div>
+          <p class="app-desc">Change file formats</p>
+          <div class="actions">
+            <button class="chip icon-only" data-convert="pick" title="Choose files to convert" aria-label="Choose files to convert">${icon('open', 17)}</button>
+            <button class="chip icon-only" data-convert="open" title="Open Convert" aria-label="Open Convert">${icon('convert', 17)}</button>
+          </div>
+        </div>` : ''}
       </div>
       ${pinned.length ? `<div class="section-head" style="margin-top:30px"><h2>Pinned</h2></div>
       <div class="recent glass">${pinned.map(recentRow).join('')}</div>` : ''}
@@ -829,6 +904,7 @@ async function renderHome() {
     if (b.dataset.default === 'yes') makeDefaultApp(); else { markDefaultAsked(); renderHome(); }
   }));
   home.querySelectorAll('[data-cmd]').forEach((b) => b.addEventListener('click', () => runCommand(b.dataset.cmd)));
+  home.querySelectorAll('[data-convert]').forEach((b) => b.addEventListener('click', () => openConvert({ pick: b.dataset.convert === 'pick' })));
   home.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openDialog(b.dataset.open)));
   home.querySelectorAll('[data-path]').forEach((b) => b.addEventListener('click', () => {
     if (b.dataset.missing) { toast('This file was moved or deleted. Remove it from the list, or open it from its new place.', true); return; }
@@ -925,15 +1001,17 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault();
   e.stopPropagation();
   const target = fileDropTarget(e.target);
+  // the Convert tab takes the files by their paths, so a large video is never read here
+  const pathsOnly = target?.dataset.fileDrop === 'paths';
   const records = await Promise.all([...e.dataTransfer.files].map(async (f) => ({
-    name: f.name, path: window.kertasNative?.pathForFile?.(f) || null, data: new Uint8Array(await f.arrayBuffer()),
+    name: f.name, path: window.kertasNative?.pathForFile?.(f) || null, ...(pathsOnly ? {} : { data: new Uint8Array(await f.arrayBuffer()) }),
   })));
   if (target) { await target.kertasFileDrop(records, e); return; }
   await openFileRecords(records);
 }, true);
 
 // Test hook so automated checks can drive the app
-window.__kertas = { openTab, saveTab, tabs, closeTab, activate, exportPdf, runCommand, applyTheme, snapshotAll, newFromTemplate, openTemplates };
+window.__kertas = { openConvert, openTab, saveTab, tabs, closeTab, activate, exportPdf, runCommand, applyTheme, snapshotAll, newFromTemplate, openTemplates };
 
 renderHome();
 

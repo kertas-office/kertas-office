@@ -30,5 +30,7 @@ contextBridge.exposeInMainWorld('kertasNative', {
   setTheme: (dark) => ipcRenderer.send('kertas:theme', dark),
   update: (op, arg) => ipcRenderer.invoke('kertas:update', op, arg),
   onUpdate: (cb) => ipcRenderer.on('kertas:update-state', (_e, st) => cb(st)),
+  convert: (op, arg) => ipcRenderer.invoke('kertas:convert', op, arg),
+  onConvert: (cb) => ipcRenderer.on('kertas:convert-event', (_e, ev) => cb(ev)),
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
 });

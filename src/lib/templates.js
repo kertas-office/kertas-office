@@ -1,7 +1,8 @@
-// Ready-made documents and workbooks offered from the Home screen (Writer card and Sheets card,
-// "Templates"). Each one is a real .docx or .xlsx in src/templates/, with a preview picture.
+// Ready-made documents, workbooks and presentations offered from the Home screen (the Writer,
+// Sheets and Slides cards, "Templates"). Each one is a real .docx, .xlsx or .pptx in
+// src/templates/, with a preview picture (the decks are made by scripts/templates/).
 // Opening a template starts a new, unsaved file: the first save asks where to put it.
-const files = import.meta.glob('../templates/*.{docx,xlsx,jpg}', { query: '?url', import: 'default', eager: true });
+const files = import.meta.glob('../templates/*.{docx,xlsx,pptx,jpg}', { query: '?url', import: 'default', eager: true });
 const url = (name) => files[`../templates/${name}`];
 
 export const TEMPLATES = [
@@ -21,8 +22,20 @@ export const TEMPLATES = [
   { id: 'timesheet', kind: 'sheets', name: 'Weekly timesheet', desc: 'Start, finish and breaks per day; hours, overtime and pay' },
   { id: 'inventory', kind: 'sheets', name: 'Inventory', desc: 'Stock levels and value; items to reorder are flagged' },
   { id: 'loan-calculator', kind: 'sheets', name: 'Loan calculator', desc: 'Monthly payment, total interest and the full repayment schedule' },
+  { id: 'pitch-deck', kind: 'slides', name: 'Pitch deck', desc: 'Problem, solution, market, traction chart, pricing, team and the ask' },
+  { id: 'business-review', kind: 'slides', name: 'Business review', desc: 'Key figures, revenue chart, where customers came from, wins and priorities' },
+  { id: 'project-update', kind: 'slides', name: 'Project update', desc: 'Progress, milestone timeline, risks table and the decision needed' },
+  { id: 'sales-proposal', kind: 'slides', name: 'Sales proposal', desc: 'What you heard, your approach, what they get, prices and a client quote' },
+  { id: 'marketing-plan', kind: 'slides', name: 'Marketing plan', desc: 'Numbers, audiences, budget split, a year calendar and the goal chart' },
+  { id: 'lesson', kind: 'slides', name: 'Lesson', desc: 'Goals, the big idea in steps, a fun fact and a class activity' },
+  { id: 'research', kind: 'slides', name: 'Research project', desc: 'Question, method, findings chart and table, and what it means' },
+  { id: 'workshop', kind: 'slides', name: 'Workshop', desc: 'Agenda, section dividers, exercises and a takeaway for the week' },
+  { id: 'portfolio', kind: 'slides', name: 'Portfolio', desc: 'About you, a gallery of work, a case study, your process and a quote' },
+  { id: 'event', kind: 'slides', name: 'Event', desc: 'Invitation, the evening at a glance, programme, venue and reply' },
+  { id: 'photo-story', kind: 'slides', name: 'Photo story', desc: 'Full-picture slides for a trip, a project diary or a family album' },
+  { id: 'minimal', kind: 'slides', name: 'Minimal', desc: 'Black, white and one colour: points, picture, compare and thank-you' },
 ].map((t) => {
-  const ext = t.kind === 'writer' ? 'docx' : 'xlsx';
+  const ext = { writer: 'docx', sheets: 'xlsx', slides: 'pptx' }[t.kind];
   return { ...t, ext, file: url(`${t.id}.${ext}`), preview: url(`${t.id}.jpg`) };
 });
 

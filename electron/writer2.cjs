@@ -20,7 +20,7 @@ const windows = new Set(); // webContents ids of the editor's windows
 function schemes() {
   if (!available) return [];
   host = require(MAIN);
-  return [host.RENDERER_SCHEME_PRIVILEGE, host.DOCX_MEDIA_SCHEME_PRIVILEGE];
+  return [host.RENDERER_SCHEME_PRIVILEGE, host.DOCX_MEDIA_SCHEME_PRIVILEGE, host.SLIDE_MEDIA_SCHEME_PRIVILEGE].filter(Boolean);
 }
 
 // What the editor asks its host about. (The editor's AI assistant is not part of Kertas's
@@ -102,7 +102,7 @@ function start() {
   // a command waiting for a PDF tab (Sign a PDF), taken once the document is ready
   ipcMain.handle('kertas:pdf-pending', (e) => { const name = pdfPending.get(e.sender.id) || null; pdfPending.delete(e.sender.id); return name; });
   // the File button of the spreadsheet and PDF editors: Kertas carries out the command
-  const FILE_ACTIONS = new Set(['new-doc', 'new-sheet', 'open', 'save', 'save-as', 'export-pdf', 'export-csv', 'print', 'close-tab']);
+  const FILE_ACTIONS = new Set(['new-doc', 'new-sheet', 'new-slides', 'open', 'save', 'save-as', 'export-pdf', 'export-csv', 'print', 'close-tab']);
   ipcMain.handle('kertas:editor-file', (e, action) => {
     const id = tabOf(e.sender.id);
     if (id && FILE_ACTIONS.has(action)) tell('file', id, { action });
@@ -120,6 +120,7 @@ const has = {
   writer: true,
   sheets: fs.existsSync(path.join(ROOT, 'sheets', 'renderer', 'index.html')) && fs.existsSync(SIDECAR),
   pdf: fs.existsSync(path.join(ROOT, 'pdf', 'renderer', 'index.html')),
+  slides: fs.existsSync(path.join(ROOT, 'slides', 'renderer', 'index.html')),
 };
 function startSheetsAndPdf() {
   const openHere = (filePath) => { tell('open-path', null, { path: filePath }); return true; };
@@ -158,6 +159,13 @@ function startSheetsAndPdf() {
       tell('ocr', null, { req, png, langs });
     }));
     ocrAnswer = (req, lines) => asks.get(req)?.(lines);
+    // a question for the Kertas page, answered through ask-result (false if no answer comes)
+    askPage = (kind, id, payload, wait = 10 * 60 * 1000) => new Promise((resolve) => {
+      const req = ++askSeq;
+      const timer = setTimeout(() => { asks.delete(req); resolve(false); }, wait);
+      asks.set(req, (value) => { clearTimeout(timer); asks.delete(req); resolve(value); });
+      tell(kind, id, { req, ...payload });
+    });
     // Compress is Kertas's own (picture levels), run by the Kertas page on the tab's file
     ipcMain.handle('pdf:kertas-compress', (e) => {
       const id = tabOf(e.sender.id);
@@ -170,6 +178,9 @@ function startSheetsAndPdf() {
       if (!t || t.kind !== 'pdf' || !t.path || converting || !['docx', 'xlsx'].includes(format)) return;
       converting = true;
       try {
+        // A scan converts best with Kertas's own converter, which rebuilds paragraphs in one
+        // font and size from the recognised text; the page answers true when it did that
+        if (format === 'docx' && await askPage('convert-scan', tabOf(e.sender.id), { path: t.path }) === true) return;
         const out = await convertPdfForTab(await fs.promises.readFile(t.path), format);
         if (format === 'docx') { tell('result', null, { token: out }); return; }
         const { dialog } = require('electron');
@@ -181,6 +192,22 @@ function startSheetsAndPdf() {
       finally { converting = false; tell('convert-done', null, {}); }
     });
     host.setPdfRedactionSavedHook((wc, filePath) => { const id = tabOf(wc.id); if (id) tell('path', id, { path: filePath }); });
+  }
+  if (has.slides) {
+    roots.slides = path.join(ROOT, 'slides', 'renderer');
+    host.configureSlidesRuntime({
+      preloadPath: path.join(ROOT, 'slides', 'preload', 'index.js'),
+      rendererFilePath: path.join(ROOT, 'slides', 'renderer', 'index.html'),
+      openGeneratedPath: openHere,
+    });
+    host.registerSlidesIpc();
+    host.setSlidesOpenedHook((wc, filePath) => { const id = tabOf(wc.id); const t = tabs.get(id); if (t) { t.path = filePath; tell('path', id, { path: filePath }); } });
+    host.setSlidesCloseTabHook(() => { const id = activeTab(); if (id) tell('close', id, {}); });
+    // a new deck's first Save asks where to keep it, suggesting the tab's name
+    host.setSlidesFirstSaveAsks?.((wc) => tabs.get(tabOf(wc.id))?.name || null);
+    // the slide show: the editor goes full screen over the whole window, and back
+    host.setSlidesHostWindowHook(() => mainWin);
+    host.setSlidesShowBleed((wc, on) => { const id = tabOf(wc.id); const t = tabs.get(id); if (t) { t.bleed = !!on; place(t); } });
   }
   host.installRendererProtocol(roots);
 }
@@ -234,6 +261,9 @@ function attach(win) {
   if (!host) return;
   host.setDocsShellWindow(win);
   if (has.sheets) host.setSheetsShellWindow(win);
+  if (has.slides) host.setSlidesShellWindow(win);
+  // a slide show covering the window follows it as it goes full screen and back
+  win.on('resize', () => { for (const t of tabs.values()) if (t.bleed) place(t); });
 }
 const tell = (type, id, more) => { if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('kertas:new-writer-event', { type, id, ...more }); };
 const tabOf = (wcId) => { for (const [id, t] of tabs) if (t.wcId === wcId) return id; return null; };
@@ -271,6 +301,17 @@ async function openTab(id, { kind = 'writer', filePath = null, result = null, na
     view = host.createSheetsView({ includeAiHandlers: false, openingWorkbook: true });
     host.queueWorkbookForView(view.webContents, filePath);
   } else if (kind === 'pdf') view = host.createPdfView(filePath || undefined);
+  else if (kind === 'slides') {
+    // a template (or other deck that is not a file yet) opens from a temporary copy as a new deck
+    const bytes = !filePath && result && results.get(result);
+    if (bytes) {
+      results.delete(result);
+      const tmp = path.join(os.tmpdir(), `kertas-slides-${require('crypto').randomUUID()}.pptx`);
+      await fs.promises.writeFile(tmp, bytes);
+      view = host.createSlidesView(tmp, { asNew: true });
+      setTimeout(() => fs.promises.unlink(tmp).catch(() => {}), 60000);
+    } else view = host.createSlidesView(filePath || undefined);
+  }
   else view = host.createDocsView(filePath || undefined);
   const wc = view.webContents;
   const wcId = wc.id;
@@ -282,7 +323,7 @@ async function openTab(id, { kind = 'writer', filePath = null, result = null, na
   }
   view.setVisible(false);
   mainWin.contentView.addChildView(view);
-  tabs.set(id, { view, wcId, kind, path: filePath, shown: false });
+  tabs.set(id, { view, wcId, kind, path: filePath, name, shown: false });
   if (kind === 'writer') wc.on('page-title-updated', (_e, title) => tell('title', id, { title }));
   // Kertas's own tab keys still work while the editor has the keyboard
   wc.on('before-input-event', (e, input) => {
@@ -304,14 +345,25 @@ function layout(id, rect) {
   if (!t || !mainWin || mainWin.isDestroyed()) return;
   if (!rect) { if (t.shown) { t.shown = false; t.view.setVisible(false); } return; }
   const z = mainWin.webContents.getZoomFactor();
-  t.view.setBounds({ x: Math.round(rect.x * z), y: Math.round(rect.y * z), width: Math.max(0, Math.round(rect.width * z)), height: Math.max(0, Math.round(rect.height * z)) });
+  t.rect = { x: Math.round(rect.x * z), y: Math.round(rect.y * z), width: Math.max(0, Math.round(rect.width * z)), height: Math.max(0, Math.round(rect.height * z)) };
+  place(t);
   if (!t.shown) {
     for (const other of tabs.values()) if (other !== t && other.shown) { other.shown = false; other.view.setVisible(false); }
     t.shown = true;
     t.view.setVisible(true);
     if (t.kind === 'sheets') host.setActiveSheetsWebContents(t.view.webContents);
+    if (t.kind === 'slides') host.setActiveSlidesWebContents(t.view.webContents);
     if (rect.focus !== false) t.view.webContents.focus();
   }
+}
+
+// The view over its pane, or over the whole window during a slide show
+function place(t) {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  if (t.bleed) {
+    const [width, height] = mainWin.getContentSize();
+    t.view.setBounds({ x: 0, y: 0, width, height });
+  } else if (t.rect) t.view.setBounds(t.rect);
 }
 
 // A picture of the tab's editor as it is now, for the page to show in its place while the
@@ -327,6 +379,7 @@ async function isDirty(id) {
   if (!t) return false;
   if (t.kind === 'sheets') return host.sheetsPendingEditCount(t.wcId) > 0;
   if (t.kind === 'pdf') return host.pdfIsDirty(t.wcId);
+  if (t.kind === 'slides') return host.slidesIsDirty(t.wcId);
   return host.docsQueryDirty(t.view.webContents);
 }
 
@@ -334,7 +387,7 @@ async function isDirty(id) {
 async function closeTab(id) {
   const t = tabs.get(id);
   if (!t) return true;
-  const ask = t.kind === 'sheets' ? host.requestSheetsClose : t.kind === 'pdf' ? host.requestPdfClose : host.requestDocsClose;
+  const ask = t.kind === 'sheets' ? host.requestSheetsClose : t.kind === 'pdf' ? host.requestPdfClose : t.kind === 'slides' ? host.requestSlidesClose : host.requestDocsClose;
   if (!(await ask(t.view.webContents, mainWin))) return false;
   tabs.delete(id);
   try { mainWin.contentView.removeChildView(t.view); } catch { /* window already gone */ }
@@ -347,6 +400,7 @@ function command(id, name) {
   const t = tabs.get(id);
   if (!t) return;
   if (t.kind === 'sheets') { host.setActiveSheetsWebContents(t.view.webContents); host.sendSheetsMenuAction(name); }
+  else if (t.kind === 'slides') { host.setActiveSlidesWebContents(t.view.webContents); t.view.webContents.send('slides:menu', name); }
   else if (t.kind === 'pdf') {
     if (name === 'save') host.flushPdfSave(t.view.webContents, true);
     else if (name === 'print') host.sendPdfPrintRequest(t.view.webContents);
@@ -363,7 +417,7 @@ async function savePdfAs(t) {
 // PDF to Word with the layout kept. The work runs in a process of its own (see
 // writer2-pdf-worker.cjs), so the window stays responsive however long it takes; the result
 // waits here until its tab asks for it.
-function convertPdfForTab(data, format = 'docx') {
+function convertPdfForTab(data, format = 'docx', { raw = false, onProgress = null } = {}) {
   if (!host) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
     const child = utilityProcess.fork(path.join(__dirname, 'writer2-pdf-worker.cjs'), [], { serviceName: 'Kertas PDF to Word' });
@@ -372,12 +426,62 @@ function convertPdfForTab(data, format = 'docx') {
     // generous: a scanned book can take minutes; a process that has stopped answering is ended
     const timer = setTimeout(() => finish(reject, new Error('The conversion took too long and was stopped')), 15 * 60 * 1000);
     child.on('message', (msg) => {
-      if (msg.docx) finish(resolve, format === 'docx' ? keepResult(msg.docx) : Buffer.from(msg.docx));
+      if (msg.docx) finish(resolve, format === 'docx' && !raw ? keepResult(msg.docx) : Buffer.from(msg.docx));
       else if (msg.error) finish(reject, new Error(msg.error));
-      else if (msg.total) tell('convert-progress', null, { page: msg.page, total: msg.total, format });
+      else if (msg.total) {
+        if (onProgress) onProgress(msg.page, msg.total);
+        else tell('convert-progress', null, { page: msg.page, total: msg.total, format });
+      }
     });
     child.on('exit', (code) => finish(reject, new Error(`The converter stopped unexpectedly (${code})`)));
     child.once('spawn', () => child.postMessage({ pdf: Buffer.from(data), format, wasm: path.join(ROOT, 'wasm', 'pdfium.wasm') }));
+  });
+}
+
+// A Word document to PDF for the Convert app: the new Writer opens it out of sight and
+// prints it to the target path the way its own Export as PDF does, with no dialog. Pages
+// come out exactly as the Writer lays them out.
+function docxToPdf(filePath, outPath) {
+  if (!host || !has.writer) return Promise.reject(new Error('The Writer is not available in this build'));
+  return new Promise((resolve, reject) => {
+    const view = host.createDocsView(filePath);
+    const wc = view.webContents;
+    windows.add(wc.id);
+    try { wc.setBackgroundThrottling(false); } catch { /* older Electron */ }
+    // the Writer lays pages out only where it is painted: an invisible window that still paints
+    const { BrowserWindow } = require('electron');
+    const holder = new BrowserWindow({ show: false, width: 1280, height: 900, paintWhenInitiallyHidden: true, skipTaskbar: true, webPreferences: { backgroundThrottling: false } });
+    holder.contentView.addChildView(view);
+    view.setBounds({ x: 0, y: 0, width: 1280, height: 900 });
+    let done = false;
+    let tries = 0;
+    let retry = null;
+    const finish = (err, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      clearTimeout(retry);
+      windows.delete(wc.id);
+      try { wc.close({ waitForBeforeUnload: false }); } catch { /* already closed */ }
+      try { holder.destroy(); } catch { /* already gone */ }
+      if (err) reject(err); else resolve(value);
+    };
+    const timer = setTimeout(() => finish(new Error('The document took too long to convert')), 3 * 60 * 1000);
+    host.setKertasAutoPdf(
+      wc.id,
+      outPath,
+      (out, error) => (out ? finish(null, out) : finish(new Error(error || 'The PDF could not be written'))),
+      () => clearTimeout(retry), // the export is under way: no more asking
+    );
+    // the document is laid out a moment after the page loads; asking again covers a slow start
+    const ask = () => {
+      if (done) return;
+      if (++tries > 6) { finish(new Error('The document did not finish loading')); return; }
+      wc.send('menu:command', 'export-pdf');
+      retry = setTimeout(ask, 15000);
+    };
+    wc.once('did-finish-load', () => setTimeout(ask, 2500));
+    wc.once('render-process-gone', () => finish(new Error('The Writer stopped while converting')));
   });
 }
 
@@ -393,4 +497,6 @@ async function openLicences() {
   return shell.openPath(dir);
 }
 const ocrResult = (arg) => ocrAnswer(Number(arg && arg.req), arg && arg.lines);
-module.exports = { available, has, ocrResult, sheetRecoveries, openLicences, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab };
+let askPage = async () => false;
+const askResult = (arg) => ocrAnswer(Number(arg && arg.req), arg && arg.value);
+module.exports = { available, has, ocrResult, askResult, sheetRecoveries, openLicences, schemes, start, setTheme, setAuthor, stash, attach, openTab, layout, snapshot, isDirty, closeTab, command, convertPdfForTab, docxToPdf };

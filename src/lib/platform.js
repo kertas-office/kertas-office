@@ -5,10 +5,11 @@ export const isDesktop = !!native;
 export const platform = native?.platform === 'darwin' ? 'mac' : native?.platform === 'win32' ? 'win' : native ? 'linux' : 'web';
 
 const ACCEPT = {
-  all: '.docx,.doc,.rtf,.odt,.xlsx,.xlsm,.xlsb,.xls,.ods,.csv,.pdf',
+  all: '.docx,.doc,.rtf,.odt,.xlsx,.xlsm,.xlsb,.xls,.ods,.csv,.pdf,.pptx,.ppt,.odp',
   writer: '.docx,.doc,.rtf,.odt',
   sheets: '.xlsx,.xlsm,.xlsb,.xls,.ods,.csv',
   pdf: '.pdf',
+  slides: '.pptx,.ppt,.odp',
   image: '.png,.jpg,.jpeg',
   cert: '.p12,.pfx',
   any: '',
@@ -19,6 +20,7 @@ export function kindForName(name = '') {
   if (['docx', 'doc', 'rtf', 'odt'].includes(ext)) return 'writer';
   if (['xlsx', 'xlsm', 'xlsb', 'xls', 'ods', 'csv'].includes(ext)) return 'sheets';
   if (ext === 'pdf') return 'pdf';
+  if (['pptx', 'ppt', 'odp', 'otp'].includes(ext)) return 'slides';
   return null;
 }
 

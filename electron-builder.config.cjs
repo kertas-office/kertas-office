@@ -48,6 +48,9 @@ module.exports = {
     assoc('ods', 'OpenDocument Spreadsheet'),
     assoc('csv', 'CSV File'),
     assoc('pdf', 'PDF Document'),
+    assoc('pptx', 'PowerPoint Presentation'),
+    assoc('ppt', 'PowerPoint 97-2003 Presentation'),
+    assoc('odp', 'OpenDocument Presentation'),
   ],
   // KERTAS_UPDATE_URL publishes to your own web server instead (any folder served over https)
   ...(process.env.KERTAS_UPDATE_URL
@@ -122,6 +125,7 @@ module.exports = {
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword', 'application/rtf',
       'application/vnd.oasis.opendocument.text', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel', 'application/vnd.oasis.opendocument.spreadsheet', 'text/csv', 'application/pdf',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/vnd.ms-powerpoint', 'application/vnd.oasis.opendocument.presentation',
     ],
   },
   appImage: { artifactName: 'Kertas-Office-linux-${arch}.${ext}' },

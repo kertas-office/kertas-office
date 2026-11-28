@@ -35,8 +35,15 @@ async function makeWorker(langs, slot) {
   });
 }
 
-/** Ready workers for these languages (at least count of them) */
-export async function ocrWorkers(langs, count = 1) {
+/** Ready workers for these languages (at least count of them). Calls queue behind each
+ *  other, so requests that arrive together share one set of workers. */
+let workersBusy = Promise.resolve();
+export function ocrWorkers(langs, count = 1) {
+  const run = workersBusy.then(() => readyWorkers(langs, count));
+  workersBusy = run.catch(() => {});
+  return run;
+}
+async function readyWorkers(langs, count) {
   const key = langs.join('+');
   if (workerKey !== key) await stopOcr();
   workerKey = key;
@@ -122,9 +129,24 @@ export function ocrScale(width, height) {
  * parts of the picture (0 to 1, measured from the bottom left), confidence 0 to 1, and
  * each word's letters sharing the word's box, with a zero-width space between words.
  */
+// The new PDF editor asks for several pages at once: each request takes a free worker,
+// or waits for one, so pages are read side by side.
+const busy = new Set();
+let waiting = [];
+async function withFreeWorker(langs, fn) {
+  const pool = await ocrWorkers(langs, ocrWorkerCount());
+  let w;
+  while (!(w = pool.find((x) => !busy.has(x)))) await new Promise((r) => waiting.push(r));
+  busy.add(w);
+  try { return await fn(w); } finally {
+    busy.delete(w);
+    const ws = waiting; waiting = [];
+    ws.forEach((r) => r());
+  }
+}
+
 export async function recogniseLines(image, langs) {
-  const [w] = await ocrWorkers(langs, 1);
-  const { data } = await w.recognize(image, {}, { blocks: true, text: false });
+  const { data } = await withFreeWorker(langs, (w) => w.recognize(image, {}, { blocks: true, text: false }));
   const W = image.width || 1; const H = image.height || 1;
   const box = (b) => [b.x0 / W, 1 - b.y1 / H, b.x1 / W, 1 - b.y0 / H];
   const lines = [];

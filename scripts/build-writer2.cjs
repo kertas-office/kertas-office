@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Builds the new editors (trial) into electron/writer2/: the new Writer, and the new
-// Sheets and PDF editors beside it (electron/writer2/sheets and /pdf).
+// Builds the new editors into electron/writer2/: the new Writer, and the Sheets, PDF and
+// Slides editors beside it (electron/writer2/sheets, /pdf and /slides).
 //
 // The editors come from GenOffice (Apache-2.0, Copyright Mainfunc, Inc.), taken at
 // a fixed commit and changed by scripts/writer2/genoffice.patch: Kertas hosts them
@@ -62,13 +62,13 @@ for (const f of ['inter-latin-wght-normal.woff2', 'inter-latin-ext-wght-normal.w
 run('npx', ['electron-vite', 'build', '--config', 'kertas.vite.config.ts'], app);
 try { run('node', ['tools/gen-third-party-notices.mjs'], SRC); } catch { console.warn('Third-party notices were not regenerated'); }
 
-// The spreadsheet and PDF editors: their pages and bridges (their main-process code is in the Writer's bundle)
-for (const name of ['sheets', 'pdf']) run('npx', ['electron-vite', 'build', '--config', 'kertas.vite.config.ts'], path.join(SRC, 'apps', name));
+// The spreadsheet, PDF and presentation editors: their pages and bridges (their main-process code is in the Writer's bundle)
+for (const name of ['sheets', 'pdf', 'slides']) run('npx', ['electron-vite', 'build', '--config', 'kertas.vite.config.ts'], path.join(SRC, 'apps', name));
 
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(path.join(OUT, 'wasm'), { recursive: true });
 for (const part of ['main', 'preload', 'renderer']) fs.cpSync(path.join(app, 'out-kertas', part), path.join(OUT, part), { recursive: true });
-for (const name of ['sheets', 'pdf']) {
+for (const name of ['sheets', 'pdf', 'slides']) {
   for (const part of ['preload', 'renderer']) fs.cpSync(path.join(SRC, 'apps', name, 'out-kertas', part), path.join(OUT, name, part), { recursive: true });
 }
 // The spreadsheet helper, for the system this build is for
